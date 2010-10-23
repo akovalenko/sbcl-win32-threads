@@ -15,6 +15,13 @@
 #ifndef _SBCL_RUNTIME_H_
 #define _SBCL_RUNTIME_H_
 
+#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
+#include "pthreads_win32.h"
+#else
+#include <signal.h>
+#include <pthread.h>
+#endif
+
 #if defined(LISP_FEATURE_SB_THREAD)
 #define thread_self() pthread_self()
 #define thread_kill pthread_kill
@@ -56,11 +63,6 @@ void unmap_gc_page();
 
 #if QSHOW_SIGNAL_SAFE == 1 && !defined(LISP_FEATURE_WIN32)
 
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-#include "pthreads_win32.h"
-#else
-#include <signal.h>
-#endif
 extern sigset_t blockable_sigset;
 
 #define QSHOW_BLOCK                                             \
@@ -130,9 +132,6 @@ void odprintf_(const char * fmt, ...);
 #else
 #define odprintf(...)
 #endif
-#include "pthreads_win32.h"
-#else
-#include <pthread.h>
 #endif
 typedef pthread_t os_thread_t;
 #else

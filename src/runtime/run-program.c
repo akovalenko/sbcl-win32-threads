@@ -20,11 +20,7 @@
 #include <stdlib.h>
 #include <sys/file.h>
 #include <sys/types.h>
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-#include "pthreads_win32.h"
-#else
-#include <signal.h>
-#endif
+#include "runtime.h"
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>

@@ -47,11 +47,6 @@
 #include "dynbind.h"
 
 #include <sys/types.h>
-#if defined(LISP_FEATURE_SB_THREAD)
-#include "pthreads_win32.h"
-#else
-#include <signal.h>
-#endif
 #include <sys/time.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -410,15 +405,9 @@ is_valid_lisp_addr(os_vm_address_t addr)
 extern boolean internal_errors_enabled;
 
 #ifdef LISP_FEATURE_UD2_BREAKPOINTS
-#if defined(LISP_FEATURE_SB_THREAD)
 #define IS_TRAP_EXCEPTION(exception_record, context) \
     (((exception_record)->ExceptionCode == EXCEPTION_ILLEGAL_INSTRUCTION) && \
      (((unsigned short *)((context.win32_context)->Eip))[0] == 0x0b0f))
-#else
-#define IS_TRAP_EXCEPTION(exception_record, context) \
-    (((exception_record)->ExceptionCode == EXCEPTION_ILLEGAL_INSTRUCTION) && \
-     (((unsigned short *)((context)->Eip))[0] == 0x0b0f))
-#endif
 #define TRAP_CODE_WIDTH 2
 #else
 #define IS_TRAP_EXCEPTION(exception_record, context) \
@@ -438,10 +427,10 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                  void *dispatcher_context)
 {
     DWORD lasterror = GetLastError();
-#if defined(LISP_FEATURE_SB_THREAD)
-    struct thread * self = arch_os_get_current_thread();
     os_context_t ctx;
     ctx.win32_context = context;
+#if defined(LISP_FEATURE_SB_THREAD)
+    struct thread * self = arch_os_get_current_thread();
     pthread_sigmask(SIG_SETMASK, NULL, &ctx.sigmask);
     pthread_sigmask(SIG_BLOCK, &blockable_sigset, NULL);
 #endif
@@ -470,49 +459,32 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         exception_record->ExceptionCode == EXCEPTION_SINGLE_STEP) {
         /* We are doing a displaced instruction. At least function
          * end breakpoints uses this. */
-        #if defined(LISP_FEATURE_SB_THREAD)
         restore_breakpoint_from_single_step(&ctx);
+        #if defined(LISP_FEATURE_SB_THREAD)
         pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
         gc_safepoint();
-        #else
-        restore_breakpoint_from_single_step(context);
         #endif
         SetLastError(lasterror);
         return ExceptionContinueExecution;
     }
 
-    #if defined(LISP_FEATURE_SB_THREAD)
     if (IS_TRAP_EXCEPTION(exception_record, ctx)) {
-    #else
-    if (IS_TRAP_EXCEPTION(exception_record, context)) {
-    #endif
         unsigned char trap;
 
         /* This is just for info in case the monitor wants to print an
          * approximation. */
         access_control_stack_pointer(self) =
-        #if defined(LISP_FEATURE_SB_THREAD)
             (lispobj *)*os_context_sp_addr(&ctx);
-        #else
-            (lispobj *)*os_context_sp_addr(context);
-        #endif
         /* Unlike some other operating systems, Win32 leaves EIP
          * pointing to the breakpoint instruction. */
-        #if defined(LISP_FEATURE_SB_THREAD)
         ctx.win32_context->Eip += TRAP_CODE_WIDTH;
-        #else
-        context->Eip += TRAP_CODE_WIDTH;
-        #endif
         /* Now EIP points just after the INT3 byte and aims at the
          * 'kind' value (eg trap_Cerror). */
-        #if defined(LISP_FEATURE_SB_THREAD)
         trap = *(unsigned char *)(*os_context_pc_addr(&ctx));
         handle_trap(&ctx, trap);
+        #if defined(LISP_FEATURE_SB_THREAD)
         pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
         gc_safepoint();
-        #else
-        trap = *(unsigned char *)(*os_context_pc_addr(context));
-        handle_trap(context, trap);
         #endif
         SetLastError(lasterror);
         /* Done, we're good to go! */
@@ -566,23 +538,17 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                 return ExceptionContinueExecution;
             }
 
-        #if defined(LISP_FEATURE_SB_THREAD)
         } else {
             if (gencgc_handle_wp_violation(fault_address)) {
+              #if defined(LISP_FEATURE_SB_THREAD)
               pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
               gc_safepoint();
+              #endif
               SetLastError(lasterror);
               /* gc accepts the wp violation, so resume where we left off. */
               return ExceptionContinueExecution;
           }
         }
-        #else
-        } else if (gencgc_handle_wp_violation(fault_address)) {
-            SetLastError(lasterror);
-            /* gc accepts the wp violation, so resume where we left off. */
-            return ExceptionContinueExecution;
-        }
-        #endif
 
         /* All else failed, drop through to the lisp-side exception handler. */
     }
@@ -603,21 +569,15 @@ handle_exception(EXCEPTION_RECORD *exception_record,
          * aren't supposed to happen during cold init or reinit
          * anyway. */
 
-        #if defined(LISP_FEATURE_SB_THREAD)
         fake_foreign_function_call(&ctx);
 	
+        #if defined(LISP_FEATURE_SB_THREAD)
         pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
-
+        #endif
+        
         /* Allocate the SAP objects while the "interrupts" are still
          * disabled. */
         context_sap = alloc_sap(&ctx);
-        #else
-        fake_foreign_function_call(context);
-
-        /* Allocate the SAP objects while the "interrupts" are still
-         * disabled. */
-        context_sap = alloc_sap(context);
-        #endif
         exception_record_sap = alloc_sap(exception_record);
 
         /* The exception system doesn't automatically clear pending
@@ -630,11 +590,9 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                  exception_record_sap);
 
         /* If Lisp doesn't nlx, we need to put things back. */
-        #if defined(LISP_FEATURE_SB_THREAD)
         undo_fake_foreign_function_call(&ctx);
+        #if defined(LISP_FEATURE_SB_THREAD)
         gc_safepoint();
-        #else
-        undo_fake_foreign_function_call(context);
         #endif
         SetLastError(lasterror);
 
@@ -658,11 +616,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 
     fflush(stderr);
 
-    #if defined(LISP_FEATURE_SB_THREAD)
     fake_foreign_function_call(&ctx);
-    #else
-    fake_foreign_function_call(context);
-    #endif
     lose("Exception too early in cold init, cannot continue.");
 
     /* FIXME: WTF? How are we supposed to end up here? */

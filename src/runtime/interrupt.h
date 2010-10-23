@@ -13,12 +13,11 @@
 #define _INCLUDE_INTERRUPT_H_
 
 #include "sbcl.h"
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-#include "pthreads_win32.h"
-#else
+#include "runtime.h"
 #include <signal.h>
-#endif
+#include <sys/types.h>
 #include <string.h>
+#include "os.h"
 
 /*
  * This is a workaround for some slightly silly Linux/GNU Libc

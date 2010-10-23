@@ -16,11 +16,7 @@
 #if defined(LISP_FEATURE_SB_THREAD) && defined(LISP_FEATURE_SB_PTHREAD_FUTEX)
 
 #include <errno.h>
-#if defined(LISP_FEATURE_WIN32)
-#include "pthreads_win32.h"
-#else
-#include <pthread.h>
-#endif
+#include "runtime.h"
 #include <stdlib.h>
 
 #include "runtime.h"
@@ -288,10 +284,12 @@ again:
         if (result != ETIMEDOUT || futex_istimeout(timeout))
             break;
 
+#if defined(LISP_FEATURE_WIN32)
         if (*(volatile int *)lock_word != oldval) {
-            result = 0;
+            result = EINTR;
             goto done;
         }
+#endif
 
         /* futex system call of Linux returns with EINTR errno when
          * it's interrupted by signals.  Check pending signals here to

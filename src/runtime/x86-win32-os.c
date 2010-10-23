@@ -31,11 +31,7 @@
 #include "sbcl.h"
 
 #include <sys/types.h>
-#if defined(LISP_FEATURE_SB_THREAD)
-#include "pthreads_win32.h"
-#else
-#include <signal.h>
-#endif
+#include "runtime.h"
 #include <sys/time.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -114,7 +110,6 @@ os_context_register_t *
 os_context_register_addr(os_context_t *context, int offset)
 {
     switch(offset) {
-    #if defined(LISP_FEATURE_SB_THREAD)
     case reg_EAX: return &context->win32_context->Eax;
     case reg_ECX: return &context->win32_context->Ecx;
     case reg_EDX: return &context->win32_context->Edx;
@@ -123,16 +118,6 @@ os_context_register_addr(os_context_t *context, int offset)
     case reg_EBP: return &context->win32_context->Ebp;
     case reg_ESI: return &context->win32_context->Esi;
     case reg_EDI: return &context->win32_context->Edi;
-    #else
-    case reg_EAX: return &context->Eax;
-    case reg_ECX: return &context->Ecx;
-    case reg_EDX: return &context->Edx;
-    case reg_EBX: return &context->Ebx;
-    case reg_ESP: return &context->Esp;
-    case reg_EBP: return &context->Ebp;
-    case reg_ESI: return &context->Esi;
-    case reg_EDI: return &context->Edi;
-    #endif
     default: return 0;
     }
 }
@@ -140,53 +125,32 @@ os_context_register_addr(os_context_t *context, int offset)
 os_context_register_t *
 os_context_pc_addr(os_context_t *context)
 {
-#if defined(LISP_FEATURE_SB_THREAD)
     return &context->win32_context->Eip; /*  REG_EIP */
-#else
-    return &context->Eip; /*  REG_EIP */
-#endif
 }
 
 os_context_register_t *
 os_context_sp_addr(os_context_t *context)
 {
-#if defined(LISP_FEATURE_SB_THREAD)
     return &context->win32_context->Esp; /* REG_UESP */
-#else
-    return &context->Esp; /* REG_UESP */
-#endif
 }
 
 os_context_register_t *
 os_context_fp_addr(os_context_t *context)
 {
-#if defined(LISP_FEATURE_SB_THREAD)
     return &context->win32_context->Ebp; /* REG_EBP */
-#else
-    return &context->Ebp; /* REG_EBP */
-#endif
 }
 
 unsigned long
 os_context_fp_control(os_context_t *context)
 {
-#if defined(LISP_FEATURE_SB_THREAD)
     return ((((context->win32_context->FloatSave.ControlWord) & 0xffff) ^ 0x3f) |
             (((context->win32_context->FloatSave.StatusWord) & 0xffff) << 16));
-#else
-    return ((((context->FloatSave.ControlWord) & 0xffff) ^ 0x3f) |
-            (((context->FloatSave.StatusWord) & 0xffff) << 16));
-#endif
 }
 
 void
 os_restore_fp_control(os_context_t *context)
 {
-#if defined(LISP_FEATURE_SB_THREAD)
     asm ("fldcw %0" : : "m" (context->win32_context->FloatSave.ControlWord));
-#else
-    asm ("fldcw %0" : : "m" (context->FloatSave.ControlWord));
-#endif
 }
 
 void

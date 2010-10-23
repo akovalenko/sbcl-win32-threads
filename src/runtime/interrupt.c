@@ -45,11 +45,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-#include "pthreads_win32.h"
-#else
-#include <signal.h>
-#endif
+#include "runtime.h"
 #include <sys/types.h>
 #ifndef LISP_FEATURE_WIN32
 #include <sys/wait.h>

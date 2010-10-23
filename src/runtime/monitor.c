@@ -19,11 +19,7 @@
 #ifndef LISP_FEATURE_WIN32
 #include <sys/resource.h>
 #endif
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-#include "pthreads_win32.h"
-#else
-#include <signal.h>
-#endif
+#include "runtime.h"
 #include <unistd.h>
 
 #include "runtime.h"

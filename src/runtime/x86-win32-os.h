@@ -1,14 +1,12 @@
 #ifndef _X86_WIN32_OS_H
 #define _X86_WIN32_OS_H
 
-#if defined(LISP_FEATURE_SB_THREAD)
 typedef struct os_context_t {
   CONTEXT* win32_context;
+#if defined(LISP_FEATURE_SB_THREAD)
   sigset_t sigmask;
-} os_context_t;
-#else
-typedef CONTEXT os_context_t;
 #endif
+} os_context_t;
 
 typedef long os_context_register_t;
 
