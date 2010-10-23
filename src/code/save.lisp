@@ -166,6 +166,8 @@ sufficiently motivated to do lengthy fixes."
 
 (defun deinit ()
   (call-hooks "save" *save-hooks*)
+  #!+(and sb-thread win32)
+  (win32-itimer-deinit)
   (when (rest (sb!thread:list-all-threads))
     (error "Cannot save core with multiple threads running."))
   (float-deinit)
