@@ -183,7 +183,7 @@
       (return-from handle-listen (plusp avail)))
     (let ((res (comm-input-available handle)))
       (unless (zerop res)
-	(return-from handle-listen (plusp comm-avail))))
+	(return-from handle-listen (plusp res))))
     (unless (zerop (peek-console-input handle
                                        (cast buf (* t))
                                        1 (addr avail)))
