@@ -107,6 +107,69 @@
 (define-alien-routine ("socket_input_available" socket-input-available) int
   (socket handle))
 
+;;; There is one more widely-used file handle type, along with pipes,
+;;; consoles and sockets: communication resources (serial ports).
+(define-alien-type comm-timeouts
+    (struct comm-timeouts
+	    (read-interval dword)
+	    (read-total-multiplier dword)
+	    (read-total-constant dword)
+	    (write-total-multiplier dword)
+	    (write-total-constant dword)))
+
+(define-alien-type comstat
+    (struct comstat
+	    (flags dword)
+	    (in-queue dword)
+	    (out-queue dword)))
+
+(define-alien-routine ("SetCommTimeouts" set-comm-timeouts)
+    bool
+  (handle handle)
+  (comm-timeouts (* comm-timeouts)))
+
+(define-alien-routine ("GetCommTimeouts" get-comm-timeouts)
+    bool
+  (handle handle)
+  (comm-timeouts (* comm-timeouts)))
+
+(define-alien-routine ("ClearCommError" clear-comm-error)
+    bool
+  (handle handle)
+  (errors dword :out)
+  (comstat (* comstat)))
+
+;;; For SBCL buffered input to work, ReadFile must have unix-like
+;;; "short read" semantics: wait indefinitely until there is something
+;;; in the input buffer, then return everything buffered without
+;;; waiting further. It is imitated on win32 with read-interval
+;;; timeout of 1 and all other timeouts set to 0.
+(defun initialize-comm-timeouts (handle)
+  (with-alien ((comm-timeouts comm-timeouts))
+    (macrolet ((frob (&rest pairs)
+		 `(setf ,@(loop for (slot value) on pairs by #'cddr
+				collect `(slot comm-timeouts ',slot)
+				collect value))))
+
+      (frob read-interval 1
+	    read-total-constant 0
+	    read-total-multiplier 0
+	    write-total-constant 0
+	    write-total-multiplier 0))
+    (set-comm-timeouts handle (addr comm-timeouts))))
+
+;;; ClearCommError is used here to query a number of characters in the
+;;; input buffer. Unfortunately, it has an obvious 'side-effect' of
+;;; resetting error flags. Fortunately, fd-stream I/O code on windows doesn't
+;;; normally call handle-listen under the hood.
+(defun comm-input-available (handle)
+  (with-alien ((comstat (struct comstat)))
+    (let ((done (clear-comm-error handle (addr comstat))))
+      (if (zerop done) 0
+	  (symbol-macrolet ((in-queue (slot comstat 'in-queue)))
+	    (if (zerop in-queue) 2
+		(values 1 in-queue)))))))
+
 ;;; Listen for input on a Windows file handle.  Unlike UNIX, there
 ;;; isn't a unified interface to do this---we have to know what sort
 ;;; of handle we have.  Of course, there's no way to actually
@@ -118,7 +181,9 @@
                (buf (array char #.input-record-size)))
     (unless (zerop (peek-named-pipe handle nil 0 nil (addr avail) nil))
       (return-from handle-listen (plusp avail)))
-
+    (let ((res (comm-input-available handle)))
+      (unless (zerop res)
+	(return-from handle-listen (plusp comm-avail))))
     (unless (zerop (peek-console-input handle
                                        (cast buf (* t))
                                        1 (addr avail)))
@@ -857,7 +922,9 @@ UNIX epoch: January 1st 1970."
 		    (2 sb!unix:enoent)
 		    (183 sb!unix:eexist)
 		    (otherwise (- error-code)))))
+	  (progn
+	    (initialize-comm-timeouts handle)
 	(let ((fd (open-osfhandle handle (logior sb!unix::o_binary flags))))
 	  (if (minusp fd)
 	      (values nil (sb!unix::get-errno))
-                (values fd 0)))))))
+		  (values fd 0))))))))

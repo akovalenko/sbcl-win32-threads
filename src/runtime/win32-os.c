@@ -702,6 +702,9 @@ void scratch(void)
     FormatMessageA(0, 0, 0, 0, 0, 0, 0);
     FreeLibrary(0);
     GetACP();
+    GetCommTimeouts(0,0);
+    SetCommTimeouts(0,0);
+    ClearCommError(0,0);
     GetConsoleCP();
     GetConsoleOutputCP();
     GetCurrentProcess();

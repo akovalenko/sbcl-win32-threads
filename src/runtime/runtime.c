@@ -584,11 +584,13 @@ main(int argc, char *argv[], char *envp[])
     FSHOW((stderr, "/funcalling initial_function=0x%lx\n",
           (unsigned long)initial_function));
 #ifdef LISP_FEATURE_WIN32
+    if (!noinform && embedded_core_offset == 0) {
     fprintf(stderr, "\n\
 This is experimental prerelease support for the Windows platform: use\n\
 at your own risk.  \"Your Kitten of Death awaits!\"\n");
     fflush(stdout);
     fflush(stderr);
+    }
 #endif
     create_initial_thread(initial_function);
     lose("CATS.  CATS ARE NICE.\n");
