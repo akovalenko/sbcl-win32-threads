@@ -183,7 +183,7 @@
       (return-from handle-listen (plusp avail)))
     (let ((res (comm-input-available handle)))
       (unless (zerop res)
-	(return-from handle-listen (plusp res))))
+	(return-from handle-listen (= res 1))))
     (unless (zerop (peek-console-input handle
                                        (cast buf (* t))
                                        1 (addr avail)))
@@ -904,7 +904,8 @@ UNIX epoch: January 1st 1970."
 			     (ecase (logand 3 flags)
                             (0 access-generic-read)
                             (1 access-generic-write)
-			       ((2 3) access-generic-all))))
+                               ((2 3) (logior access-generic-write
+					      access-generic-read)))))
                       (logior file-share-read
                               file-share-delete
                               file-share-write)
@@ -917,6 +918,7 @@ UNIX epoch: January 1st 1970."
                       0)))
     (if (eql handle invalid-handle)
 	(values nil
+
 		(let ((error-code (get-last-error)))
 		  (case error-code
 		    (2 sb!unix:enoent)

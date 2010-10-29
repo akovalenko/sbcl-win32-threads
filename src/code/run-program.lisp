@@ -518,6 +518,47 @@ status slot."
   (pty-name sb-alien:c-string)
   (wait sb-alien:int))
 
+;;; Command-line argument quoting according to MSVC runtime rules:
+;;; 
+;;; n backslashes mean n backslashes when they're followed by
+;;; something other than quotation mark;
+;;;
+;;; 2n backslashes mean n backslashes when they're followed by a
+;;; quotation mark, and the quotation mark quotes argument or argument
+;;; chunk;
+;;;
+;;; 2n+1 backslashes and quotation mark mean n backslashes and literal
+;;; (escaped) quotation mark.
+;;;
+;;; See the description of CommandLineToArgvW, URL at the time of
+;;; writing follows:
+;;; http://msdn.microsoft.com/en-us/library/bb776391(VS.85).aspx
+#+(win32)
+(defun mswin-escape-command-argument (arg)
+  (if (string= "" arg)
+      "\"\""
+      (flet ((white-space-p (character)
+	       (member character '(#\Return #\Space #\Tab))))
+	(let ((has-spaces (find-if #'white-space-p arg))
+	      (n-backslashes 0))
+	  (with-output-to-string (out)
+	    (flet ((maybe-double-quote ()
+		     (when has-spaces (write-char #\" out)))
+		   (duplicate-backslashes (extra)
+		     (loop repeat (+ extra n-backslashes)
+			   do (write-char #\\ out))))
+	      (maybe-double-quote)
+	      (loop for character across arg
+		    do (when (char= #\" character)
+			 (duplicate-backslashes 1))
+		       (setf n-backslashes
+			     (case character
+			       (#\\ (1+ n-backslashes))
+			       (t 0)))
+		       (write-char character out)
+		    finally (when has-spaces (duplicate-backslashes 0)))
+	      (maybe-double-quote)))))))
+
 ;;; FIXME: There shouldn't be two semiredundant versions of the
 ;;; documentation. Since this is a public extension function, the
 ;;; documentation should be in the doc string. So all information from
@@ -684,10 +725,7 @@ Users Manual for details about the PROCESS structure."#-win32"
              #-win32 arg
              ;; Apparently any spaces or double quotes in the arguments
              ;; need to be escaped on win32.
-             #+win32 (if (position-if
-                          (lambda (c) (find c '(#\" #\Space))) arg)
-                         (write-to-string arg)
-                         arg)))
+             #+win32 (mswin-escape-command-argument arg)))
     (let (;; Clear various specials used by GET-DESCRIPTOR-FOR to
           ;; communicate cleanup info.
           *close-on-error*
