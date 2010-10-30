@@ -533,12 +533,12 @@ status slot."
 ;;; See the description of CommandLineToArgvW, URL at the time of
 ;;; writing follows:
 ;;; http://msdn.microsoft.com/en-us/library/bb776391(VS.85).aspx
-#+(win32)
+#+win32
 (defun mswin-escape-command-argument (arg)
   (if (string= "" arg)
       "\"\""
       (flet ((white-space-p (character)
-	       (member character '(#\Return #\Space #\Tab))))
+               (member character '(#\Return #\Newline #\Space #\Tab))))
 	(let ((has-spaces (find-if #'white-space-p arg))
 	      (n-backslashes 0))
 	  (with-output-to-string (out)

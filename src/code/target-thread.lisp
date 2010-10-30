@@ -1098,12 +1098,14 @@ first thing to do is usually a WITH-INTERRUPTS or a
 WITHOUT-INTERRUPTS. Within a thread interrupts are queued, they are
 run in same the order they were sent."
   #!+(and sb-thread win32)
+  (let ((thread-sap (%thread-sap thread)))
+    (and thread-sap
   (let ((r (interrupt-lisp-thread
             (sap-int (%thread-sap thread))
             (get-lisp-obj-address
              (lambda ()
                (sb!unix::invoke-interruption function))))))
-    (zerop r))
+           (zerop r))))
   #!+(and (not sb-thread) win32)
   (progn
     (declare (ignore thread))
@@ -1148,6 +1150,7 @@ SB-EXT:QUIT - the usual cleanup forms will be evaluated"
   (defun %thread-sap (thread)
     (let ((thread-sap (alien-sap (extern-alien "all_threads" (* t))))
           (target (thread-os-thread thread)))
+      (and target
       (loop
         (when (sap= thread-sap (int-sap 0)) (return nil))
         (let ((os-thread (sap-ref-word thread-sap
@@ -1156,7 +1159,7 @@ SB-EXT:QUIT - the usual cleanup forms will be evaluated"
           (when (= os-thread target) (return thread-sap))
           (setf thread-sap
                 (sap-ref-sap thread-sap (* sb!vm:n-word-bytes
-                                           sb!vm::thread-next-slot)))))))
+                                                sb!vm::thread-next-slot))))))))
 
   (defun %symbol-value-in-thread (symbol thread)
     ;; Prevent the thread from dying completely while we look for the TLS
