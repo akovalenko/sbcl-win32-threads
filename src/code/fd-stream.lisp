@@ -2436,7 +2436,7 @@
                 #!-win32
                 (sb!unix:unix-open namestring mask mode)
                 #!+win32
-                (sb!win32:win32-unixlike-open namestring mask mode)
+                (sb!win32:unixlike-open namestring mask mode)
                 (values nil sb!unix:enoent))
           (labels ((open-error (format-control &rest format-arguments)
                      (error 'simple-file-error

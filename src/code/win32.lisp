@@ -875,7 +875,7 @@ UNIX epoch: January 1st 1970."
 ;; CreateFile, as complete as possibly.
 ;; FILE_FLAG_OVERLAPPED is a must for decent I/O.
 
-(defun win32-unixlike-open (path flags mode &optional revertable)
+(defun unixlike-open (path flags mode &optional revertable)
   (declare (type sb!unix:unix-pathname path)
            (type fixnum flags)
            (type sb!unix:unix-file-mode mode)
@@ -935,11 +935,13 @@ UNIX epoch: January 1st 1970."
 
 (defconstant ebadf 9)
 
+;;; For sockets, CloseHandle first and closesocket() afterwards is
+;;; legal: winsock tracks its handles separately (that's why we have
+;;; the problem with simple _close in the first place).
 (defun unixlike-close (fd)
   (let ((handle (get-osfhandle fd)))
-    (cond
-      ((= handle invalid-handle)
-       (values nil ebadf))
-      ((not (minusp (close-socket handle)))
-       t)
-      (t (sb!unix:unix-close fd)))))
+    (if (= handle invalid-handle)
+	(values nil ebadf)
+	(let ((socketp (plusp (socket-input-available handle))))
+	  (multiple-value-prog1 (sb!unix:unix-close fd)
+	    (when socketp (close-socket handle)))))))

@@ -569,7 +569,7 @@
           (multiple-value-bind (fd errno)
               (if name
                   #+win32
-                  (sb-win32:win32-unixlike-open name mask mode)
+                  (sb-win32:unixlike-open name mask mode)
                   #-win32
                   (sb-unix:unix-open name mask mode)
                   (values nil sb-unix:enoent))
