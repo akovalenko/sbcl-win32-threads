@@ -1867,6 +1867,12 @@
                         input-type
                         output-type))))))
 
+(defun fd-close (fd)
+  #!+win32
+  (sb!win32:unixlike-close fd)
+  #!-win32
+  (sb!unix:unix-close fd))
+
 ;;; Handles the resource-release aspects of stream closing, and marks
 ;;; it as closed.
 (defun release-fd-stream-resources (fd-stream)
@@ -1880,7 +1886,7 @@
         ;; us with a dangling finalizer (that would close the same
         ;; --possibly reassigned-- FD again), or a stream with a closed
         ;; FD that appears open.
-        (sb!unix:unix-close (fd-stream-fd fd-stream))
+	(fd-close (fd-stream-fd fd-stream))
         (set-closed-flame fd-stream)
         (when (fboundp 'cancel-finalization)
           (cancel-finalization fd-stream)))
@@ -2256,7 +2262,7 @@
     (when (and auto-close (fboundp 'finalize))
       (finalize stream
                 (lambda ()
-                  (sb!unix:unix-close fd)
+		  (fd-close fd)
                   #!+sb-show
                   (format *terminal-io* "** closed file descriptor ~W **~%"
                           fd))

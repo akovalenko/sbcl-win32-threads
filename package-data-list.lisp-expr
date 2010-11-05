@@ -2806,4 +2806,5 @@ SBCL itself"
                "FILE-TRUNCATE-EXISTING"
                "FILE-CREATE-NEW"
                "FILE-CREATE-ALWAYS"
-               "WIN32-UNIXLIKE-OPEN")))
+               "WIN32-UNIXLIKE-OPEN"
+	       "UNIXLIKE-CLOSE")))

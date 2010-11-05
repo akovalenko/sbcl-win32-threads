@@ -695,6 +695,7 @@ void scratch(void)
 {
     LARGE_INTEGER la = {{0}};
     CloseHandle(0);
+    closesocket(0);
     CreateWaitableTimerA(NULL,FALSE,NULL);
     CancelWaitableTimer(NULL);
     DuplicateHandle(0,0,0,0,0,0,0);

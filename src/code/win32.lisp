@@ -930,3 +930,16 @@ UNIX epoch: January 1st 1970."
 	  (if (minusp fd)
 	      (values nil (sb!unix::get-errno))
 		  (values fd 0))))))))
+
+(define-alien-routine ("closesocket" close-socket) int (handle handle))
+
+(defconstant ebadf 9)
+
+(defun unixlike-close (fd)
+  (let ((handle (get-osfhandle fd)))
+    (cond
+      ((= handle invalid-handle)
+       (values nil ebadf))
+      ((not (minusp (close-socket handle)))
+       t)
+      (t (sb!unix:unix-close fd)))))
