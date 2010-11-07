@@ -276,7 +276,7 @@
   (:generator 2
     #!+win32
     (progn
-      (inst mov tmp (make-ea :dword :disp #x14) :fs)
+      (inst mov tmp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
       (inst mov sap (make-ea :dword :base tmp :disp 0 :index n :scale 4)))
     #!-win32
     (inst mov sap (make-ea :dword :disp 0 :index n :scale 4) :fs)))

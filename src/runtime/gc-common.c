@@ -2415,9 +2415,6 @@ maybe_gc(os_context_t *context)
     lispobj gc_happened;
     struct thread *thread = arch_os_get_current_thread();
 
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-    if (context)
-#endif
     fake_foreign_function_call(context);
     /* SUB-GC may return without GCing if *GC-INHIBIT* is set, in
      * which case we will be running with no gc trigger barrier
@@ -2441,13 +2438,8 @@ maybe_gc(os_context_t *context)
      * A kludgy alternative is to propagate the sigmask change to the
      * outer context.
      */
-    #if !defined(LISP_FEATURE_WIN32) || defined(LISP_FEATURE_SB_THREAD)
-    #if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-    if (context)
-    #endif
     check_gc_signals_unblocked_or_lose(os_context_sigmask_addr(context));
     unblock_gc_signals(0, 0);
-    #endif
     FSHOW((stderr, "/maybe_gc: calling SUB_GC\n"));
     /* FIXME: Nothing must go wrong during GC else we end up running
      * the debugger, error handlers, and user code in general in a
@@ -2465,29 +2457,16 @@ maybe_gc(os_context_t *context)
          * here. */
         ((SymbolValue(INTERRUPTS_ENABLED,thread) != NIL) ||
          (SymbolValue(ALLOW_WITH_INTERRUPTS,thread) != NIL))) {
-        #if !defined(LISP_FEATURE_WIN32) || defined(LISP_FEATURE_SB_THREAD)
-        #if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-        sigset_t sigset;
-        get_current_sigmask(&sigset);
-        sigset_t *context_sigmask = context ? os_context_sigmask_addr(context) : &sigset;
-        #else
         sigset_t *context_sigmask = os_context_sigmask_addr(context);
-        #endif
         if (!deferrables_blocked_p(context_sigmask)) {
             thread_sigmask(SIG_SETMASK, context_sigmask, 0);
             check_gc_signals_unblocked_or_lose(0);
-        #endif
             FSHOW((stderr, "/maybe_gc: calling POST_GC\n"));
             funcall0(StaticSymbolFunction(POST_GC));
-        #if !defined(LISP_FEATURE_WIN32) || defined(LISP_FEATURE_SB_THREAD)
         } else {
             FSHOW((stderr, "/maybe_gc: punting on POST_GC due to blockage\n"));
         }
-        #endif
     }
-    #if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-    if (context)
-    #endif
     undo_fake_foreign_function_call(context);
     FSHOW((stderr, "/maybe_gc: returning\n"));
     

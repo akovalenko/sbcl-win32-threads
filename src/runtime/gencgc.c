@@ -3887,19 +3887,6 @@ preserve_context_registers (os_context_t *c)
         preserve_pointer(*ptr);
     }
 }
-
-#if defined(LISP_FEATURE_WIN32)
-void win32_preserve_context_registers(CONTEXT* context)
-{
-  preserve_pointer((void*)context->Eax);
-  preserve_pointer((void*)context->Ecx);
-  preserve_pointer((void*)context->Edx);
-  preserve_pointer((void*)context->Ebx);
-  preserve_pointer((void*)context->Esi);
-  preserve_pointer((void*)context->Edi);
-  preserve_pointer((void*)context->Eip);
-}
-#endif
 #endif
 
 /* Garbage collect a generation. If raise is 0 then the remains of the
@@ -3993,9 +3980,11 @@ garbage_collect_generation(generation_index_t generation, int raise)
 #if defined(LISP_FEATURE_WIN32)
                 {
                   CONTEXT context;
+                  os_context_t ctx;
                   if (!pthread_np_get_thread_context(th->os_thread, &context))
                     lose("Unable to get thread context for thread 0x%x\n", (int)th->os_thread);
-                  win32_preserve_context_registers(&context);
+                  ctx.win32_context = &context;
+                  preserve_context_registers(&ctx);
 
                   pthread_mutex_lock(&th->interrupt_data->win32_data.lock);
                   for (i = 0; i < th->interrupt_data->win32_data.interrupts_count; ++i) {
@@ -4007,10 +3996,12 @@ garbage_collect_generation(generation_index_t generation, int raise)
             } else {
 #if defined(LISP_FEATURE_WIN32)
                 CONTEXT context;
+                os_context_t ctx;
                 pthread_np_suspend(th->os_thread);
                 if (!pthread_np_get_thread_context(th->os_thread, &context))
                   lose("Unable to get thread context for thread 0x%x\n", (int)th->os_thread);
-                win32_preserve_context_registers(&context);
+                ctx.win32_context = &context;
+                preserve_context_registers(&ctx);
                 pthread_np_resume(th->os_thread);
                 esp = (void**)context.Esp;
                 

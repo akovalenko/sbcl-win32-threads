@@ -114,7 +114,7 @@
     (inst mov ,reg (make-ea-for-symbol-tls-index ,symbol))
     #!+win32
     (progn
-      (inst add ,reg (make-ea :dword :disp #x14) :fs)
+      (inst add ,reg (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
       (inst mov ,reg (make-ea :dword :base ,reg)))
     #!-win32
     (inst mov ,reg (make-ea :dword :base ,reg) :fs)))
@@ -127,7 +127,7 @@
     (inst mov ,temp (make-ea-for-symbol-tls-index ,symbol))
     #!+win32
     (progn
-      (inst add ,temp (make-ea :dword :disp #x14) :fs)
+      (inst add ,temp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
       (inst mov (make-ea :dword :base ,temp) ,reg))
     #!-win32
     (inst mov (make-ea :dword :base ,temp) ,reg :fs)))
@@ -141,7 +141,7 @@
   `(progn
      #!+win32
      (progn
-       (inst mov ,reg (make-ea :dword :disp #x14) :fs)
+       (inst mov ,reg (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
        (inst mov ,reg (make-ea :dword
                                :base ,reg
                                :disp (* 4 thread-binding-stack-pointer-slot))))
@@ -159,7 +159,7 @@
      (progn
        (inst push eax-tn)
        (inst push ,reg)
-       (inst mov eax-tn (make-ea :dword :disp #x14) :fs)
+       (inst mov eax-tn (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
        (inst pop (make-ea :dword :base eax-tn :disp (* 4 thread-binding-stack-pointer-slot)))
        (inst pop eax-tn))
      #!-win32
@@ -386,7 +386,7 @@
   #!+win32
   '(progn
     (inst push eax-tn)
-    (inst mov eax-tn (make-ea :dword :disp #x14) :fs)
+    (inst mov eax-tn (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
     (inst mov (make-ea :dword :base eax-tn :disp (* 4 thread-pseudo-atomic-bits-slot)) 0)
     (inst pop eax-tn))
   #!-win32
@@ -399,7 +399,7 @@
        #!+win32
        (progn
          (inst push eax-tn)
-         (inst mov eax-tn (make-ea :dword :disp #x14) :fs)
+         (inst mov eax-tn (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
          (inst mov (make-ea :dword :base eax-tn :disp (* 4 thread-pseudo-atomic-bits-slot)) ebp-tn)
          (inst pop eax-tn))
        #!-win32
@@ -409,7 +409,7 @@
        #!+win32
        (progn
          (inst push eax-tn)
-         (inst mov eax-tn (make-ea :dword :disp #x14) :fs)
+         (inst mov eax-tn (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
          (inst xor (make-ea :dword :base eax-tn :disp (* 4 thread-pseudo-atomic-bits-slot)) ebp-tn)
          (inst pop eax-tn))
        #!-win32
@@ -618,3 +618,40 @@ collection."
                            `(touch-object ,pin))
                          pins)))))
       `(progn ,@body)))
+
+;;; Safepoints stuff
+
+#!+ (and sb-thread win32)
+(progn
+  (defun enter-safe-region-instructions ()
+    (inst pusha)
+    (inst call (make-fixup "gc_enter_safe_region" :foreign))
+    (inst popa))
+
+  (defun enter-unsafe-region-instructions ()
+    (inst pusha)
+    (inst call (make-fixup "gc_enter_unsafe_region" :foreign))
+    (inst popa))
+
+  (defun leave-region-instructions ()
+    (inst pusha)
+    (inst call (make-fixup "gc_leave_region" :foreign))
+    (inst popa))
+
+  (defun enter-safe-region-instructions/no-fixup ()
+    (inst pusha)
+    (inst mov eax-tn (foreign-symbol-address "gc_enter_safe_region"))
+    (inst call eax-tn)
+    (inst popa))
+
+  (defun enter-unsafe-region-instructions/no-fixup ()
+    (inst pusha)
+    (inst mov eax-tn (foreign-symbol-address "gc_enter_unsafe_region"))
+    (inst call eax-tn)
+    (inst popa))
+
+  (defun leave-region-instructions/no-fixup ()
+    (inst pusha)
+    (inst mov eax-tn (foreign-symbol-address "gc_leave_region"))
+    (inst call eax-tn)
+    (inst popa)))

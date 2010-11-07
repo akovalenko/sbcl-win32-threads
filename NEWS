@@ -1,5 +1,5 @@
 ;;;; -*- coding: utf-8; fill-column: 78 -*-
-changes relative to sbcl-1.0.43:
+changes in sbcl-1.0.44 relative to sbcl-1.0.43:
   * enhancement: RUN-PROGRAM accepts :EXTERNAL-FORMAT argument to select the
     external-format for its :INPUT, :OUTPUT, AND :ERROR :STREAMs.
   * enhancement: ALLOCATION-INFORMATION also provides the page the object
@@ -23,21 +23,23 @@ changes relative to sbcl-1.0.43:
     Branches are simplified before performing if/if-conversion, and simple
     equivalent branches (that only read the same constant or variable) are
     merged.
-  * bug fix: compiler failed to derive the result-type of MAKE-ARRAY as
-    (AND VECTOR (NOT SIMPLE-ARRAY)) when appropriate. (lp#309130)
-  * bug fix: (THE (VALUES ...)) in LOAD-TIME-VALUE caused a compiler-error.
-    (lp#646796)
-  * bug fix: interrupts arriving due to CL:OPEN caused an error.
-  * bug fix: overeager character buffering could cause input to block
-    spuriously when reading from a pipe (lp#643686)
-  * bug fix: more efficient timer expiry should avoid starvation on systems
-    where number of SIGALRMs per second is restricted. (lp#375515)
   * improvements to the Windows port:
+    ** change: canonical unparsing form for pathname namestrings now uses / as
+       directory separator. NATIVE-NAMESTRING still uses \ as the separator.
     ** bug fix: stackoverwriting due to incorrect usage of PeekConsoleInput
        on Windows. (thanks to Kalyanov Dmitry)
     ** bug fix: build now works on cygwin with GCC 4.x installed. (thanks to
        Kalyanov Dmitry)
     ** bug fix: run-sbcl.sh now works on Cygwin. (thanks to Kalyanov Dmitry)
+  * bug fix: compiler failed to derive the result-type of MAKE-ARRAY as
+    (AND VECTOR (NOT SIMPLE-ARRAY)) when appropriate. (lp#309130)
+  * bug fix: (THE (VALUES ...)) in LOAD-TIME-VALUE caused a compiler-error.
+    (lp#646796)
+  * bug fix: interrupts arriving during CL:OPEN caused an error.
+  * bug fix: overeager character buffering could cause input to block
+    spuriously when reading from a pipe (lp#643686)
+  * bug fix: more efficient timer expiry should avoid starvation on systems
+    where number of SIGALRMs per second is restricted. (lp#375515)
   * bug fix: non-unicode builds no longer fail (broken since 1.0.36.15).
   * bug fix: compile-times no longer scale linearly with the size of
     quoted lists in source-code. (lp#654289)
@@ -79,6 +81,16 @@ changes relative to sbcl-1.0.43:
   * bug fix: (COERCE X '(SIMPLE-VECTOR 5)) and similar coercions to vectors
     of specified length could confuse the type derivation in unsafe code.
     (lp#655872)
+  * bug fix: SB-POSIX:FORK now signals an error if an attempt to
+    fork with multiple Lisp threads running is made on every platform,
+    not just Darwin. (lp#451111)
+  * bug fix: SB-BSD-SOCKETS and SB-SIMPLE-STREAMS could leave stale finalizers
+    around when core was saved, which could cause undefined behaviour when the
+    core was reified. 
+  * bug fix: Allow UNTRACE of functions that are no longer defined
+    (lp#667657, thanks to Attila Lendvai)
+  * bug fix: MAKE-ARRAY calls with invalid keyword argument lists now signal a
+    compile-time warning (lp#664373, thanks to Stas Boukarev)
 
 changes in sbcl-1.0.43 relative to sbcl-1.0.42:
   * incompatible change: FD-STREAMS no longer participate in the serve-event

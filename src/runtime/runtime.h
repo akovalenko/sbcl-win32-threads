@@ -15,7 +15,7 @@
 #ifndef _SBCL_RUNTIME_H_
 #define _SBCL_RUNTIME_H_
 
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
+#if defined(LISP_FEATURE_WIN32)
 #include "pthreads_win32.h"
 #else
 #include <signal.h>
@@ -120,18 +120,24 @@ typedef unsigned long pointer_sized_uint_t ;
 
 #include <sys/types.h>
 
-#if defined(LISP_FEATURE_SB_THREAD)
+
 #if defined(LISP_FEATURE_WIN32)
-void gc_safepoint();
-void gc_enter_safe_region();
-void gc_enter_unsafe_region();
-void gc_leave_region();
+
 void odprintf_(const char * fmt, ...);
 #if defined(LISP_FEATURE_DEBUG_WIN32)
 #define odprintf odprintf_
 #else
 #define odprintf(...)
 #endif
+
+#endif
+
+#if defined(LISP_FEATURE_SB_THREAD)
+#if defined(LISP_FEATURE_WIN32)
+void gc_safepoint();
+void gc_enter_safe_region();
+void gc_enter_unsafe_region();
+void gc_leave_region();
 #endif
 typedef pthread_t os_thread_t;
 #else

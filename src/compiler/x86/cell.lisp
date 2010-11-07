@@ -73,7 +73,7 @@
         ;; Thread-local area, no LOCK needed.
         #!+win32
         (progn
-          (inst mov tmp (make-ea :dword :disp #x14) :fs)
+          (inst mov tmp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
           (inst cmpxchg (make-ea :dword :base tmp :index tls) new))
         #!-win32
         (inst cmpxchg (make-ea :dword :base tls) new :fs)
@@ -122,7 +122,7 @@
         (loadw tls symbol symbol-tls-index-slot other-pointer-lowtag)
         #!+win32
         (progn
-          (inst mov tmp (make-ea :dword :disp #x14) :fs)
+          (inst mov tmp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
           (inst cmp (make-ea :dword :base tmp :index tls) no-tls-value-marker-widetag))
         #!-win32
         (inst cmp (make-ea :dword :base tls) no-tls-value-marker-widetag :fs)
@@ -154,7 +154,7 @@
         (loadw value object symbol-tls-index-slot other-pointer-lowtag)
         #!+win32
         (progn
-          (inst mov tmp (make-ea :dword :disp #x14) :fs)
+          (inst mov tmp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
           (inst mov value (make-ea :dword :base tmp :index value)))
         #!-win32
         (inst mov value (make-ea :dword :base value) :fs)
@@ -181,7 +181,7 @@
         (loadw value object symbol-tls-index-slot other-pointer-lowtag)
         #!+win32
         (progn
-          (inst mov tmp (make-ea :dword :disp #x14) :fs)
+          (inst mov tmp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
           (inst mov value (make-ea :dword :base tmp :index value)))
         #!-win32
         (inst mov value (make-ea :dword :base value) :fs)
@@ -212,7 +212,7 @@
       (loadw value object symbol-tls-index-slot other-pointer-lowtag)
       #!+win32
       (progn
-        (inst mov tmp (make-ea :dword :disp #x14) :fs)
+        (inst mov tmp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
         (inst mov value (make-ea :dword :base tmp :index value)))
       #!-win32
       (inst mov value (make-ea :dword :base value) :fs)
@@ -335,7 +335,7 @@
       (emit-label tls-index-valid)
       #!+win32
       (progn
-        (inst mov tmp (make-ea :dword :disp #x14) :fs)
+        (inst mov tmp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
         (inst push (make-ea :dword :base tmp :index tls-index)))
       #!-win32
       (inst push (make-ea :dword :base tls-index) :fs)
@@ -374,7 +374,7 @@
     (loadw temp bsp (- binding-value-slot binding-size))
     #!+win32
     (progn
-      (inst mov tmp (make-ea :dword :disp #x14) :fs)
+      (inst mov tmp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
       (inst mov (make-ea :dword :base tmp :index tls-index) temp))
     #!-win32
     (inst mov (make-ea :dword :base tls-index) temp :fs)
@@ -422,7 +422,7 @@
                   tls-index symbol symbol-tls-index-slot other-pointer-lowtag)
     #!+(and sb-thread win32)
     (progn
-      (inst mov tmp (make-ea :dword :disp #x14) :fs)
+      (inst mov tmp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
       (inst mov (make-ea :dword :base tmp :index tls-index) value))
     #!+(and sb-thread (not win32))
     (inst mov (make-ea :dword :base tls-index) value :fs)

@@ -792,7 +792,14 @@ int check_pending_gc()
   if (SymbolValue(GC_PENDING, self) == T) {
     if (thread_may_gc()) {
       SetSymbolValue(GC_PENDING, NIL, self);
-      maybe_gc(NULL);
+      sigset_t old_sigmask;
+      block_blockable_signals(0, &old_sigmask);
+      CONTEXT win32_ctx;
+      os_context_t ctx;
+      ctx.win32_context = &win32_ctx;
+      pthread_sigmask(SIG_BLOCK, NULL, &ctx.sigmask);
+      maybe_gc(&ctx);
+      pthread_sigmask(SIG_SETMASK, &old_sigmask, NULL);
       return 1;
     }
   }

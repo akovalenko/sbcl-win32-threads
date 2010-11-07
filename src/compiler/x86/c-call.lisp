@@ -273,16 +273,10 @@
     (cond ((policy node (> space speed))
            (move eax function)
            #!+(and win32 sb-thread)
-           (progn
-             (inst pusha)
-             (inst call (make-fixup "gc_enter_safe_region" :foreign))
-             (inst popa))
+           (enter-safe-region-instructions)
            (inst call (make-fixup "call_into_c" :foreign))
            #!+(and win32 sb-thread)
-           (progn
-             (inst pusha)
-             (inst call (make-fixup "gc_leave_region" :foreign))
-             (inst popa)))
+           (leave-region-instructions))
           (t
            ;; Setup the NPX for C; all the FP registers need to be
            ;; empty; pop them all.
@@ -294,16 +288,10 @@
            (inst cld)
 
            #!+(and win32 sb-thread)
-           (progn
-             (inst pusha)
-             (inst call (make-fixup "gc_enter_safe_region" :foreign))
-             (inst popa))
+           (enter-safe-region-instructions)
            (inst call function)
            #!+(and win32 sb-thread)
-           (progn
-             (inst pusha)
-             (inst call (make-fixup "gc_leave_region" :foreign))
-             (inst popa))
+           (leave-region-instructions)
            ;; To give the debugger a clue. FIXME: not really internal-error?
            (note-this-location vop :internal-error)
 
@@ -369,7 +357,7 @@
         (inst mov temp
               (make-ea-for-symbol-tls-index *alien-stack*))
         #!+(and win32 sb-thread)
-        (inst add temp (make-ea :dword :disp #x14) :fs)
+        (inst add temp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
         (inst sub (make-ea :dword :base temp) delta #!-(and win32 sb-thread) :fs)))
     (load-tl-symbol-value result *alien-stack*))
   #!-sb-thread
@@ -391,7 +379,7 @@
         (inst mov temp
               (make-ea-for-symbol-tls-index *alien-stack*))
         #!+(and win32 sb-thread)
-        (inst add temp (make-ea :dword :disp #x14) :fs)
+        (inst add temp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
         (inst add (make-ea :dword :base temp) delta #!-(and win32 sb-thread) :fs))))
   #!-sb-thread
   (:generator 0
@@ -438,11 +426,7 @@ pointer to the arguments."
               (inst push (ash index 2))             ; arg0
 
               #!+(and win32 sb-thread)
-              (progn
-                (inst pusha)
-                (inst mov eax (foreign-symbol-address "gc_enter_unsafe_region"))
-                (inst call eax)
-                (inst popa))
+              (enter-safe-region-instructions/no-fixup)
               
               ;; Indirect the access to ENTER-ALIEN-CALLBACK through
               ;; the symbol-value slot of SB-ALIEN::*ENTER-ALIEN-CALLBACK*
@@ -455,11 +439,7 @@ pointer to the arguments."
               (inst call eax)
               
               #!+(and win32 sb-thread)
-              (progn
-                (inst pusha)
-                (inst mov eax (foreign-symbol-address "gc_leave_region"))
-                (inst call eax)
-                (inst popa))
+              (leave-region-instructions/no-fixup)
               ;; now put the result into the right register
               (cond
                 ((and (alien-integer-type-p return-type)
