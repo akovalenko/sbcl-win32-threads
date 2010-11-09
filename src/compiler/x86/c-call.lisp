@@ -426,7 +426,7 @@ pointer to the arguments."
               (inst push (ash index 2))             ; arg0
 
               #!+(and win32 sb-thread)
-              (enter-safe-region-instructions/no-fixup)
+              (enter-unsafe-region-instructions/no-fixup)
               
               ;; Indirect the access to ENTER-ALIEN-CALLBACK through
               ;; the symbol-value slot of SB-ALIEN::*ENTER-ALIEN-CALLBACK*

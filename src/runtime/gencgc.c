@@ -3977,7 +3977,7 @@ garbage_collect_generation(generation_index_t generation, int raise)
                 /* Somebody is going to burn in hell for this, but casting
                  * it in two steps shuts gcc up about strict aliasing. */
                 esp = (void **)((void *)&raise);
-#if defined(LISP_FEATURE_WIN32)
+#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
                 {
                   CONTEXT context;
                   os_context_t ctx;
@@ -3994,7 +3994,7 @@ garbage_collect_generation(generation_index_t generation, int raise)
                 }
 #endif
             } else {
-#if defined(LISP_FEATURE_WIN32)
+#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
                 CONTEXT context;
                 os_context_t ctx;
                 pthread_np_suspend(th->os_thread);
