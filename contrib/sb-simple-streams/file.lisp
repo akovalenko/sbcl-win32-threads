@@ -157,14 +157,14 @@
       (when (sb-int:fixnump fd)
         (cond (abort
                (when (any-stream-instance-flags stream :output)
-		   ;; can't delet open file on win32
-		   #+win32 (sb-unix:unix-close fd)
-		   (revert-file (sm filename stream) (sm original stream))
-		   #+win32 (return)))
+                   ;; can't delet open file on win32
+                   #+win32 (sb-unix:unix-close fd)
+                   (revert-file (sm filename stream) (sm original stream))
+                   #+win32 (return)))
               (t
                (when (sm delete-original stream)
                  (delete-original (sm filename stream) (sm original stream)))))
-	  (sb-unix:unix-close fd)))
+          (sb-unix:unix-close fd)))
       (when (sm buffer stream)
         (free-buffer (sm buffer stream))
         (setf (sm buffer stream) nil))))
@@ -229,7 +229,7 @@
                  (handler-case
                   (sb-posix:mmap nil size prot sb-posix::MAP-SHARED fd 0)
                   (sb-posix:syscall-error nil)
-		   #+win32
+                   #+win32
                   (error nil))))
             (when (null buffer)
               (sb-unix:unix-close fd)

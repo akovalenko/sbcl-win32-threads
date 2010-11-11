@@ -34,6 +34,7 @@ typedef void *siginfo_t;
 #define OS_VM_PROT_WRITE   2
 #define OS_VM_PROT_EXECUTE 4
 
+#define OUR_TLS_INDEX 63
 #define SIG_MEMORY_FAULT SIGSEGV
 
 #define SIG_STOP_FOR_GC (SIGRTMIN+1)

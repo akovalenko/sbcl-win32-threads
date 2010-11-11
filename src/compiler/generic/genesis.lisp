@@ -2880,7 +2880,7 @@ core and return a descriptor to it."
   ;; possibly this is another candidate for a rename (to
   ;; pseudo-atomic-trap-number or pseudo-atomic-magic-constant
   ;; [possibly applicable to other platforms])
-  
+
   #!+(and win32 sb-thread)
   (format t "#define GC_SAFEPOINT_PAGE_ADDR ((void*)0x~XUL) /* ~:*~A */~%"
             sb!vm:gc-safepoint-page-addr)

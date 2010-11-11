@@ -263,7 +263,7 @@ static inline struct thread *arch_os_get_current_thread(void)
 #if defined(LISP_FEATURE_X86)
     register struct thread *me=0;
 #if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-    __asm__ __volatile__ ("movl %%fs:0x14, %0" : "=r"(me) :);
+    __asm__ __volatile__ ("movl %%fs:0xE10+(4*63), %0" : "=r"(me) :);
     return me;
 #endif
     if(all_threads) {

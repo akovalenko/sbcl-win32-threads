@@ -142,7 +142,7 @@
 (defun ansi-stream-file-position (stream position)
   (declare (type stream stream))
   (declare (type (or (signed-byte 64)
-		     (alien sb!unix:unix-offset) (member nil :start :end))
+                     (alien sb!unix:unix-offset) (member nil :start :end))
                  position))
   ;; FIXME: It would be good to comment on the stuff that is done here...
   ;; FIXME: This doesn't look interrupt safe.

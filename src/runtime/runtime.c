@@ -338,6 +338,7 @@ main(int argc, char *argv[], char *envp[])
     const char *sbcl_home = getenv("SBCL_HOME");
 
 #if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
+    os_preinit();
     pthreads_win32_init();
 #endif
 

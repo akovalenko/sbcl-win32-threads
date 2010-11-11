@@ -2807,4 +2807,4 @@ SBCL itself"
                "FILE-CREATE-NEW"
                "FILE-CREATE-ALWAYS"
                "UNIXLIKE-OPEN"
-	       "UNIXLIKE-CLOSE")))
+               "UNIXLIKE-CLOSE")))

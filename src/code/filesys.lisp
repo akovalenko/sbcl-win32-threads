@@ -306,10 +306,10 @@
                                             sb!win32:file-open-existing
                                             0 0)))
               (setf existsp t)
-	    (let* ((attributes (sb!win32:get-file-attributes filename))
-		   (valid-attributes
-		    (/= attributes sb!win32:invalid-file-attributes)))
-		  (when valid-attributes
+            (let* ((attributes (sb!win32:get-file-attributes filename))
+                   (valid-attributes
+                    (/= attributes sb!win32:invalid-file-attributes)))
+                  (when valid-attributes
                   (setf mode (if (logbitp 4 attributes) sb!unix:s-ifdir 0))))))
           (if existsp
               (case query-for

@@ -388,4 +388,4 @@
 ;;; cf the sparc PARMS.LISP
 (defparameter *assembly-unit-length* 8)
 
-(defconstant +win32-tib-arbitrary-field-offset+ #x14)
+(defconstant +win32-tib-arbitrary-field-offset+ #.(+ #xE10 (* 4 63)))

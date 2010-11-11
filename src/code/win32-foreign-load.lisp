@@ -33,7 +33,7 @@
 (sb!alien:define-alien-routine ("GetStdHandle@4" get-std-handle)
    sb!alien:int
  (id sb!alien:int))
- 
+
 (defvar *reset-stdio-on-dlopen* t)
 
 (defconstant +stdio-handle+ -10)

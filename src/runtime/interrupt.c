@@ -966,7 +966,7 @@ interrupt_handle_pending(os_context_t *context)
   if (SymbolValue(INTERRUPTS_ENABLED, thread) != NIL
       && SymbolValue(INTERRUPT_PENDING, thread) != NIL) {
     void check_pending_interrupts();
-    
+
     check_pending_interrupts();
   }
   #endif

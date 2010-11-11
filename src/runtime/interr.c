@@ -38,10 +38,24 @@ default_lossage_handler(void)
 }
 static void (*lossage_handler)(void) = default_lossage_handler;
 
+#if defined(LISP_FEATURE_WIN32)
+static void backtracing_lossage_handler()
+{
+    void lisp_backtrace(int frames);
+    lisp_backtrace(100);
+    monitor_or_something();
+}
+#endif
+
 void enable_lossage_handler(void)
 {
+#if defined(LISP_FEATURE_WIN32)
+    lossage_handler = backtracing_lossage_handler;
+#else
     lossage_handler = monitor_or_something;
+#endif
 }
+
 void disable_lossage_handler(void)
 {
     lossage_handler = default_lossage_handler;
@@ -64,13 +78,11 @@ void print_message(char *fmt, va_list ap)
 static inline void
 call_lossage_handler() never_returns;
 
+
+
 static inline void
 call_lossage_handler()
 {
-#if defined(LISP_FEATURE_WIN32)
-    void lisp_backtrace(int frames);
-    lisp_backtrace(100);
-#endif
     lossage_handler();
     fprintf(stderr, "Argh! lossage_handler() returned, total confusion..\n");
     exit(1);

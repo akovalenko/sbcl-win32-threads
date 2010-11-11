@@ -154,7 +154,7 @@
 
   (defun unblock-gc-signals ()
     (%unblock-gc-signals 0 0))
-    
+
   (declaim (inline %block-deferrables-and-return-mask %apply-sigmask))
   (sb!alien:define-alien-routine ("block_deferrables_and_return_mask"
                                   %block-deferrables-and-return-mask)
@@ -202,7 +202,7 @@
     "Convenience macro on top of INVOKE-INTERRUPTION."
     `(dx-flet ((interruption () ,@body))
        (invoke-interruption #'interruption)))
-    
+
   (defun sb!kernel:signal-cold-init-or-reinit ()
     #!+sb-doc
     "Enable all the default signals that Lisp knows how to deal with."

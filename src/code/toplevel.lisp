@@ -170,7 +170,7 @@ any non-negative real number."
            :format-arguments (list seconds)
            :datum seconds
            :expected-type '(real 0)))
-  
+
   #!-win32
   (multiple-value-bind (sec nsec)
       (if (integerp seconds)
@@ -188,7 +188,7 @@ any non-negative real number."
   #!+win32
   (let ((sleep-units (truncate (* seconds 1000000))))
     (multiple-value-bind (long-sleeps remainder)
-	(floor sleep-units long-sleep)
+        (floor sleep-units long-sleep)
       (loop repeat long-sleeps
             do (sb!win32:microsleep long-sleep))
       (unless (zerop remainder)

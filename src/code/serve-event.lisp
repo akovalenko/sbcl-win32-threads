@@ -214,11 +214,11 @@ waiting."
                    when #!-win32
                          (sb!unix:unix-simple-poll fd direction to-msec)
                    #!+win32 (or (eq direction :output)
-				(sb!win32:handle-listen
-				 (sb!win32:get-osfhandle fd)))
+                                (sb!win32:handle-listen
+                                 (sb!win32:get-osfhandle fd)))
                    do (return-from wait-until-fd-usable t)
                    else
-		     do (when to-sec (maybe-update-timeout))))))))
+                     do (when to-sec (maybe-update-timeout))))))))
 
 ;;; Wait for up to timeout seconds for an event to happen. Make sure all
 ;;; pending events are processed before returning.

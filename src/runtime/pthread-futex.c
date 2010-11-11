@@ -315,9 +315,9 @@ done:
         sched_yield();
         goto again;
     }
-	
+
 #if defined(LISP_FEATURE_WIN32)
-	gc_leave_region();
+        gc_leave_region();
 #endif
 
     if (result == ETIMEDOUT)

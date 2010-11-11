@@ -1081,7 +1081,7 @@ return DEFAULT if given or else signal JOIN-THREAD-ERROR."
       (kill-safely (thread-os-thread *current-thread*) sb!unix:sigpipe))
     (when interruption
       (funcall interruption))))
-      
+
 #!+(and sb-thread win32)
 (sb!alien:define-alien-routine interrupt-lisp-thread sb!alien:int
   (thread sb!alien:int)
@@ -1102,14 +1102,14 @@ run in same the order they were sent."
   #!+(and sb-thread win32)
   (with-all-threads-lock
     (if (thread-alive-p thread)
-	(let ((other-thread (sap-int (%thread-sap thread)))
-	      (interrupt-function (lambda ()
-				    (sb!unix::invoke-interruption function))))
-	  (sb!sys:with-pinned-objects (interrupt-function)
-	    (let ((r (interrupt-lisp-thread other-thread
-					    (get-lisp-obj-address interrupt-function))))
-	      (zerop r))))
-	(error 'interrupt-thread-error :thread thread)))
+        (let ((other-thread (sap-int (%thread-sap thread)))
+              (interrupt-function (lambda ()
+                                    (sb!unix::invoke-interruption function))))
+          (sb!sys:with-pinned-objects (interrupt-function)
+            (let ((r (interrupt-lisp-thread other-thread
+                                            (get-lisp-obj-address interrupt-function))))
+              (zerop r))))
+        (error 'interrupt-thread-error :thread thread)))
   #!+(and (not sb-thread) win32)
   (progn
     (declare (ignore thread))
@@ -1162,7 +1162,7 @@ SB-EXT:QUIT - the usual cleanup forms will be evaluated"
           (when (= os-thread target) (return thread-sap))
           (setf thread-sap
                 (sap-ref-sap thread-sap (* sb!vm:n-word-bytes
-					   sb!vm::thread-next-slot)))))))
+                                           sb!vm::thread-next-slot)))))))
 
   (defun %symbol-value-in-thread (symbol thread)
     ;; Prevent the thread from dying completely while we look for the TLS

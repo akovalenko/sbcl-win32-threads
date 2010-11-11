@@ -162,7 +162,7 @@ typedef struct pthread_thread {
   sigset_t blocked_signal_set;
   unsigned int signal_is_pending[NSIG];
   void * retval;
-  
+
   pthread_mutex_t lock;
   pthread_cond_t cond;
   int detached;

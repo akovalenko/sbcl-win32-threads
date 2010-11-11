@@ -427,7 +427,7 @@ pointer to the arguments."
 
               #!+(and win32 sb-thread)
               (enter-unsafe-region-instructions/no-fixup)
-              
+
               ;; Indirect the access to ENTER-ALIEN-CALLBACK through
               ;; the symbol-value slot of SB-ALIEN::*ENTER-ALIEN-CALLBACK*
               ;; to ensure it'll work even if the GC moves ENTER-ALIEN-CALLBACK.
@@ -437,7 +437,7 @@ pointer to the arguments."
               (inst push eax) ; function
               (inst mov  eax (foreign-symbol-address "funcall3"))
               (inst call eax)
-              
+
               #!+(and win32 sb-thread)
               (leave-region-instructions/no-fixup)
               ;; now put the result into the right register

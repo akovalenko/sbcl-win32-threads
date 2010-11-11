@@ -85,9 +85,8 @@ int arch_os_thread_init(struct thread *thread)
     }
 
 #ifdef LISP_FEATURE_SB_THREAD
-    __asm__ __volatile__ ("movl %0, %%fs:0x14" : : "r" (thread));
+    TlsSetValue(OUR_TLS_INDEX,thread);
 #endif
-
     return 1;
 }
 

@@ -286,7 +286,7 @@ Ldone:
 	/* Save binding stack pointer */
 	subl $4, %esp
 	pushl %eax
-	movl %fs:0x14, %eax
+	movl %fs:0xE10+(4*63), %eax
 	movl THREAD_BINDING_STACK_POINTER_OFFSET(%eax), %eax
 	movl %eax, 4(%esp)
 	popl %eax

@@ -1886,7 +1886,7 @@
         ;; us with a dangling finalizer (that would close the same
         ;; --possibly reassigned-- FD again), or a stream with a closed
         ;; FD that appears open.
-	(fd-close (fd-stream-fd fd-stream))
+        (fd-close (fd-stream-fd fd-stream))
         (set-closed-flame fd-stream)
         (when (fboundp 'cancel-finalization)
           (cancel-finalization fd-stream)))
@@ -2119,7 +2119,7 @@
   (declare (fd-stream stream))
   (without-interrupts
     (let ((posn (sb!unix:unix-lseek
-		 (fd-stream-fd stream) 0 sb!unix:l_incr)))
+                 (fd-stream-fd stream) 0 sb!unix:l_incr)))
       (declare (type (or (alien sb!unix:unix-offset) null) posn))
       ;; We used to return NIL for errno==ESPIPE, and signal an error
       ;; in other failure cases. However, CLHS says to return NIL if
@@ -2262,7 +2262,7 @@
     (when (and auto-close (fboundp 'finalize))
       (finalize stream
                 (lambda ()
-		  (fd-close fd)
+                  (fd-close fd)
                   #!+sb-show
                   (format *terminal-io* "** closed file descriptor ~W **~%"
                           fd))

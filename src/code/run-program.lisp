@@ -519,7 +519,7 @@ status slot."
   (wait sb-alien:int))
 
 ;;; Command-line argument quoting according to MSVC runtime rules:
-;;; 
+;;;
 ;;; n backslashes mean n backslashes when they're followed by
 ;;; something other than quotation mark;
 ;;;
@@ -539,25 +539,25 @@ status slot."
       "\"\""
       (flet ((white-space-p (character)
                (member character '(#\Return #\Newline #\Space #\Tab))))
-	(let ((has-spaces (find-if #'white-space-p arg))
-	      (n-backslashes 0))
-	  (with-output-to-string (out)
-	    (flet ((maybe-double-quote ()
-		     (when has-spaces (write-char #\" out)))
-		   (duplicate-backslashes (extra)
-		     (loop repeat (+ extra n-backslashes)
-			   do (write-char #\\ out))))
-	      (maybe-double-quote)
-	      (loop for character across arg
-		    do (when (char= #\" character)
-			 (duplicate-backslashes 1))
-		       (setf n-backslashes
-			     (case character
-			       (#\\ (1+ n-backslashes))
-			       (t 0)))
-		       (write-char character out)
-		    finally (when has-spaces (duplicate-backslashes 0)))
-	      (maybe-double-quote)))))))
+        (let ((has-spaces (find-if #'white-space-p arg))
+              (n-backslashes 0))
+          (with-output-to-string (out)
+            (flet ((maybe-double-quote ()
+                     (when has-spaces (write-char #\" out)))
+                   (duplicate-backslashes (extra)
+                     (loop repeat (+ extra n-backslashes)
+                           do (write-char #\\ out))))
+              (maybe-double-quote)
+              (loop for character across arg
+                    do (when (char= #\" character)
+                         (duplicate-backslashes 1))
+                       (setf n-backslashes
+                             (case character
+                               (#\\ (1+ n-backslashes))
+                               (t 0)))
+                       (write-char character out)
+                    finally (when has-spaces (duplicate-backslashes 0)))
+              (maybe-double-quote)))))))
 
 ;;; FIXME: There shouldn't be two semiredundant versions of the
 ;;; documentation. Since this is a public extension function, the

@@ -204,6 +204,77 @@ void unmap_gc_page()
 }
 #endif
 
+#if defined(LISP_FEATURE_SB_THREAD)
+/* We want to get a slot in TIB that (1) is available at constant
+   offset, (2) is our private property, so libraries wouldn't legally
+   override it, (3) contains something predefined for threads created
+   out of our sight.
+
+   Low 64 TLS slots are adressable directly, starting with
+   FS:[#xE10]. When SBCL runtime is initialized, some of the low slots
+   may be already in use by its prerequisite DLLs, as DllMain()s and
+   TLS callbacks have been called already. But slot 63 is unlikely to
+   be reached at this point: one slot per DLL that needs it is the
+   common practice, and many system DLLs use predefined TIB-based
+   areas outside conventional TLS storage and don't need TLS slots.
+   With our current dependencies, even slot 2 is observed to be free
+   (as of WinXP and wine).
+
+   Now we'll call TlsAlloc() repeatedly until slot 63 is officially
+   assigned to us, then TlsFree() all other slots for normal use. TLS
+   slot 63, alias FS:[#.(+ #xE10 (* 4 63))], now belongs to us.
+
+   To summarize, let's list the assumptions we make:
+
+   - TIB, which is FS segment base, contains first 64 TLS slots at the
+     offset #xE10 (i.e. TIB layout compatibility);
+   - TLS slots are allocated from lower to higher ones;
+   - All libraries together with CRT startup have not requested 64
+     slots yet.
+
+   All these assumptions together don't seem to be less warranted than
+   the availability of TIB arbitrary data slot for our use. There are
+   some more reasons to prefer slot 63 over TIB arbitrary data: (1) if
+   our assumptions for slot 63 are violated, it will be detected at
+   startup instead of causing some system-specific unreproducible
+   problems afterwards, depending on OS and loaded foreign libraries;
+   (2) if getting slot 63 reliably with our current approach will
+   become impossible for some future Windows version, we can add TLS
+   callback directory to SBCL binary; main image TLS callback is
+   started before _any_ TLS slot is allocated by libraries, and
+   some C compiler vendors rely on this fact. */
+
+void os_preinit()
+{
+    DWORD slots[TLS_MINIMUM_AVAILABLE];
+    DWORD key;
+    int n_slots = 0, i;
+    for (i=0; i<TLS_MINIMUM_AVAILABLE; ++i) {
+        key = TlsAlloc();
+        if (key == OUR_TLS_INDEX) {
+            if (TlsGetValue(key)!=NULL)
+                lose("TLS slot assertion failed: fresh slot value is not NULL");
+            TlsSetValue(OUR_TLS_INDEX, (intptr_t)0xFEEDBAC4);
+            if ((intptr_t)(void*)arch_os_get_current_thread()!=(intptr_t)0xFEEDBAC4)
+                lose("TLS slot assertion failed: TIB layout change detected");
+            TlsSetValue(OUR_TLS_INDEX, (intptr_t)0xDEADBEAD);
+            if ((intptr_t)(void*)arch_os_get_current_thread()!=(intptr_t)0xDEADBEAD)
+                lose("TLS slot assertion failed: TIB content unstable");
+            TlsSetValue(OUR_TLS_INDEX, NULL);
+            break;
+        }
+        slots[n_slots++]=key;
+    }
+    for (i=0; i<n_slots; ++i) {
+        TlsFree(i);
+    }
+    if (key!=OUR_TLS_INDEX) {
+        lose("TLS slot assertion failed: slot 63 is unavailable "
+             "(last TlsAlloc() returned %u)",key);
+    }
+}
+#endif
+
 void os_init(char *argv[], char *envp[])
 {
     SYSTEM_INFO system_info;
@@ -572,11 +643,11 @@ handle_exception(EXCEPTION_RECORD *exception_record,
          * anyway. */
 
         fake_foreign_function_call(&ctx);
-	
+
         #if defined(LISP_FEATURE_SB_THREAD)
         pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
         #endif
-        
+
         /* Allocate the SAP objects while the "interrupts" are still
          * disabled. */
         context_sap = alloc_sap(&ctx);

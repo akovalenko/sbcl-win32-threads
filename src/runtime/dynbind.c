@@ -92,7 +92,7 @@ unbind_variable(lispobj name, void *th)
     binding = ((struct binding *)get_binding_stack_pointer(thread)) - 1;
 
     symbol = binding->symbol;
-    
+
     if (symbol != name)
       lose("unbind_variable, 0x%p != 0x%p", symbol, name);
 

@@ -111,17 +111,17 @@
 ;;; consoles and sockets: communication resources (serial ports).
 (define-alien-type comm-timeouts
     (struct comm-timeouts
-	    (read-interval dword)
-	    (read-total-multiplier dword)
-	    (read-total-constant dword)
-	    (write-total-multiplier dword)
-	    (write-total-constant dword)))
+            (read-interval dword)
+            (read-total-multiplier dword)
+            (read-total-constant dword)
+            (write-total-multiplier dword)
+            (write-total-constant dword)))
 
 (define-alien-type comstat
     (struct comstat
-	    (flags dword)
-	    (in-queue dword)
-	    (out-queue dword)))
+            (flags dword)
+            (in-queue dword)
+            (out-queue dword)))
 
 (define-alien-routine ("SetCommTimeouts" set-comm-timeouts)
     bool
@@ -147,15 +147,15 @@
 (defun initialize-comm-timeouts (handle)
   (with-alien ((comm-timeouts comm-timeouts))
     (macrolet ((frob (&rest pairs)
-		 `(setf ,@(loop for (slot value) on pairs by #'cddr
-				collect `(slot comm-timeouts ',slot)
-				collect value))))
+                 `(setf ,@(loop for (slot value) on pairs by #'cddr
+                                collect `(slot comm-timeouts ',slot)
+                                collect value))))
 
       (frob read-interval 1
-	    read-total-constant 0
-	    read-total-multiplier 0
-	    write-total-constant 0
-	    write-total-multiplier 0))
+            read-total-constant 0
+            read-total-multiplier 0
+            write-total-constant 0
+            write-total-multiplier 0))
     (set-comm-timeouts handle (addr comm-timeouts))))
 
 ;;; ClearCommError is used here to query a number of characters in the
@@ -166,9 +166,9 @@
   (with-alien ((comstat (struct comstat)))
     (let ((done (clear-comm-error handle (addr comstat))))
       (if (zerop done) 0
-	  (symbol-macrolet ((in-queue (slot comstat 'in-queue)))
-	    (if (zerop in-queue) 2
-		(values 1 in-queue)))))))
+          (symbol-macrolet ((in-queue (slot comstat 'in-queue)))
+            (if (zerop in-queue) 2
+                (values 1 in-queue)))))))
 
 ;;; Listen for input on a Windows file handle.  Unlike UNIX, there
 ;;; isn't a unified interface to do this---we have to know what sort
@@ -183,7 +183,7 @@
       (return-from handle-listen (plusp avail)))
     (let ((res (comm-input-available handle)))
       (unless (zerop res)
-	(return-from handle-listen (= res 1))))
+        (return-from handle-listen (= res 1))))
     (unless (zerop (peek-console-input handle
                                        (cast buf (* t))
                                        1 (addr avail)))
@@ -192,7 +192,7 @@
     (let ((res (socket-input-available handle)))
       (unless (zerop res)
         (return-from handle-listen (= res 1))))
- 
+
     t))
 
 ;;; Listen for input on a C runtime file handle.  Returns true if
@@ -531,15 +531,15 @@
               dword dword dword dword dword (* (* char)) dword dword)
              (cast-and-free amsg :free-function local-free)
              (logior FORMAT_MESSAGE_ALLOCATE_BUFFER FORMAT_MESSAGE_FROM_SYSTEM)
-		    0 err 0 (addr amsg) 0 0))))
+                    0 err 0 (addr amsg) 0 0))))
     (and message
-	 ;; KLUDGE: not string-trim, because #\Return character is
-	 ;; unavailable while cross-compiling.
-	 (subseq message 0
-		 (or (position-if-not
-		      (lambda (character)
-			(member (char-code character) '(10 13 32)))
-		      message :from-end t) 0)))))
+         ;; KLUDGE: not string-trim, because #\Return character is
+         ;; unavailable while cross-compiling.
+         (subseq message 0
+                 (or (position-if-not
+                      (lambda (character)
+                        (member (char-code character) '(10 13 32)))
+                      message :from-end t) 0)))))
 
 (defmacro win32-error (func-name &optional err)
   `(let ((err-code ,(or err `(get-last-error))))
@@ -906,15 +906,15 @@ UNIX epoch: January 1st 1970."
             (#b101 file-create-always))))
   (let ((handle
          (create-file path
-			(logior
-			 (if revertable #x10000 0)
+                        (logior
+                         (if revertable #x10000 0)
                       (if (plusp (logand sb!unix:o_append flags))
                           access-file-append-data
-			     (ecase (logand 3 flags)
+                             (ecase (logand 3 flags)
                             (0 access-generic-read)
                             (1 access-generic-write)
                                ((2 3) (logior access-generic-write
-					      access-generic-read)))))
+                                              access-generic-read)))))
                       (logior file-share-read
                               file-share-delete
                               file-share-write)
@@ -926,19 +926,19 @@ UNIX epoch: January 1st 1970."
                        file-flag-sequential-scan)
                       0)))
     (if (eql handle invalid-handle)
-	(values nil
+        (values nil
 
-		(let ((error-code (get-last-error)))
-		  (case error-code
-		    (2 sb!unix:enoent)
-		    (183 sb!unix:eexist)
-		    (otherwise (- error-code)))))
-	  (progn
-	    (initialize-comm-timeouts handle)
-	(let ((fd (open-osfhandle handle (logior sb!unix::o_binary flags))))
-	  (if (minusp fd)
-	      (values nil (sb!unix::get-errno))
-		  (values fd 0))))))))
+                (let ((error-code (get-last-error)))
+                  (case error-code
+                    (2 sb!unix:enoent)
+                    (183 sb!unix:eexist)
+                    (otherwise (- error-code)))))
+          (progn
+            (initialize-comm-timeouts handle)
+        (let ((fd (open-osfhandle handle (logior sb!unix::o_binary flags))))
+          (if (minusp fd)
+              (values nil (sb!unix::get-errno))
+                  (values fd 0))))))))
 
 (define-alien-routine ("closesocket" close-socket) int (handle handle))
 
@@ -950,7 +950,7 @@ UNIX epoch: January 1st 1970."
 (defun unixlike-close (fd)
   (let ((handle (get-osfhandle fd)))
     (if (= handle invalid-handle)
-	(values nil ebadf)
-	(let ((socketp (plusp (socket-input-available handle))))
-	  (multiple-value-prog1 (sb!unix:unix-close fd)
-	    (when socketp (close-socket handle)))))))
+        (values nil ebadf)
+        (let ((socketp (plusp (socket-input-available handle))))
+          (multiple-value-prog1 (sb!unix:unix-close fd)
+            (when socketp (close-socket handle)))))))
