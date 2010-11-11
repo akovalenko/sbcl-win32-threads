@@ -525,12 +525,21 @@
 
 (defun get-last-error-message (err)
   "http://msdn.microsoft.com/library/default.asp?url=/library/en-us/debug/base/retrieving_the_last_error_code.asp"
+  (let ((message
   (with-alien ((amsg (* char)))
     (syscall (("FormatMessage" 28 t)
               dword dword dword dword dword (* (* char)) dword dword)
              (cast-and-free amsg :free-function local-free)
              (logior FORMAT_MESSAGE_ALLOCATE_BUFFER FORMAT_MESSAGE_FROM_SYSTEM)
-             0 err 0 (addr amsg) 0 0)))
+		    0 err 0 (addr amsg) 0 0))))
+    (and message
+	 ;; KLUDGE: not string-trim, because #\Return character is
+	 ;; unavailable while cross-compiling.
+	 (subseq message 0
+		 (or (position-if-not
+		      (lambda (character)
+			(member (char-code character) '(10 13 32)))
+		      message :from-end t) 0)))))
 
 (defmacro win32-error (func-name &optional err)
   `(let ((err-code ,(or err `(get-last-error))))
