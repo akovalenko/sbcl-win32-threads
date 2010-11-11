@@ -266,7 +266,7 @@ void os_preinit()
         slots[n_slots++]=key;
     }
     for (i=0; i<n_slots; ++i) {
-        TlsFree(i);
+        TlsFree(slots[i]);
     }
     if (key!=OUR_TLS_INDEX) {
         lose("TLS slot assertion failed: slot 63 is unavailable "
