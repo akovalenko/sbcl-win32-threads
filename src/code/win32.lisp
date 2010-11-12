@@ -224,47 +224,36 @@
 
 ;;;; System Functions
 
-;;; Sleep for MILLISECONDS milliseconds.
-#!-sb-thread
-(progn
-(define-alien-routine ("Sleep@4" millisleep) void
-  (milliseconds dword))
-  (defun microsleep (microseconds)
-    (when (>= microseconds 1000)
-      (millisleep (floor microseconds 1000)))))
+(define-alien-routine ("win32_wait_object_or_signal" wait-object-or-signal) int
+  (handle handle))
+(define-alien-type signed-filetime (signed 64))
+(define-alien-routine ("CloseHandle" close-handle) bool
+  (handle handle))
 
-#!+sb-thread
-(progn
-  (define-alien-routine ("win32_wait_object_or_signal" wait-object-or-signal) int
-    (handle handle))
-  (define-alien-type signed-filetime (signed 64))
-  (define-alien-routine ("CloseHandle" close-handle) bool
-    (handle handle))
+(define-alien-routine ("CreateWaitableTimerA" create-waitable-timer) handle
+  (security-attributes (* t))
+  (manual-reset bool)
+  (name (* t)))
 
-  (define-alien-routine ("CreateWaitableTimerA" create-waitable-timer) handle
-    (security-attributes (* t))
-    (manual-reset bool)
-    (name (* t)))
+(define-alien-routine ("SetWaitableTimer" set-waitable-timer) bool
+  (handle handle)
+  (due-time signed-filetime :in-out)
+  (period dword)
+  (completion-routine (* t))
+  (arg-to-completion-routine (* t))
+  (resume bool))
 
-  (define-alien-routine ("SetWaitableTimer" set-waitable-timer) bool
-    (handle handle)
-    (due-time signed-filetime :in-out)
-    (period dword)
-    (completion-routine (* t))
-    (arg-to-completion-routine (* t))
-    (resume bool))
+(define-alien-routine ("CancelWaitableTimer" cancel-waitable-timer) bool
+  (handle handle))
 
-  (define-alien-routine ("CancelWaitableTimer" cancel-waitable-timer) bool
-    (handle handle))
-
-  (defun microsleep (microseconds)
-    (without-interrupts
-      (let ((timer (create-waitable-timer nil 0 nil)))
-        (set-waitable-timer timer (- (* 10 microseconds)) 0 nil nil 0)
-        (unwind-protect
-             (do () ((with-local-interrupts
-                       (zerop (wait-object-or-signal timer)))))
-          (close-handle timer))))))
+(defun microsleep (microseconds)
+  (without-interrupts
+    (let ((timer (create-waitable-timer nil 0 nil)))
+      (set-waitable-timer timer (- (* 10 microseconds)) 0 nil nil 0)
+      (unwind-protect
+	   (do () ((with-local-interrupts
+		     (zerop (wait-object-or-signal timer)))))
+	(close-handle timer)))))
 
 #!+sb-unicode
 (progn
