@@ -35,7 +35,7 @@
 
 ;;; Retrieve the calling thread's last-error code value.  The
 ;;; last-error code is maintained on a per-thread basis.
-(define-alien-routine ("GetLastError@0" get-last-error) dword)
+(define-alien-routine ("GetLastError" get-last-error) dword)
 
 ;;; Flag constants for FORMAT-MESSAGE.
 (defconstant format-message-from-system #x1000)
@@ -43,7 +43,7 @@
 ;;; Format an error message based on a lookup table.  See MSDN for the
 ;;; full meaning of the all options---most are not used when getting
 ;;; system error codes.
-(define-alien-routine ("FormatMessageA@28" format-message) dword
+(define-alien-routine ("FormatMessageA" format-message) dword
   (flags dword)
   (source (* t))
   (message-id dword)
@@ -61,7 +61,7 @@
 
 ;;; Read data from a file handle into a buffer.  This may be used
 ;;; synchronously or with "overlapped" (asynchronous) I/O.
-(define-alien-routine ("ReadFile@20" read-file) bool
+(define-alien-routine ("ReadFile" read-file) bool
   (file handle)
   (buffer (* t))
   (bytes-to-read dword)
@@ -70,7 +70,7 @@
 
 ;;; Write data from a buffer to a file handle.  This may be used
 ;;; synchronously  or with "overlapped" (asynchronous) I/O.
-(define-alien-routine ("WriteFile@20" write-file) bool
+(define-alien-routine ("WriteFile" write-file) bool
   (file handle)
   (buffer (* t))
   (bytes-to-write dword)
@@ -81,7 +81,7 @@
 ;;; removing it from the pipe.  BUFFER, BYTES-READ, BYTES-AVAIL, and
 ;;; BYTES-LEFT-THIS-MESSAGE may be NULL if no data is to be read.
 ;;; Return TRUE on success, FALSE on failure.
-(define-alien-routine ("PeekNamedPipe@24" peek-named-pipe) bool
+(define-alien-routine ("PeekNamedPipe" peek-named-pipe) bool
   (pipe handle)
   (buffer (* t))
   (buffer-size dword)
@@ -92,13 +92,13 @@
 ;;; Flush the console input buffer if HANDLE is a console handle.
 ;;; Returns true on success, false if the handle does not refer to a
 ;;; console.
-(define-alien-routine ("FlushConsoleInputBuffer@4" flush-console-input-buffer) bool
+(define-alien-routine ("FlushConsoleInputBuffer" flush-console-input-buffer) bool
   (handle handle))
 
 ;;; Read data from the console input buffer without removing it,
 ;;; without blocking.  Buffer should be large enough for LENGTH *
 ;;; INPUT-RECORD-SIZE bytes.
-(define-alien-routine ("PeekConsoleInputA@16" peek-console-input) bool
+(define-alien-routine ("PeekConsoleInputA" peek-console-input) bool
   (handle handle)
   (buffer (* t))
   (length dword)
@@ -423,7 +423,7 @@
   (defun ansi-codepage ()
     (or *ansi-codepage*
         (setq *ansi-codepage*
-              (gethash (alien-funcall (extern-alien "GetACP@0" (function UINT)))
+              (gethash (alien-funcall (extern-alien "GetACP" (function UINT)))
                        *codepage-to-external-format*
                        :latin-1))))
 
@@ -431,7 +431,7 @@
   (defun oem-codepage ()
     (or *oem-codepage*
         (setq *oem-codepage*
-            (gethash (alien-funcall (extern-alien "GetOEMCP@0" (function UINT)))
+            (gethash (alien-funcall (extern-alien "GetOEMCP" (function UINT)))
                      *codepage-to-external-format*
                      :latin-1)))))
 
@@ -439,7 +439,7 @@
 (declaim (ftype (function () keyword) console-input-codepage))
 (defun console-input-codepage ()
   (or #!+sb-unicode
-      (gethash (alien-funcall (extern-alien "GetConsoleCP@0" (function UINT)))
+      (gethash (alien-funcall (extern-alien "GetConsoleCP" (function UINT)))
                *codepage-to-external-format*)
       :latin-1))
 
@@ -448,11 +448,11 @@
 (defun console-output-codepage ()
   (or #!+sb-unicode
       (gethash (alien-funcall
-                (extern-alien "GetConsoleOutputCP@0" (function UINT)))
+                (extern-alien "GetConsoleOutputCP" (function UINT)))
                *codepage-to-external-format*)
       :latin-1))
 
-(define-alien-routine ("LocalFree@4" local-free) void
+(define-alien-routine ("LocalFree" local-free) void
   (lptr (* t)))
 
 (defmacro cast-and-free (value &key (type 'system-string)
