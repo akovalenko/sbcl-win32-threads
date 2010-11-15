@@ -772,8 +772,9 @@ we don't create new wrappers if one for the same specifier already exists.")
   "Lisp trampoline store: assembler wrappers contain indexes to this, and
 ENTER-ALIEN-CALLBACK pulls the corresponsing trampoline out and calls it.")
 
-(defun %alien-callback-sap (specifier result-type argument-types function wrapper)
-  (let ((key (cons specifier function)))
+(defun %alien-callback-sap (specifier result-type argument-types function wrapper
+                            &optional (call-type :cdecl))
+  (let ((key (list specifier function call-type)))
     (or (gethash key *alien-callbacks*)
         (setf (gethash key *alien-callbacks*)
               (let* ((index (fill-pointer *alien-callback-trampolines*))
@@ -785,7 +786,10 @@ ENTER-ALIEN-CALLBACK pulls the corresponsing trampoline out and calls it.")
                      ;; runtime. Possibly we could even pregenerate
                      ;; the code and just patch the index in later.
                      (assembler-wrapper (alien-callback-assembler-wrapper
-                                         index result-type argument-types)))
+                                         index result-type argument-types
+                                         (if (eq call-type :stdcall)
+                                             (* 4 (length argument-types))
+                                             0))))
                 (vector-push-extend
                  (alien-callback-lisp-trampoline wrapper function)
                  *alien-callback-trampolines*)
@@ -897,7 +901,8 @@ ENTER-ALIEN-CALLBACK pulls the corresponsing trampoline out and calls it.")
 
 ;;;; interface (not public, yet) for alien callbacks
 
-(defmacro alien-callback (specifier function &environment env)
+(defmacro alien-callback (specifier function &optional (call-type :cdecl)
+                          &environment env)
   "Returns an alien-value with of alien ftype SPECIFIER, that can be passed to
 an alien function as a pointer to the FUNCTION. If a callback for the given
 SPECIFIER and FUNCTION already exists, it is returned instead of consing a new
@@ -912,7 +917,7 @@ one."
                                (setf (gethash ',specifier *alien-callback-wrappers*)
                                      (compile nil
                                               ',(alien-callback-lisp-wrapper-lambda
-                                                 specifier result-type argument-types env)))))
+                                                 specifier result-type argument-types env)))) ,call-type)
       ',(parse-alien-type specifier env))))
 
 (defun alien-callback-p (alien)
