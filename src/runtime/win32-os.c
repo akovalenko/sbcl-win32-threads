@@ -433,8 +433,12 @@ os_protect(os_vm_address_t address, os_vm_size_t length, os_vm_prot_t prot)
 {
     DWORD old_prot;
 
-    if (!VirtualProtect(address, length, os_protect_modes[prot], &old_prot)) {
-        fprintf(stderr, "VirtualProtect failed, code 0x%lx.\n", GetLastError());
+    if (!VirtualProtect(address, length, os_protect_modes[prot], &old_prot)
+        && !(VirtualAlloc(address, length, MEM_COMMIT,os_protect_modes[prot]) &&
+             VirtualProtect(address, length, os_protect_modes[prot], &old_prot))) {
+        fprintf(stderr,
+                "VirtualProtect failed, code 0x%lx (0x%lx + 0x%lx into %d).\n",
+                GetLastError(), address, length, prot);
         fflush(stderr);
     }
 }
