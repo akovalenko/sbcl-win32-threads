@@ -251,9 +251,9 @@
     (let ((timer (create-waitable-timer nil 0 nil)))
       (set-waitable-timer timer (- (* 10 microseconds)) 0 nil nil 0)
       (unwind-protect
-	   (do () ((with-local-interrupts
-		     (zerop (wait-object-or-signal timer)))))
-	(close-handle timer)))))
+           (do () ((with-local-interrupts
+                     (zerop (wait-object-or-signal timer)))))
+        (close-handle timer)))))
 
 #!+sb-unicode
 (progn
