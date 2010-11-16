@@ -944,6 +944,7 @@ int win32_unix_read(int fd, void * buf, int count)
   struct thread * self = arch_os_get_current_thread();
   DWORD errorCode = 0;
   BOOL waitInGOR = FALSE;
+  BOOL ok = FALSE;
   LARGE_INTEGER file_position, nooffset={{0}};
 
   odprintf("read(%d, 0x%p, %d)", fd, buf, count);
@@ -958,8 +959,8 @@ int win32_unix_read(int fd, void * buf, int count)
     overlapped.Offset = 0;
     overlapped.OffsetHigh = 0;
   }
-  if (ReadFile(handle,buf,count,&read_bytes,
-               &overlapped)) {
+  ok = ReadFile(handle,buf,count,&read_bytes, &overlapped);
+  if (ok) {
     /* immediately */
     goto done_something;
   } else {
@@ -983,7 +984,8 @@ int win32_unix_read(int fd, void * buf, int count)
       } else {
         waitInGOR = FALSE;
       }
-      if (!GetOverlappedResult(handle,&overlapped,&read_bytes,waitInGOR)) {
+      ok = GetOverlappedResult(handle,&overlapped,&read_bytes,waitInGOR);
+      if (!ok) {
         errorCode = GetLastError();
         if (errorCode == ERROR_HANDLE_EOF) {
           goto done_something;
@@ -1001,6 +1003,12 @@ int win32_unix_read(int fd, void * buf, int count)
     }
   }
  done_something:
+  if ((read_bytes == 0) && ok) {
+    /* consoles and pipes may return 0 bytes _successfully_ read.
+       We don't return 0 for win32_unix_read, as it means EOF. */
+    errno = EINTR;
+    return -1;
+  }
   file_position.QuadPart += read_bytes;
   SetFilePointerEx(handle,file_position,NULL,FILE_BEGIN);
   return read_bytes;
