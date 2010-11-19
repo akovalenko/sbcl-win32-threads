@@ -426,21 +426,27 @@ pointer to the arguments."
               (inst push eax)                       ; arg1
               (inst push (ash index 2))             ; arg0
 
-              #!+(and win32 sb-thread)
-              (enter-unsafe-region-instructions/no-fixup)
+              #!+sb-foreign-thread
+              (progn
+                (inst mov eax (foreign-symbol-address "fff_generic_callback"))
+                (inst call eax))
+              #!-sb-foreign-thread
+              (progn
+                #!+(and win32 sb-thread)
+                (enter-unsafe-region-instructions/no-fixup)
 
-              ;; Indirect the access to ENTER-ALIEN-CALLBACK through
-              ;; the symbol-value slot of SB-ALIEN::*ENTER-ALIEN-CALLBACK*
-              ;; to ensure it'll work even if the GC moves ENTER-ALIEN-CALLBACK.
-              ;; Skip any SB-THREAD TLS magic, since we don't expecte anyone
-              ;; to rebind the variable. -- JES, 2006-01-01
-              (load-symbol-value eax sb!alien::*enter-alien-callback*)
-              (inst push eax) ; function
-              (inst mov  eax (foreign-symbol-address "funcall3"))
-              (inst call eax)
+                ;; Indirect the access to ENTER-ALIEN-CALLBACK through
+                ;; the symbol-value slot of SB-ALIEN::*ENTER-ALIEN-CALLBACK*
+                ;; to ensure it'll work even if the GC moves ENTER-ALIEN-CALLBACK.
+                ;; Skip any SB-THREAD TLS magic, since we don't expecte anyone
+                ;; to rebind the variable. -- JES, 2006-01-01
+                (load-symbol-value eax sb!alien::*enter-alien-callback*)
+                (inst push eax)         ; function
+                (inst mov  eax (foreign-symbol-address "funcall3"))
+                (inst call eax)
 
-              #!+(and win32 sb-thread)
-              (leave-region-instructions/no-fixup)
+                #!+(and win32 sb-thread)
+                (leave-region-instructions/no-fixup))
               ;; now put the result into the right register
               (cond
                 ((and (alien-integer-type-p return-type)
@@ -461,7 +467,9 @@ pointer to the arguments."
                  (error "unrecognized alien type: ~A" return-type)))
               (inst mov esp ebp)                   ; discard frame
               (inst pop ebp)                       ; restore frame pointer
-              (inst ret stack-offset))
+              (if (= 0 stack-offset)
+                  (inst ret)
+                  (inst ret stack-offset)))
     (finalize-segment segment)
     ;; Now that the segment is done, convert it to a static
     ;; vector we can point foreign code to.

@@ -47,6 +47,7 @@
 #include "gc-internal.h"
 #if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
 #include "pseudo-atomic.h"
+#define IMMEDIATE_POST_MORTEM
 #endif
 
 #ifdef LISP_FEATURE_WIN32
@@ -206,11 +207,13 @@ plan_thread_post_mortem(struct thread *corpse)
 static void
 perform_thread_post_mortem(struct thread_post_mortem *post_mortem)
 {
-#ifdef CREATE_POST_MORTEM_THREAD
+#if defined(CREATE_POST_MORTEM_THREAD) || defined(IMMEDIATE_POST_MORTEM)
     pthread_detach(pthread_self());
 #endif
     if (post_mortem) {
+        #ifndef IMMEDIATE_POST_MORTEM
         gc_assert(!pthread_join(post_mortem->os_thread, NULL));
+        #endif
         gc_assert(!pthread_attr_destroy(post_mortem->os_attr));
         free(post_mortem->os_attr);
 #if defined(LISP_FEATURE_WIN32)
@@ -257,9 +260,11 @@ schedule_thread_post_mortem(struct thread *corpse)
 #elif defined(CREATE_POST_MORTEM_THREAD)
         gc_assert(!pthread_create(&thread, NULL, perform_thread_post_mortem, post_mortem));
 #else
+#ifndef IMMEDIATE_POST_MORTEM
         post_mortem = (struct thread_post_mortem *)
             swap_lispobjs((lispobj *)(void *)&pending_thread_post_mortem,
                           (lispobj)post_mortem);
+#endif
         perform_thread_post_mortem(post_mortem);
 #endif
     }
