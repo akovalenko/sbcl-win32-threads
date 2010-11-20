@@ -70,6 +70,7 @@ int linux_supports_futex=0;
 #endif
 
 #include <stdarg.h>
+#include <setjmp.h>
 
 #undef  RtlUnwind
 /* missing definitions for modern mingws */
@@ -254,10 +255,10 @@ void os_preinit()
         if (key == OUR_TLS_INDEX) {
             if (TlsGetValue(key)!=NULL)
                 lose("TLS slot assertion failed: fresh slot value is not NULL");
-            TlsSetValue(OUR_TLS_INDEX, (intptr_t)0xFEEDBAC4);
+            TlsSetValue(OUR_TLS_INDEX, (void*)(intptr_t)0xFEEDBAC4);
             if ((intptr_t)(void*)arch_os_get_current_thread()!=(intptr_t)0xFEEDBAC4)
                 lose("TLS slot assertion failed: TIB layout change detected");
-            TlsSetValue(OUR_TLS_INDEX, (intptr_t)0xDEADBEAD);
+            TlsSetValue(OUR_TLS_INDEX, (void*)(intptr_t)0xDEADBEAD);
             if ((intptr_t)(void*)arch_os_get_current_thread()!=(intptr_t)0xDEADBEAD)
                 lose("TLS slot assertion failed: TIB content unstable");
             TlsSetValue(OUR_TLS_INDEX, NULL);
@@ -273,7 +274,225 @@ void os_preinit()
              "(last TlsAlloc() returned %u)",key);
     }
 }
-#endif
+
+
+/* Adoption request is answered with a fiberish pthread.  (on the
+   server side) Its TLS63 is copied to our TLS63; Our handle and TEB
+   is copied to its *pthread_t.
+
+*/
+
+typedef struct fff_request {
+  struct fff_request *next;
+  HANDLE event;
+  pthread_t data;
+} fff_request;
+
+fff_request *fff_queue = NULL;
+int foreign_thread_callbacks_enabled = 0;
+int foreign_thread_callbacks_initialized = 0;
+pthread_cond_t fff_condition;
+int fff_initialized = 0;
+pthread_mutex_t fff_mutex = PTHREAD_MUTEX_INITIALIZER;
+DWORD tls_fff_call_info = (DWORD)-1;
+pthread_t fff_next_orphan = NULL;
+pthread_t fff_manager_thread;
+
+void fff_ensure_init()
+{
+  if (!fff_initialized) {
+    pthread_mutex_lock(&fff_mutex);
+    if (!fff_initialized) {
+      pthread_cond_init(&fff_condition,NULL);
+      tls_fff_call_info = TlsAlloc();
+      fff_initialized = 1;
+    }
+    pthread_mutex_unlock(&fff_mutex);
+  }
+}
+
+pthread_t fff_receive_fiber() {
+  pthread_t self = pthread_self();
+  HANDLE hThreadReady = CreateEvent(NULL,FALSE,FALSE,NULL);
+  fff_request gimmeathread = {NULL, hThreadReady, self};
+
+  pthread_mutex_lock(&fff_mutex);
+  gimmeathread.next = fff_queue;
+  fff_queue = &gimmeathread;
+  pthread_cond_signal(&fff_condition);
+  pthread_mutex_unlock(&fff_mutex);
+
+  pthread_np_convert_self_to_fiber();
+  WaitForSingleObject(hThreadReady,INFINITE);
+  CloseHandle(hThreadReady);
+  return gimmeathread.data;
+}
+
+void fff_lock() { pthread_mutex_lock(&fff_mutex); }
+void fff_unlock() { pthread_mutex_unlock(&fff_mutex); }
+void fff_wait() {
+  pthread_cond_wait(&fff_condition,&fff_mutex);
+}
+
+fff_request * fff_pop_request() {
+  if (fff_queue) {
+    fff_request *result = fff_queue;
+    fff_queue = result->next;
+    return result;
+  } else {
+    return NULL;
+  }
+}
+
+void fff_request_post_fiber(fff_request* request, pthread_t fiber) {
+  pthread_t foreign_fiber = request->data;
+  pthread_np_donate_fiber(fiber, foreign_fiber);
+  request->data = fiber;
+  fff_manager_thread = pthread_self();
+  SetEvent(request->event);
+}
+
+/* Foreign thread ID is usable for naming foreign threads, i.e. for
+   informational and debugging purposes. */
+DWORD fff_request_thread_id(fff_request* request) {
+  return *(DWORD*)(request->data->teb + 0x24);
+}
+
+/* TEB block address of a foreign thread: mainly for debugging
+   purposes, too. */
+void* fff_request_teb(fff_request* request) {
+  return request->data->teb;
+}
+
+/* Fibers whose foreign thread is already destroyed should be jumped
+   into, so they will unwind and disappear from the Lisp world. Only
+   fibers can jump into fibers. It's currently done by the same
+   Foreign Fiber Factory that created them in the first place.
+
+   Other solutions are possible: we could start an ephemeral
+   post-mortem thread for each fiber that should be terminated.  */
+pthread_t fff_pop_orphan() {
+  if (fff_next_orphan) {
+    pthread_t result = fff_next_orphan;
+    fff_next_orphan = result->cleanup_context;
+    return result;
+  } else {
+    return NULL;
+  }
+}
+
+/* Occurs when foreign thread exits, after it's noticed by
+   RegisterWaitForSingleObject event handler */
+
+void fff_on_foreign_exit(spouse)
+{
+  pthread_mutex_lock(&fff_mutex);
+  if (fff_manager_thread) {
+    /* Using foreigner's right to donate other thread's fiber */
+    pthread_np_donate_fiber(spouse, fff_manager_thread);
+  }
+  pthread_np_set_cleanup(spouse,NULL,fff_next_orphan);
+  fff_next_orphan = spouse;
+  pthread_cond_signal(&fff_condition);
+  pthread_mutex_unlock(&fff_mutex);
+}
+
+/* Called after three (foreign) arguments for funcall3 are pushed,
+   but before enter-unsafe-region-instructions[/no-fixup].
+
+   Totally x86-specific.
+
+   The idea is that fff_enter_callback and fff_leave_callback should
+   be a cheap no-op for native callbacks.
+
+   For FTCs, fff_enter_callback creates pthread (on demand), registers
+   thread wait callback to clean up this pthread, requests and waits
+   for companion pthread fiber. Those things are done once per foreign
+   thread.
+
+   As of what's done each time: fff_enter_callback switches to its
+   companion fiber, passing three arguments in tls_fff_call_info.  The
+   fiber then jumps ("returns") to callback code. Code runs on the new
+   stack (and ebp), but refers to alien value variables on the OLD stack.
+
+   fff_leave_callback detects "enfiberized" operation by comparing the
+   wrapper return address, [ebp+4], with something predefined(?).
+   So fff_leave_callback switches to foreign pthread.
+
+   __builtin_frame_address: we capture all args at once,
+   and we don't even have to.
+   RA past ebp is modified to handle_leave.
+
+   tls_fff_call_info (? we don't need it for acb inside
+   ?).
+
+   switches back to native pthread fiber,
+
+*/
+
+typedef struct fff_call_info {
+  void* args[3];
+  pthread_t switch_back;
+} fff_call_info;
+
+pthread_t fff_foreign_callback( fff_call_info *info_ptr)
+{
+  void** args = info_ptr->args;
+  gc_enter_unsafe_region();
+  funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,arch_os_get_current_thread()),
+           args[0],args[1],args[2]);
+  gc_leave_region();
+  return info_ptr->switch_back;
+}
+
+void fff_generic_callback(void* arg0,void* arg1,void* arg2) {
+  struct thread* th = arch_os_get_current_thread();
+  if (th) {
+    gc_enter_unsafe_region();
+    funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,th),arg0,arg1,arg2);
+    gc_leave_region();
+  } else {
+    if (!foreign_thread_callbacks_enabled) {
+      /* Great surprise to our caller... */
+      ExitThread(1);
+    }
+    /* Useful, though somewhere special, pthread_self() was just created
+       for a foreign (current) system thread. We need more to run Lisp
+       code, though: stack geometry is too awful for our GC here, and
+       thread setup is too complicated.
+
+       Let's request a companion, ready-to-use, fiber-based Lisp
+       thread from a Foreign Fiber Factory. */
+    if (pthread_np_notice_thread()) {
+      pthread_np_convert_self_to_fiber();
+    }
+    {
+      pthread_t self = pthread_self();
+      pthread_t spouse = self->cleanup_context;
+      fff_call_info info = {{arg0, arg1, arg2}, self};
+      if (!spouse) {
+        spouse = fff_receive_fiber();
+        pthread_np_set_cleanup(self, fff_on_foreign_exit, spouse);
+      }
+      /* self and spouse now are both fibers, spouse being our own.
+         When self dies, spouse should be continued in order to
+         unwind, exit and free its stack space(s).
+
+         OTOH, when spouse unwinds naturally (within self's teb), it
+         should detach from self, but still switch back to self
+         just-before-exit. */
+
+      /* Here we'll arrange call redirection into spouse and switch to
+         it */
+      if (pthread_np_run_in_fiber(spouse, fff_foreign_callback, &info)) {
+        pthread_np_set_cleanup(self, NULL, NULL);
+        ExitThread(1);
+      }
+    }
+  }
+}
+
+#endif  /* LISP_FEATURE_SB_THREAD */
 
 void os_init(char *argv[], char *envp[])
 {
@@ -1027,4 +1246,5 @@ int win32_wait_object_or_signal(HANDLE waitFor)
   return
     WaitForMultipleObjects(2,handles, FALSE,INFINITE);
 }
+
 /* EOF */

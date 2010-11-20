@@ -167,6 +167,61 @@ typedef struct pthread_thread {
   pthread_cond_t cond;
   int detached;
   pthread_thread_state state;
+
+  /* Boolean flag: thread will produce fibers instead of threads with
+     pthread_create */
+  int fiber_factory;
+
+  /* NULL if current thread has no fibers and is not a fiber; LPVOID
+     returned by CreateFiber or ConvertThreadToFiber otherwise */
+  void* fiber;
+
+  /* True if pthreads_win32 created fiber, false if it was already
+     present and just captured. We should delete our fiber when not
+     needed, but external fibers should be left intact. */
+  int own_fiber;
+
+  /* For noticed foreign threads, wait_handle contains a result of
+     RegisterWaitForSingleObject. */
+  HANDLE wait_handle;
+
+  /* When a fiber function finishes, it switches to fiber_parent
+     instead of deleting fiber. */
+  void* fiber_parent;
+
+  /* But someone has to clean up after switching to fiber_parent.  Let
+     it be the parent itself: before switching, parent sets
+     fiber_cleanup_pointer to a place where dead child fiber pointer
+     is to be stored. */
+
+  void** fiber_cleanup_pointer;
+
+  /* for non-current fiber, this field provides context of its
+     last-known running state: not for jumps et al., but for
+     conservative stack GCing */
+  CONTEXT* fiber_context;
+
+  /* Thread TEB base */
+  void* teb;
+
+  /* Suspend and resume semantics:
+
+     - Current thread with current fiber, i.e. pthread_self() is
+     really suspended by itself (caller knows better).
+
+     - Current thread with non-current fiber: suspend_count is
+     incremented on suspend, decremented (but not below 0) on
+     resume, and switching to a suspended fiber is prevented.
+
+     - Other thread and other thread's fiber: thread itself is
+     suspended. */
+
+  int suspend_count;
+
+  void (*cleanup_callback)(void* context);
+  void *cleanup_context;
+  pthread_t (*fiber_callback)(void* context);
+  void *fiber_callback_context;
 } pthread_thread;
 
 void pthread_np_pending_signal_handler(int signum);
@@ -174,7 +229,20 @@ void pthread_np_pending_signal_handler(int signum);
 void pthread_np_add_pending_signal(pthread_t thread, int signum);
 void pthread_np_remove_pending_signal(pthread_t thread, int signum);
 
+int pthread_np_notice_thread();
 int pthread_np_get_thread_context(pthread_t thread, CONTEXT* context);
+int pthread_np_convert_self_to_fiber();
+int pthread_np_switch_to_fiber(pthread_t fiber);
+int pthread_np_run_in_fiber(pthread_t pth, pthread_t (*callback)(void*),
+                            void* context);
+int pthread_np_set_fiber_factory_mode(int on);
+int pthread_np_fiber_save_tls(int slot, int enable);
+void pthread_np_set_cleanup(pthread_t thread, void (*cleaner)(void*),void* context);
+HANDLE pthread_np_get_handle(pthread_t pth);
+void* pthread_np_get_lowlevel_fiber(pthread_t pth);
+int pthread_np_delete_lowlevel_fiber(void* ll_fiber);
+
+int pthread_np_donate_fiber(pthread_t fiber, pthread_t recipient);
 
 int sigemptyset(sigset_t *set);
 int sigfillset(sigset_t *set);
