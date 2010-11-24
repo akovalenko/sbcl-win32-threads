@@ -1157,6 +1157,21 @@ socket_input_available(HANDLE socket)
   return ret;
 }
 
+/* Unofficial but widely used property of console handles: they have
+   #b11 in two minor bits, opposed to other handles, that are
+   machine-word-aligned. Properly emulated even on wine.
+
+   Console handles are special in many aspects, e.g. they aren't NTDLL
+   system handles: kernel32 redirects console operations to CSRSS
+   requests. Using the hack below to distinguish console handles is
+   justified, as it's the only method that won't hang during
+   outstanding reads, won't try to lock NT kernel object (if there is
+   one; console isn't), etc. */
+int console_handle_p(HANDLE handle)
+{
+  return ((((int)(intptr_t)handle)&3)==3);
+}
+
 int win32_unix_write(int fd, void * buf, int count)
 {
   HANDLE handle;
@@ -1281,9 +1296,19 @@ int win32_unix_read(int fd, void * buf, int count)
     }
   }
  done_something:
-  if ((read_bytes == 0) && ok) {
-    /* consoles and pipes may return 0 bytes _successfully_ read.
-       We don't return 0 for win32_unix_read, as it means EOF. */
+  if ((read_bytes == 0) && ok &&
+      console_handle_p(handle)) {
+    /* Console and pipes may return 0 bytes _successfully_ read, that
+       is not EOF.  Currently we turn it into EINTR for console
+       handles only. TODO pipes (or not).
+
+       NB. [1] Console has no natural EOF at all (DOS Ctrl-Z is not).
+       [2] Console handles are easily recognizable.
+       [3] Pipe receives 0 bytes only with deliberate attempt of the sender;
+       console does it on every Ctrl-C, for example.
+       [4] Many other prospective things, like fully interruptible IO or
+       thread-file ownership protocol, will be done differently for console
+       as well. */
     errno = EINTR;
     return -1;
   }
