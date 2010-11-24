@@ -40,6 +40,21 @@
 (defun application-name ()
   (format nil "Steel Bank Common Lisp ~A" (lisp-implementation-version)))
 
+(defun version-digits (&optional (horrible-thing (lisp-implementation-version)))
+  "Turns something like 0.pre7.14.flaky4.13 (see version.lisp-expr)
+  into an acceptable form for WIX (up to four dot-separated numbers)."
+  (with-output-to-string (output)
+    (loop repeat 4
+          with position = 0
+          for separator = "" then "."
+          for next-digit = (position-if #'digit-char-p horrible-thing
+                                    :start position)
+          while next-digit
+          do (multiple-value-bind (number end)
+                 (parse-integer horrible-thing :start next-digit :junk-allowed t)
+               (format output "~A~D" separator number)
+               (setf position end)))))
+
 ;;;; GUID generation
 ;;;;
 ;;;; Apparently this willy-nilly regeneration of GUIDs is a bad thing, and
@@ -176,7 +191,7 @@
    `("Wix" ("xmlns" "http://schemas.microsoft.com/wix/2006/wi")
      ("Product" ("Id" "*"
                  "Name" ,(application-name)
-                 "Version" ,(lisp-implementation-version)
+                 "Version" ,(version-digits)
                  "Manufacturer" "http://www.sbcl.org"
                  "UpgradeCode" "BFF1D4CA-0153-4AAC-BB21-06DC4B8EAD7D"
                  "Language" 1033)

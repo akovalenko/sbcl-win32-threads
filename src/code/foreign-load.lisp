@@ -25,10 +25,9 @@
   "~S is unsupported as of SBCL 0.8.13. Please use LOAD-SHARED-OBJECT."
   (load-1-foreign))
 
-#!-win32
 (progn
   (define-alien-variable undefined-alien-address unsigned-long)
-  (defvar *runtime-dlhandle*))
+  #!-win32 (defvar *runtime-dlhandle*))
 
 (defvar *shared-objects*)
 
@@ -76,6 +75,14 @@ will be signalled when the core is saved -- this is orthogonal from DONT-SAVE."
         (setf (shared-object-dont-save obj) dont-save)
         ;; FIXME: Why doesn's dlopen-or-lose on already loaded stuff work on
         ;; Windows?
+        ;;
+        ;; Kovalenko 2010-11-24: It would work, but it does nothing
+        ;; useful on Windows: library reference count is increased
+        ;; after each LoadLibrary, making it harder to unload it, and
+        ;; that's all the effect. Also, equal pathnames on Windows
+        ;; always designate _exactly the same library image_; Unix
+        ;; tricks like deleting an open library and replacing it with
+        ;; another version just don't work here.
         #!-win32
         (dlopen-or-lose obj)
         #!+win32
@@ -86,7 +93,13 @@ will be signalled when the core is saved -- this is orthogonal from DONT-SAVE."
         ;; FIXME: Why doesn't the linkage table work on Windows? (Or maybe it
         ;; does and this can be just #!+linkage-table?) Note: remember to change
         ;; FOREIGN-DEINIT as well then!
-        #!+(and linkage-table (not win32))
+        ;;
+        ;; Kovalenko 2010-11-24: I think so. Alien _data_ references
+        ;; are the only thing on win32 that is even slightly
+        ;; problematic. Handle function references in the same way as
+        ;; other linkage-table platforms is easy.
+        ;;
+        #!+linkage-table
         (when (or old (undefined-foreign-symbols-p))
           (update-linkage-table))))
     pathname))
@@ -105,7 +118,7 @@ Experimental."
         (when old
           #!-hpux (dlclose-or-lose old)
           (setf *shared-objects* (remove old *shared-objects*))
-          #!+(and linkage-table (not win32))
+          #!+linkage-table
           (update-linkage-table))))))
 
 (defun try-reopen-shared-object (obj)
@@ -169,10 +182,10 @@ error is immediately signalled if the symbol isn't found. The returned address
 is never in the linkage-table."
     (declare (ignorable datap))
     (let ((addr (find-dynamic-foreign-symbol-address symbol)))
-      (cond  #!-(and linkage-table (not win32))
+      (cond  #!-linkage-table
              ((not addr)
               (error 'undefined-alien-error :name symbol))
-             #!+(and linkage-table (not win32))
+            #!+linkage-table
              ((not addr)
               (style-warn 'sb!kernel:undefined-alien-style-warning
                           :symbol symbol)
