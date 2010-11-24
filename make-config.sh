@@ -262,6 +262,8 @@ case "$sbcl_os" in
     win32)
         printf ' :win32' >> $ltf
         printf ' :sb-pthread-futex' >> $ltf
+	printf ' :sb-thread' >> $ltf
+	printf ' :sb-foreign-thread' >> $ltf
         link_or_copy Config.$sbcl_arch-win32 Config
         link_or_copy $sbcl_arch-win32-os.h target-arch-os.h
         link_or_copy win32-os.h target-os.h
@@ -301,6 +303,7 @@ if [ "$sbcl_arch" = "x86" ]; then
     printf ' :stack-allocatable-closures :stack-allocatable-vectors' >> $ltf
     printf ' :stack-allocatable-lists :stack-allocatable-fixed-objects' >> $ltf
     printf ' :alien-callbacks :cycle-counter :inline-constants ' >> $ltf
+    printf ' :alien-callback-conventions :alien-callback-stdcall :alien-callback-cdecl ' >> $ltf
     printf ' :memory-barrier-vops' >> $ltf
     case "$sbcl_os" in
     linux | freebsd | netbsd | openbsd | sunos | darwin | win32)

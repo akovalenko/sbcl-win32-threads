@@ -861,7 +861,6 @@ ENTER-ALIEN-CALLBACK pulls the corresponsing trampoline out and calls it.")
   (declare (ignore arguments))
   (error "Invalid alien callback called."))
 
-
 (defun parse-callback-specification (result-type lambda-list)
   (values
     `(function ,result-type ,@(mapcar #'second lambda-list))
