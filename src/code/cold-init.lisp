@@ -313,6 +313,9 @@ systems, UNIX-STATUS is used as the status code."
   (gc-reinit)
   (foreign-reinit)
   (time-reinit)
+  #!+sb-foreign-thread
+  (when (fboundp 'sb!thread:foreign-thread-init)
+    (sb!thread:foreign-thread-init))
   ;; If the debugger was disabled in the saved core, we need to
   ;; re-disable ldb again.
   (when (eq *invoke-debugger-hook* 'sb!debug::debugger-disabled-hook)

@@ -104,7 +104,7 @@ if the symbol isn't found."
 ;;; Cleanups before saving a core
 #-sb-xc-host
 (defun foreign-deinit ()
-  #!+(and os-provides-dlopen (or (not linkage-table) win32))
+  #!+(and os-provides-dlopen (not linkage-table))
   (when (dynamic-foreign-symbols-p)
     (warn "~@<Saving cores with alien definitions referring to non-static ~
            foreign symbols is unsupported on this platform: references to ~

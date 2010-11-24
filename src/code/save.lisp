@@ -168,6 +168,9 @@ sufficiently motivated to do lengthy fixes."
   (call-hooks "save" *save-hooks*)
   #!+(and sb-thread win32)
   (win32-itimer-deinit)
+  #!+sb-foreign-thread
+  (when (fboundp 'sb!thread:foreign-thread-deinit)
+    (sb!thread:foreign-thread-deinit))
   (when (rest (sb!thread:list-all-threads))
     (error "Cannot save core with multiple threads running."))
   (float-deinit)

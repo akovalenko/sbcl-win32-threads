@@ -276,220 +276,263 @@ void os_preinit()
 }
 
 
-/* Adoption request is answered with a fiberish pthread.  (on the
-   server side) Its TLS63 is copied to our TLS63; Our handle and TEB
-   is copied to its *pthread_t.
+/* A key for a companion Lisp fiber for foreign threads */
+static pthread_key_t lisp_fiber_key;
 
+/* A thread (assigned from the Lisp side) that creates fibers for
+   foreign threads on demand */
+static pthread_t fiber_factory_fiber = NULL;
+
+/* As pthread_np_run_in_fiber doesn't wait for target fiber to be
+   enterable, we need another lock to serialize factory clients.
+
+   If a foreign callback is entered before fiber_factory_fiber is
+   initialized [from the Lisp side, see fiber.lisp], it will wait on a
+   condition until the factory becomes available.
+*/
+static pthread_mutex_t fiber_factory_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t fiber_factory_condition;
+
+/* Lisp code creating companion Lisp fibers is wrapped into a callback
+   and assigned to this variable: */
+static void (*fiber_factory_callback) (void*) = NULL;
+
+/* Interface procedure: announce fiber factory on initialization */
+void fiber_announce_factory(pthread_t thread,
+                            void(*callback)(void*))
+{
+  pthread_mutex_lock(&fiber_factory_lock);
+  fiber_factory_callback = callback;
+  fiber_factory_fiber = thread;
+  pthread_cond_broadcast(&fiber_factory_condition);
+  pthread_mutex_unlock(&fiber_factory_lock);
+}
+
+/* For Lisp fibers whose foreign threads are finished, we need another
+   thread to unwind them out of Lisp world. This thread itself doesn't
+   have to be a Lisp thread; however, it'd better be a native pthread,
+   not a system foreign thread. Otherwise we have a chicken-and-egg
+   problem.
+
+   pthread destructors for foreign thread TLS data are currently run
+   by a system-thread callback (see RegisterWaitForSingleObject).
+
+   Creating anything like pthread structure or fiber around _that_
+   thread is out of question. We'd have to account for _its_
+   termination, and so on...
+
+   Strange problems with raw (non-lisp) pthread waiting on a condition
+   were encountered; let the fiber-destructor be a lisp thread for now.
+
+   Signalling to Lisp with pthread conditions looks suspicios by now,
+   too. Trying to go with CreateEvent (not naive, but simplified
+   condition signalling).
 */
 
-typedef struct fff_request {
-  struct fff_request *next;
-  HANDLE event;
-  pthread_t data;
-} fff_request;
+static pthread_mutex_t fiber_dead_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-fff_request *fff_queue = NULL;
-int foreign_thread_callbacks_enabled = 0;
-int foreign_thread_callbacks_initialized = 0;
-pthread_cond_t fff_condition;
-int fff_initialized = 0;
-pthread_mutex_t fff_mutex = PTHREAD_MUTEX_INITIALIZER;
-DWORD tls_fff_call_info = (DWORD)-1;
-pthread_t fff_next_orphan = NULL;
-pthread_t fff_manager_thread;
+/* Event handle. Should be auto-reset, as only one thread is
+   waiting. May be NULL when event shouldn't be signalled (target
+   thread is going to recheck before waiting). */
+static HANDLE fiber_dead_wakeup;
 
-void fff_ensure_init()
+struct fiber_dead_record {
+  pthread_t companion_pthread;
+  struct fiber_dead_record* next;
+};
+
+static struct fiber_dead_record *first_dead, *last_dead;
+
+/* To be called from foreign thread TLS destructor */
+static void fiber_is_dead(void* companion_pthread)
 {
-  if (!fff_initialized) {
-    pthread_mutex_lock(&fff_mutex);
-    if (!fff_initialized) {
-      pthread_cond_init(&fff_condition,NULL);
-      tls_fff_call_info = TlsAlloc();
-      fff_initialized = 1;
+  struct fiber_dead_record* next;
+  next = malloc(sizeof(*next));
+  next->next = NULL;
+  next->companion_pthread = companion_pthread;
+  pthread_mutex_lock(&fiber_dead_mutex);
+  if (!last_dead) {
+    first_dead = last_dead = next;
+  } else {
+    last_dead->next = next;
+    last_dead = next;
+  }
+  if (fiber_dead_wakeup) {
+    SetEvent(fiber_dead_wakeup);
+  }
+  pthread_mutex_unlock(&fiber_dead_mutex);
+}
+
+/* Simplified condition for handling obsolete foreign threads. TODO:
+   use either futexes or pthread */
+
+#define FIBER_DEAD_LOCK 0
+#define FIBER_DEAD_UNLOCK 1
+#define FIBER_DEAD_WAIT 2
+
+void fiber_dead_synchronization(int op)
+{
+  struct thread * self = arch_os_get_current_thread();
+  switch(op) {
+  case FIBER_DEAD_LOCK:
+    pthread_mutex_lock(&fiber_dead_mutex);
+    break;
+  case FIBER_DEAD_UNLOCK:
+    pthread_mutex_unlock(&fiber_dead_mutex);
+    break;
+  case FIBER_DEAD_WAIT:
+    fiber_dead_wakeup = self->private_events.events[0];
+    ResetEvent(fiber_dead_wakeup);
+    pthread_mutex_unlock(&fiber_dead_mutex);
+    WaitForMultipleObjects(2, self->private_events.events, FALSE, INFINITE);
+    pthread_mutex_lock(&fiber_dead_mutex);
+    fiber_dead_wakeup = NULL;
+    break;
+  }
+}
+
+pthread_t fiber_dead_get()
+{
+  pthread_t result = NULL;
+  if (first_dead) {
+    result = first_dead->companion_pthread;
+    if (first_dead == last_dead) {
+      first_dead = last_dead = NULL;
+    } else {
+      struct fiber_dead_record* prev = first_dead;
+      first_dead = first_dead->next;
+      free(prev);
     }
-    pthread_mutex_unlock(&fff_mutex);
   }
+  return result;
 }
 
-pthread_t fff_receive_fiber() {
-  pthread_t self = pthread_self();
-  HANDLE hThreadReady = CreateEvent(NULL,FALSE,FALSE,NULL);
-  fff_request gimmeathread = {NULL, hThreadReady, self};
-
-  pthread_mutex_lock(&fff_mutex);
-  gimmeathread.next = fff_queue;
-  fff_queue = &gimmeathread;
-  pthread_cond_signal(&fff_condition);
-  pthread_mutex_unlock(&fff_mutex);
-
-  pthread_np_convert_self_to_fiber();
-  WaitForSingleObject(hThreadReady,INFINITE);
-  CloseHandle(hThreadReady);
-  return gimmeathread.data;
-}
-
-void fff_lock() { pthread_mutex_lock(&fff_mutex); }
-void fff_unlock() { pthread_mutex_unlock(&fff_mutex); }
-void fff_wait() {
-  pthread_cond_wait(&fff_condition,&fff_mutex);
-}
-
-fff_request * fff_pop_request() {
-  if (fff_queue) {
-    fff_request *result = fff_queue;
-    fff_queue = result->next;
-    return result;
-  } else {
-    return NULL;
-  }
-}
-
-void fff_request_post_fiber(fff_request* request, pthread_t fiber) {
-  pthread_t foreign_fiber = request->data;
-  pthread_np_donate_fiber(fiber, foreign_fiber);
-  request->data = fiber;
-  fff_manager_thread = pthread_self();
-  SetEvent(request->event);
-}
-
-/* Foreign thread ID is usable for naming foreign threads, i.e. for
-   informational and debugging purposes. */
-DWORD fff_request_thread_id(fff_request* request) {
-  return *(DWORD*)(request->data->teb + 0x24);
-}
-
-/* TEB block address of a foreign thread: mainly for debugging
-   purposes, too. */
-void* fff_request_teb(fff_request* request) {
-  return request->data->teb;
-}
-
-/* Fibers whose foreign thread is already destroyed should be jumped
-   into, so they will unwind and disappear from the Lisp world. Only
-   fibers can jump into fibers. It's currently done by the same
-   Foreign Fiber Factory that created them in the first place.
-
-   Other solutions are possible: we could start an ephemeral
-   post-mortem thread for each fiber that should be terminated.  */
-pthread_t fff_pop_orphan() {
-  if (fff_next_orphan) {
-    pthread_t result = fff_next_orphan;
-    fff_next_orphan = result->cleanup_context;
-    return result;
-  } else {
-    return NULL;
-  }
-}
-
-/* Occurs when foreign thread exits, after it's noticed by
-   RegisterWaitForSingleObject event handler */
-
-void fff_on_foreign_exit(spouse)
+void fiber_deinit_runtime()
 {
-  pthread_mutex_lock(&fff_mutex);
-  if (fff_manager_thread) {
-    /* Using foreigner's right to donate other thread's fiber */
-    pthread_np_donate_fiber(spouse, fff_manager_thread);
+  pthread_t factory;
+  pthread_mutex_lock(&fiber_factory_lock);
+  factory = fiber_factory_fiber;
+  if (!factory) {
+    pthread_mutex_unlock(&fiber_factory_lock);
+    return;
   }
-  pthread_np_set_cleanup(spouse,NULL,fff_next_orphan);
-  fff_next_orphan = spouse;
-  pthread_cond_signal(&fff_condition);
-  pthread_mutex_unlock(&fff_mutex);
+  fiber_factory_fiber = NULL;
+  pthread_cond_signal(&fiber_factory_condition);
+  pthread_mutex_unlock(&fiber_factory_lock);
+
+  fiber_is_dead(factory);
+  /* Lisp side should join factory thread */
 }
 
-/* Called after three (foreign) arguments for funcall3 are pushed,
-   but before enter-unsafe-region-instructions[/no-fixup].
-
-   Totally x86-specific.
-
-   The idea is that fff_enter_callback and fff_leave_callback should
-   be a cheap no-op for native callbacks.
-
-   For FTCs, fff_enter_callback creates pthread (on demand), registers
-   thread wait callback to clean up this pthread, requests and waits
-   for companion pthread fiber. Those things are done once per foreign
-   thread.
-
-   As of what's done each time: fff_enter_callback switches to its
-   companion fiber, passing three arguments in tls_fff_call_info.  The
-   fiber then jumps ("returns") to callback code. Code runs on the new
-   stack (and ebp), but refers to alien value variables on the OLD stack.
-
-   fff_leave_callback detects "enfiberized" operation by comparing the
-   wrapper return address, [ebp+4], with something predefined(?).
-   So fff_leave_callback switches to foreign pthread.
-
-   __builtin_frame_address: we capture all args at once,
-   and we don't even have to.
-   RA past ebp is modified to handle_leave.
-
-   tls_fff_call_info (? we don't need it for acb inside
-   ?).
-
-   switches back to native pthread fiber,
-
-*/
-
+/* Structure used to pass callback arguments into a companion fiber */
 typedef struct fff_call_info {
-  void* args[3];
-  pthread_t switch_back;
+  lispobj args[3];
+  int done;
 } fff_call_info;
 
-pthread_t fff_foreign_callback( fff_call_info *info_ptr)
+void fff_foreign_callback( void *v_info_ptr)
 {
-  void** args = info_ptr->args;
+  fff_call_info *info_ptr = v_info_ptr;
+  lispobj *args = info_ptr->args;
   gc_enter_unsafe_region();
   funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,arch_os_get_current_thread()),
-           args[0],args[1],args[2]);
+           LISPOBJ(args[0]),LISPOBJ(args[1]),LISPOBJ(args[2]));
   gc_leave_region();
-  return info_ptr->switch_back;
+  info_ptr->done = 1;
+  return;
 }
 
-void fff_generic_callback(void* arg0,void* arg1,void* arg2) {
+void fff_generic_callback(lispobj arg0,lispobj arg1, lispobj arg2) {
   struct thread* th = arch_os_get_current_thread();
+  pthread_t companion_fiber;
   if (th) {
     gc_enter_unsafe_region();
     funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,th),arg0,arg1,arg2);
     gc_leave_region();
   } else {
-    if (!foreign_thread_callbacks_enabled) {
-      /* Great surprise to our caller... */
-      ExitThread(1);
-    }
-    /* Useful, though somewhere special, pthread_self() was just created
-       for a foreign (current) system thread. We need more to run Lisp
-       code, though: stack geometry is too awful for our GC here, and
-       thread setup is too complicated.
+    /* It is a foreign thread */
+    pthread_np_notice_thread();
+    /* Now we have a pthread_self(), even if we didn't */
+    companion_fiber = pthread_getspecific(lisp_fiber_key);
+    if (!companion_fiber) {
+      /* Create a new companion fiber */
+      pthread_mutex_lock(&fiber_factory_lock);
+      while (!fiber_factory_fiber) {
+        /* No fiber factory (yet/already). Wait for something to
+           happen.
 
-       Let's request a companion, ready-to-use, fiber-based Lisp
-       thread from a Foreign Fiber Factory. */
-    if (pthread_np_notice_thread()) {
-      pthread_np_convert_self_to_fiber();
-    }
-    {
-      pthread_t self = pthread_self();
-      pthread_t spouse = self->cleanup_context;
-      fff_call_info info = {{arg0, arg1, arg2}, self};
-      if (!spouse) {
-        spouse = fff_receive_fiber();
-        pthread_np_set_cleanup(self, fff_on_foreign_exit, spouse);
+           When dumping core, all ftc companion fibers will be
+           detached from their threads, and the condition will never
+           be signalled: reentered callbacks will hang forever.
+
+           Upon restart, when lisp fiber factory is not initialized,
+           foreign callbacks will wait for initialization.
+        */
+        pthread_cond_wait(&fiber_factory_condition,
+                          &fiber_factory_lock);
       }
-      /* self and spouse now are both fibers, spouse being our own.
-         When self dies, spouse should be continued in order to
-         unwind, exit and free its stack space(s).
+      pthread_np_run_in_fiber(fiber_factory_fiber,
+                              fiber_factory_callback,
+                              &companion_fiber);
+      pthread_mutex_unlock(&fiber_factory_lock);
 
-         OTOH, when spouse unwinds naturally (within self's teb), it
-         should detach from self, but still switch back to self
-         just-before-exit. */
+      /* Save it for future callbacks */
+      pthread_setspecific(lisp_fiber_key, companion_fiber);
+    } else {
+      if (!fiber_factory_fiber) {
+        /* Though we have a companion fiber, foreign callback support
+           is deinitialized, and this fiber is unusable. */
 
-      /* Here we'll arrange call redirection into spouse and switch to
-         it */
-      if (pthread_np_run_in_fiber(spouse, fff_foreign_callback, &info)) {
-        pthread_np_set_cleanup(self, NULL, NULL);
+        pthread_setspecific(lisp_fiber_key, NULL);
+        /* Do something harmless: when SBCL is dumping or exiting,
+           foreign threads entering callbacks will sleep forever. */
+        Sleep(INFINITE);
+      }
+    }
+    /* Run this callback in foreign fiber */
+    if (companion_fiber) {
+      fff_call_info info = {{arg0, arg1, arg2}, 0};
+      if (pthread_np_run_in_fiber(companion_fiber, fff_foreign_callback, &info)) {
+        /* Failure to reenter -> shutdown */
+        pthread_setspecific(lisp_fiber_key, NULL);
+        /* Do something harmless: when SBCL is dumping or exiting,
+           foreign threads entering callbacks will sleep forever. */
+        Sleep(INFINITE);
+      }
+      if (!info.done) {
+        /* Stack unwind in a callback, or a failure to reenter. No
+           need to clean up when this thread exits any more. */
+        pthread_setspecific(lisp_fiber_key, NULL);
         ExitThread(1);
       }
+      /* Normal return */
+      if (!fiber_factory_fiber) {
+        /* Subsystem is deinitialized. In this case, foreign thread
+           itself destroys its companion fibers.
+
+           Lisp-level thread-join should be used to wait for active
+           callbacks. */
+        pthread_setspecific(lisp_fiber_key, NULL);
+        fiber_is_dead(companion_fiber);
+      }
+    } else {
+      /* Companion fiber creation failure */
+      ExitThread(1);
+      /* RWSO callback in pthreads_win32 takes care on pthread-created
+         fiber etc. */
     }
   }
+}
+
+
+static pthread_key_t save_lisp_tls_key;
+
+static void save_lisp_tls() {
+  pthread_setspecific(save_lisp_tls_key,TlsGetValue(OUR_TLS_INDEX));
+}
+
+static void restore_lisp_tls() {
+  TlsSetValue(OUR_TLS_INDEX, pthread_getspecific(save_lisp_tls_key));
 }
 
 #endif  /* LISP_FEATURE_SB_THREAD */
@@ -503,6 +546,16 @@ void os_init(char *argv[], char *envp[])
 
     base_seh_frame = get_seh_frame();
 #if defined(LISP_FEATURE_SB_THREAD)
+    pthread_key_create(&save_lisp_tls_key,NULL);
+    /* lisp_fiber_key with destructor.  After foreign thread
+       exits, its companion Lisp fiber is enqueued for destruction
+       too. */
+    pthread_key_create(&lisp_fiber_key,fiber_is_dead);
+    pthread_save_context_hook = save_lisp_tls;
+    pthread_restore_context_hook = restore_lisp_tls;
+    pthread_cond_init(&fiber_factory_condition,NULL);
+    pthread_mutex_init(&fiber_factory_lock,NULL);
+    pthread_mutex_init(&fiber_dead_mutex,NULL);
     alloc_gc_page();
 #endif
 }
@@ -1005,6 +1058,8 @@ void scratch(void)
     GetConsoleCP();
     GetConsoleOutputCP();
     GetCurrentProcess();
+    GetCurrentThreadId();
+    GetExitCodeThread(0,0);
     GetExitCodeProcess(0, 0);
     GetFileSizeEx(0,&la);
     GetFileType(0);

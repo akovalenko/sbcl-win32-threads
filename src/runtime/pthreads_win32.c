@@ -34,9 +34,28 @@ int pthread_attr_setstacksize(pthread_attr_t *attr, size_t stacksize)
   return 0;
 }
 
-DWORD thread_self_tls_index;
+
 
 typedef unsigned char boolean;
+
+/* TLS management internals */
+
+static DWORD thread_self_tls_index;
+static void (*tls_destructors[PTHREAD_KEYS_MAX])(void*);
+static boolean tls_used[PTHREAD_KEYS_MAX];
+static pthread_key_t tls_max_used_key;
+static pthread_mutex_t thread_key_lock = PTHREAD_MUTEX_INITIALIZER;
+static void tls_call_destructors();
+static pthread_t tls_impersonate(pthread_t other) {
+  pthread_t old = pthread_self();
+  TlsSetValue(thread_self_tls_index,other);
+  return old;
+}
+
+static void do_nothing() {}
+/* Fiber context hooks */
+void (*pthread_save_context_hook)() = do_nothing;
+void (*pthread_restore_context_hook)() = do_nothing;
 
 /* Some parts of pthread_np API provide access to Windows NT Fibers
    (cooperatively scheduled coroutines). Each fiber is wrapped in its
@@ -45,24 +64,44 @@ typedef unsigned char boolean;
    Fibers may be entered by different threads during their lifetime,
    i.e. they are orthogonal to threads.
 
-   */
-int pthread_np_is_my_other_fiber(pthread_t thread)
-{
-  pthread_t self = pthread_self();
-  return self &&
-    (self != thread) &&
-    ((self->handle == thread->handle));
-}
+   Contrary to the raw NT Fibers API, we will distinguish two kinds of
+   objects: fibers-created-as-fibers and any other thing (thread that
+   is not a fiber, thread converted to fiber, system thread
+   noticed). Consequently, though there is no "main fiber" in NT,
+   there _is_ a main pthread for each (wrapped) system thread, living
+   or dying with this system thread. It may be converted to fiber, but
+   its "fiberness" is incidental, only to be able to switch into
+   another fibers or create them.
+
+   Any fiber that is currently running belongs to some thread
+   (fiber-created-as-thread, to be exact). Call it FCAT group.
+
+   [1] Entrance lock: prevent double entry.
+
+   [2] Suspend for fibers -> "try locking entrance lock; if failed, do
+   real thread suspend"
+
+   [3] Resume for fibers -> two strategies depending on what [2] done.
+
+   [4] Exit/death for fibers -> switch to its FCAT group.
+
+   [2],[3],[4] doesn't apply to threads-converted-to-fibers: full
+   stop/resume is always done on them (?).
+*/
 
 void pthread_np_suspend(pthread_t thread)
 {
   CONTEXT context;
-  if (pthread_np_is_my_other_fiber(thread)) {
-    ++thread->suspend_count;
-  } else {
-    SuspendThread(thread->handle);
-    context.ContextFlags = CONTEXT_FULL;
-    GetThreadContext(thread->handle, &context);
+  pthread_mutex_lock(&thread->fiber_lock);
+  /* If thread is about to run another fiber, fiber_context should be
+     non-NULL. No point in really suspending it, as it won't be
+     reentered without taking fiber_lock. */
+  if (!thread->fiber_context) {
+    /* For ANY fiber without saved context record, fiber_group should
+       be present. */
+    SuspendThread(thread->fiber_group->handle);
+    /* context.ContextFlags = CONTEXT_FULL; */
+    /* GetThreadContext(thread->fiber_group->handle, &context); */
   }
 }
 
@@ -73,18 +112,16 @@ int pthread_np_get_thread_context(pthread_t thread, CONTEXT* context)
     *context = *thread->fiber_context;
     return 1;
   } else {
-    return GetThreadContext(thread->handle, context) != 0;
+    return GetThreadContext(thread->fiber_group->handle, context) != 0;
   }
 }
 
 void pthread_np_resume(pthread_t thread)
 {
-  if (pthread_np_is_my_other_fiber(thread)) {
-    if (thread->suspend_count)
-      --thread->suspend_count;
-  } else {
-    ResumeThread(thread->handle);
+  if (!thread->fiber_context) {
+    ResumeThread(thread->fiber_group->handle);
   }
+  pthread_mutex_unlock(&thread->fiber_lock);
 }
 
 void pthread_np_request_interruption(pthread_t thread)
@@ -105,100 +142,101 @@ const char * state_to_str(pthread_thread_state state)
     case pthread_state_running: return "running";
     case pthread_state_finished: return "finished";
     case pthread_state_joined: return "joined";
+  default: return "unknown";
   }
 }
 
-DWORD WINAPI Thread_Function(LPVOID param)
+static void thread_or_fiber_function(pthread_t self)
 {
-  pthread_t self = (pthread_t)param;
+  pthread_t prev = tls_impersonate(self);
   void* arg = self->arg;
   pthread_fn fn = self->start_routine;
-  void* fiber;
-  int own_fiber;
-  void* fiber_parent;
-  HANDLE handle = self->handle;
 
-  self->teb = NtCurrentTeb();
-  TlsSetValue(thread_self_tls_index, self);
+  if (prev) {
+    pthread_mutex_lock(&prev->fiber_lock);
+    prev->fiber_group = NULL;
+    /* Previous fiber, that started us, had assigned our
+       fiber_group. Now we clear its fiber_group. */
+    pthread_mutex_unlock(&prev->fiber_lock);
+  }
   self->retval = fn(arg);
   pthread_mutex_lock(&self->lock);
   self->state = pthread_state_finished;
   pthread_cond_broadcast(&self->cond);
   while (!self->detached && self->state != pthread_state_joined) {
-    pthread_cond_wait(&self->cond, &self->lock);
+    if (self->created_as_fiber) {
+      pthread_mutex_unlock(&self->lock);
+      pthread_np_switch_to_fiber(self->fiber_group);
+      pthread_mutex_lock(&self->lock);
+    } else {
+      pthread_cond_wait(&self->cond, &self->lock);
+    }
   }
   pthread_mutex_unlock(&self->lock);
-
   pthread_mutex_destroy(&self->lock);
+  pthread_mutex_destroy(&self->fiber_lock);
   pthread_cond_destroy(&self->cond);
-  fiber = self->fiber;
-  own_fiber = self->own_fiber;
-  fiber_parent = self->fiber_parent;
-  if (self->fiber_cleanup_pointer) {
-    *self->fiber_cleanup_pointer = fiber;
-  }
-  if (self->cleanup_callback) {
-    /* pthread itself is still valid, as is its handle */
-    self->cleanup_callback(self->cleanup_context);
-  }
-  free(self);
-  if (fiber_parent) {
-    SwitchToFiber(fiber_parent);
-    /* Should NEVER be reentered */
-    return 0;
-  }
-  /* Close our thread handle. Fibers that have fiber_parent don't do
-     it, but non-fiber threads and lone fibers without fiber_parent
-     do. */
-  CloseHandle(handle);
-  /* If thread was converted to fiber during its lifetime, this fiber
-     is now deleted. Fiber stack is freed, and thread running it
-     exits, as in ExitThread. */
-  if (fiber && own_fiber) {
-    DeleteFiber(fiber);
+  tls_call_destructors();
+}
+
+DWORD WINAPI Thread_Function(LPVOID param)
+{
+  pthread_t self = (pthread_t) param;
+  self->teb = NtCurrentTeb();
+  thread_or_fiber_function(param);
+  CloseHandle(self->handle);
+  {
+    void* fiber = self->fiber;
+    free(self);
+    if (fiber) {
+      DeleteFiber(GetCurrentFiber()); /* Exits */
+    }
   }
   return 0;
 }
 
+static void fiber_destructor(void* fiber) { DeleteFiber(fiber); }
+
 VOID CALLBACK Fiber_Function(LPVOID param)
 {
-  Thread_Function(param);
+  pthread_t self = (pthread_t) param;
+  thread_or_fiber_function(param);
+  {
+    /* fiber_group is a main thread into which we are to call */
+    pthread_t group = self->fiber_group;
+    free(self);
+    tls_impersonate(NULL);
+    if (group) {
+      /* `Call and continue' semantics */
+      pthread_np_run_in_fiber(group, fiber_destructor, GetCurrentFiber());
+    }
+    DeleteFiber(GetCurrentFiber()); /* Exits */
+  }
 }
 
-int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_routine) (void *), void *arg)
+int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
+                   void *(*start_routine) (void *), void *arg)
 {
-  pthread_t pth = (pthread_t)malloc(sizeof(pthread_thread));
+  pthread_t pth = (pthread_t)calloc(sizeof(pthread_thread),1);
   pthread_t self = pthread_self();
   int i;
   HANDLE createdThread = NULL;
 
-  if (self->fiber_factory) {
+  if (self && self->fiber_factory) {
     pth->fiber = CreateFiber (attr ? attr->stack_size : 0, Fiber_Function, pth);
     if (!pth->fiber) return 1;
-    pth->teb = self->teb;
-    pth->handle = self->handle;
-    pth->suspend_count = 1;
-    pth->fiber_parent = self->fiber;
+    pth->created_as_fiber = 1;
+    /* Has no fiber-group until someone enters it (we will) */
   } else {
     createdThread = CreateThread(NULL, attr ? attr->stack_size : 0,
                                  Thread_Function, pth, CREATE_SUSPENDED, NULL);
     if (!createdThread) return 1;
-    pth->fiber = NULL;
-    pth->teb = NULL;
-    pth->suspend_count = 0;
-    pth->fiber_parent = NULL;
+    /* FCAT is its own fiber-group [initially] */
+    pth->fiber_group = pth;
     pth->handle = createdThread;
   }
-  pth->fiber_factory = 0;
   pth->start_routine = start_routine;
   pth->arg = arg;
-  pth->waiting_cond = NULL;
-  pth->fiber_context = NULL;
-  pth->fiber_cleanup_pointer = NULL;
-  pth->cleanup_callback = NULL;
-  pth->cleanup_context = NULL;
-  pth->fiber_callback = NULL;
-  pth->fiber_context = NULL;
   if (self) {
     pth->blocked_signal_set = self->blocked_signal_set;
   } else {
@@ -208,13 +246,16 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_
     pth->signal_is_pending[i] = 0;
   pth->state = pthread_state_running;
   pthread_mutex_init(&pth->lock, NULL);
+  pthread_mutex_init(&pth->fiber_lock, NULL);
   pthread_cond_init(&pth->cond, NULL);
   pth->detached = 0;
   if (thread) *thread = pth;
-  pthread_np_resume(pth);
   if (pth->fiber) {
-    if (pthread_np_switch_to_fiber(pth)<0)
-      return 1;
+    pthread_np_switch_to_fiber(pth);
+  } else {
+    /* Resume will unlock, so we lock here */
+    pthread_mutex_lock(&pth->fiber_lock);
+    pthread_np_resume(pth);
   }
   return 0;
 }
@@ -236,40 +277,102 @@ int pthread_detach(pthread_t thread)
 
 int pthread_join(pthread_t thread, void **retval)
 {
+  int fiberp = thread->created_as_fiber;
   pthread_mutex_lock(&thread->lock);
   while (thread->state != pthread_state_finished) {
-    pthread_cond_wait(&thread->cond, &thread->lock);
+    if (fiberp) {
+      /* just trying */
+      pthread_mutex_unlock(&thread->lock);
+      pthread_np_switch_to_fiber(thread);
+      pthread_mutex_lock(&thread->lock);
+    } else {
+      pthread_cond_wait(&thread->cond, &thread->lock);
+    }
   }
   thread->state = pthread_state_joined;
   pthread_cond_broadcast(&thread->cond);
   if (retval)
     *retval = thread->retval;
   pthread_mutex_unlock(&thread->lock);
+  if (fiberp)
+    pthread_np_switch_to_fiber(thread);
   return 0;
 }
 
+/* Manage our own TLS. */
 int pthread_key_create(pthread_key_t *key, void (*destructor)(void*))
 {
-  DWORD index;
-  if (destructor) {
-    fprintf(stderr, "destructor is specified for pthread_key_create\n");
-    ExitProcess(1);
+  pthread_key_t index;
+  boolean success = 0;
+  pthread_mutex_lock(&thread_key_lock);
+  for (index = 0; index < PTHREAD_KEYS_MAX; ++index) {
+    if (!tls_used[index]) {
+      if (tls_max_used_key<index)
+        tls_max_used_key = index;
+      tls_destructors[index] = destructor;
+      tls_used[index] = 1;
+      success = 1;
+      break;
+    }
   }
-  index = TlsAlloc();
-  if (index == TLS_OUT_OF_INDEXES)
+  pthread_mutex_unlock(&thread_key_lock);
+
+  if (success) {
+    *key = index;
+    return 0;
+  } else {
     return 1;
-  *key = index;
+  }
+}
+
+int pthread_key_delete(pthread_key_t key)
+{
+  /* tls_used flag is not a machine word. Let's lock, as there is no
+     atomic guarantee even on x86.  */
+  pthread_mutex_lock(&thread_key_lock);
+  tls_destructors[key] = 0;
+  /* No memory barrier here: application is responsible for proper
+     call sequence, and having the key around at this point is an
+     official UB.  */
+  tls_used[key] = 0;
+  pthread_mutex_unlock(&thread_key_lock);
   return 0;
 }
 
-void *pthread_getspecific(pthread_key_t key)
+static void tls_call_destructors()
 {
-  return TlsGetValue(key);
+  pthread_key_t key;
+  int i;
+  int called;
+
+  for (i = 0; i<PTHREAD_DESTRUCTOR_ITERATIONS; ++i) {
+    called = 0;
+    for (key = 0; key<=tls_max_used_key; ++key) {
+      void *cell = pthread_getspecific(key);
+      pthread_setspecific(key,NULL);
+      if (cell && tls_destructors[key]) {
+        (tls_destructors[key])(cell);
+        called = 1;
+      }
+    }
+    if (!called)
+      break;
+  }
 }
 
-int pthread_setspecific(pthread_key_t key, const void *value)
+pthread_mutex_t once_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+int pthread_once(pthread_once_t *once_control, void (*init_routine)(void))
 {
-  return TlsSetValue(key, (LPVOID)value) != FALSE;
+  if (PTHREAD_ONCE_INIT == *once_control) {
+    pthread_mutex_lock(&once_mutex);
+    if (PTHREAD_ONCE_INIT == *once_control) {
+      init_routine();
+      *once_control = 42;
+    }
+    pthread_mutex_unlock(&once_mutex);
+  }
+  return 0;
 }
 
 int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset)
@@ -461,6 +564,7 @@ void cv_wakeup_add(struct pthread_cond_t* cv, struct thread_wakeup* w)
   pthread_mutex_lock(&cv->wakeup_lock);
   if (cv->last_wakeup == w) {
     fprintf(stderr, "cv->last_wakeup == w\n");
+    fflush(stderr);
     ExitProcess(0);
   }
   if (cv->last_wakeup != NULL)
@@ -506,10 +610,12 @@ int pthread_cond_wait(pthread_cond_t * cv, pthread_mutex_t * cs)
   cv_wakeup_add(cv, &w);
   if (cv->last_wakeup->next == cv->last_wakeup) {
     fprintf(stderr, "cv->last_wakeup->next == cv->last_wakeup\n");
+    fflush(stderr);
     ExitProcess(0);
   }
   if (cv->last_wakeup->next != NULL) {
     fprintf(stderr, "cv->last_wakeup->next != NULL\n");
+    fflush(stderr);
     ExitProcess(0);
   }
   pthread_self()->waiting_cond = cv;
@@ -577,68 +683,46 @@ void pthread_unlock_structures()
   pthread_mutex_unlock(&mutex_init_lock);
 }
 
+static int pthread_initialized = 0;
 void pthreads_win32_init()
 {
-  pthread_t pth = (pthread_t)malloc(sizeof(pthread_thread));
-  thread_self_tls_index = TlsAlloc();
-  pth->start_routine = NULL;
-  pth->arg = NULL;
-  pth->waiting_cond = NULL;
-  pth->fiber_factory = 0;
-  pth->fiber = NULL;
-  pth->fiber_parent = NULL;
-  pth->fiber_cleanup_pointer = NULL;
-  pth->suspend_count = 0;
-  pth->fiber_context = NULL;
-  pth->cleanup_callback = NULL;
-  pth->cleanup_context = NULL;
-  pth->fiber_callback = NULL;
-  pth->fiber_context = NULL;
-  pth->teb = NtCurrentTeb();
-  sigemptyset(&pth->blocked_signal_set);
-  {
-    int i;
-    for (i = 1; i < NSIG; ++i)
-      pth->signal_is_pending[i] = 0;
+  if (!pthread_initialized) {
+    thread_self_tls_index = TlsAlloc();
+    pthread_mutex_init(&mutex_init_lock, NULL);
+    pthread_np_notice_thread();
+    pthread_initialized = 1;
   }
-  pthread_mutex_init(&mutex_init_lock, NULL);
-  DuplicateHandle(GetCurrentProcess(), GetCurrentThread(),
-                  GetCurrentProcess(), &pth->handle, 0,
-                  TRUE, DUPLICATE_SAME_ACCESS);
-  TlsSetValue(thread_self_tls_index, pth);
 }
 
+static
 VOID CALLBACK pthreads_win32_unnotice(void* parameter, BOOLEAN timerOrWait)
 {
   pthread_t pth = parameter;
-  if (pth->cleanup_callback)
-    pth->cleanup_callback(pth->cleanup_context);
+  pthread_t self = tls_impersonate(pth);
+
+  tls_call_destructors();
   CloseHandle(pth->handle);
+  /*
   if (pth->fiber && pth->own_fiber) {
     DeleteFiber(pth->fiber);
-  }
+    } */
   UnregisterWait(pth->wait_handle);
+
+  tls_impersonate(self);
+  pthread_mutex_destroy(&pth->fiber_lock);
+  pthread_mutex_destroy(&pth->lock);
   free(pth);
 }
 
 int pthread_np_notice_thread()
 {
   if (!pthread_self()) {
-    pthread_t pth = (pthread_t)malloc(sizeof(pthread_thread));
-    pth->start_routine = NULL;
-    pth->arg = NULL;
-    pth->waiting_cond = NULL;
-    pth->fiber_factory = 0;
-    pth->fiber = NULL;
-    pth->fiber_parent = NULL;
-    pth->fiber_cleanup_pointer = NULL;
-    pth->suspend_count = 0;
-    pth->fiber_context = NULL;
+    pthread_t pth = (pthread_t)calloc(sizeof(pthread_thread),1);
     pth->teb = NtCurrentTeb();
-    pth->cleanup_callback = NULL;
-    pth->cleanup_context = NULL;
-    pth->fiber_callback = NULL;
-    pth->fiber_callback_context = NULL;
+    pthread_mutex_init(&pth->fiber_lock,NULL);
+    pthread_mutex_init(&pth->lock,NULL);
+    pth->state = pthread_state_running;
+    pth->fiber_group = pth;
 
     sigemptyset(&pth->blocked_signal_set);
     {
@@ -649,14 +733,16 @@ int pthread_np_notice_thread()
     DuplicateHandle(GetCurrentProcess(), GetCurrentThread(),
                     GetCurrentProcess(), &pth->handle, 0, TRUE,
                     DUPLICATE_SAME_ACCESS);
-    TlsSetValue(thread_self_tls_index, pth);
+    tls_impersonate(pth);
 
-    RegisterWaitForSingleObject(&pth->wait_handle,
-                                pth->handle,
-                                pthreads_win32_unnotice,
-                                pth,
-                                INFINITE,
-                                WT_EXECUTEONLYONCE);
+    if (pthread_initialized) {
+      RegisterWaitForSingleObject(&pth->wait_handle,
+                                  pth->handle,
+                                  pthreads_win32_unnotice,
+                                  pth,
+                                  INFINITE,
+                                  WT_EXECUTEONLYONCE);
+    }
     return 1;
   } else {
     return 0;
@@ -695,106 +781,124 @@ int pthread_np_set_fiber_factory_mode(int on)
   return 0;
 }
 
-#define MAX_SAVED_TLS_SLOTS 64
-
-DWORD tls_fiber_save_map[(MAX_SAVED_TLS_SLOTS+31)/32] = {0}; /* MAX 64 TLS slots */
-
-#define FIBER_RUNNING 0
-#define FIBER_EXITED (-1)
-
 int pthread_np_switch_to_fiber(pthread_t pth)
 {
   pthread_t self = pthread_self();
   CONTEXT ctx;
-  LPVOID saved_tls[MAX_SAVED_TLS_SLOTS];
-  LPVOID* real_tls = (0xE10 + self->teb);
-  void* clean_fiber = NULL;
-  int i;
 
  again:
-  if (!pthread_np_is_my_other_fiber(pth))    /* Not my fiber */
-    return -1;
-  if (pth->suspend_count)                 /* Suspended */
-    return -1;
-  if (pthread_np_convert_self_to_fiber()) /* Can't become a fiber */
-    return -1;
+  if (pth == self) {
+    /* Switch to itself is a successful no-op.
+       NB. SwitchToFiber(GetCurrentFiber()) is not(!). */
+    return 0;
+  }
 
-  pth->fiber_cleanup_pointer = &clean_fiber;
-  for (i=0; i<MAX_SAVED_TLS_SLOTS; ++i) {
-    if (tls_fiber_save_map[i/32]&(1u<<(i%32))) {
-      saved_tls[i] = real_tls[i];
-      /* If it's the first switch, thread expect zeroes in TLS.
-       Otherwise, it will restore its own TLS and zeroing does no harm. */
-      real_tls[i] = 0;
+  if (!pth->fiber) {
+    /* Switch to not-a-fiber-at-all */
+    return -1;
+  }
+
+  if (!pth->created_as_fiber) {
+    /* Switch to main thread (group): fails if... */
+    if (self && (self->fiber_group != pth)) {
+      /* ...trying to switch from [under] one main thread into another */
+      return -1;
     }
   }
-  pthread_np_get_thread_context(self,&ctx);
-  self->fiber_context = &ctx;
-  TlsSetValue(thread_self_tls_index, pth);
-  SwitchToFiber(pth->fiber);
-  /* When we return here... */
-  TlsSetValue(thread_self_tls_index, self);
-  /* I am probably an idiot: lost some hours on tracking this down.
-     After switching to other fiber, TEB may be changed: that's the
-     whole point of saving and restoring TLS slots.
-
-     Therefore, let real_tls point at _new_ TEB TLS data. */
-  real_tls = (0xE10 + self->teb);
-  for (i=0; i<MAX_SAVED_TLS_SLOTS; ++i) {
-    if (tls_fiber_save_map[i/32]&(1u<<(i%32))) {
-      real_tls[i] = saved_tls[i];
-    }
+  if (!self && pth->created_as_fiber) {
+    /* Switch to free fiber from non-noticed thread */
+    return -1;
   }
-  self->fiber_context = NULL;
 
-  if (clean_fiber) {
-    DeleteFiber(clean_fiber);
-    i = 1;
+  if (self && pthread_np_convert_self_to_fiber()) {
+    /* Current thread can't become a fiber (and run fibers) */
+    return -1;
+  }
+
+  /* If target fiber is suspened, we wait here. */
+  pthread_mutex_lock(&pth->fiber_lock);
+  if (pth->fiber_group) {
+    /* Reentering a running fiber */
+    pthread_mutex_unlock(&pth->fiber_lock);
+    /* Don't wait for a running fiber here, just fail. If an
+       application wants to wait, it should use some separate
+       synchronization. */
+    return -1;
+  }
+  if (self) {
+    ctx.ContextFlags = CONTEXT_FULL;
+    GetThreadContext(GetCurrentThread(), &ctx);
+    /* From now on, any attempt to get context of self receives ctx
+       content, and suspend/resume work with fiber reentrance lock. */
+    self->fiber_context = &ctx;
+    /* Target fiber group is like mine */
+    pth->fiber_group = self->fiber_group;
   } else {
-    pth->fiber_cleanup_pointer = NULL;
-    i = 0;
+    /* Switch-from-null-self (always into thread, usually from
+       terminating fiber) */
+    pth->fiber_group = pth;
   }
+  /* Target fiber now marked as busy */
+  pthread_mutex_unlock(&pth->fiber_lock);
+
+  if (self) {
+    pthread_save_context_hook();
+  }
+  /* NB we don't set pthread TLS, let target fiber do it by itself. */
+  SwitchToFiber(pth->fiber);
+
+  /* When we return here... */
+  pth = tls_impersonate(self);
+
+  /* Now pth contains fiber that entered this one */
+  pthread_restore_context_hook();
+
+  if (pth) {
+    pthread_mutex_lock(&pth->fiber_lock);
+    if (pth->fiber_group == self->fiber_group) {
+      pth->fiber_group = NULL;
+    }
+    pthread_mutex_unlock(&pth->fiber_lock);
+  }
+  /* Self surely is not NULL, or we'd never be here */
+
+  pthread_mutex_lock(&self->fiber_lock);
+  /* Thus we avoid racing with GC */
+  self->fiber_context = NULL;
+  pthread_mutex_unlock(&self->fiber_lock);
+
+  /* From now on, pthread_np_get_thread_context on self calls real
+     GetThreadContext(), and suspend/resume work with real thread
+     handle. */
+
+  /* Implement call-in-fiber */
   if (self->fiber_callback) {
-    pthread_t (*cb)(void*) = self->fiber_callback;
+    void (*cb)(void*) = self->fiber_callback;
     void *ctx = self->fiber_callback_context;
+
+    /* Nested callbacks and fiber switches are possible, so clean
+       up a cb pointer here */
     self->fiber_callback = NULL;
     self->fiber_callback_context = NULL;
-    {
-      pthread_t back = cb(ctx);
-      if (back) {
-        pth = back;
-        goto again;
-      }
+    cb(ctx);
+    if (pth) {
+      /* Return to caller without recursive
+       pthread_np_switch_to_fiber.  This way, an "utility fiber"
+       serving multiple callbacks won't grow its stack to infinity */
+      goto again;
     }
+    /* There is no `callback client' pretending to be returned
+       into: it means callback shouldn't yield to caller. */
   }
-  return i;
+  return 0; /* success */
 }
 
-int pthread_np_run_in_fiber(pthread_t pth, pthread_t (*callback)(void*),
+int pthread_np_run_in_fiber(pthread_t pth, void (*callback)(void*),
                             void* context)
 {
-  if (!pthread_np_is_my_other_fiber(pth))    /* Not my fiber */
-    return -1;
   pth->fiber_callback = callback;
   pth->fiber_callback_context = context;
   return pthread_np_switch_to_fiber(pth);
-}
-
-void pthread_np_set_cleanup(pthread_t thread, void (*cleaner)(void*),void* context)
-{
-  thread->cleanup_callback = cleaner;
-  thread->cleanup_context = context;
-}
-
-int pthread_np_fiber_save_tls(int slot, int enable)
-{
-  if (slot < 0 || slot >= MAX_SAVED_TLS_SLOTS)
-    return 1;
-  if (enable)
-    tls_fiber_save_map[slot/32]|=(1u<<(slot%32));
-  else
-    tls_fiber_save_map[slot/32]&=~(1u<<(slot%32));
-  return 0;
 }
 
 HANDLE pthread_np_get_handle(pthread_t pth)
@@ -810,24 +914,6 @@ void* pthread_np_get_lowlevel_fiber(pthread_t pth)
 int pthread_np_delete_lowlevel_fiber(void* fiber)
 {
   DeleteFiber(fiber);
-  return 0;
-}
-
-/* Current thread's non-current fibers may be donated to other
-   fibers, possibly in other threads.
-
-   Unnoticed threads (without pthread structure) may donate any
-   fibers: it's assumed that they're cleaning up after orphaned
-   pthreads. */
-
-int pthread_np_donate_fiber(pthread_t fiber, pthread_t recipient)
-{
-  if (pthread_self() && !pthread_np_is_my_other_fiber(fiber))
-    return -1;
-
-  fiber->fiber_parent = recipient->fiber;
-  fiber->teb = recipient->teb;
-  fiber->handle = recipient->handle;
   return 0;
 }
 

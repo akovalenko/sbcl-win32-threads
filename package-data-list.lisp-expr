@@ -1969,7 +1969,10 @@ is a good idea, but see SB-SYS re. blurring of boundaries."
                "SEMAPHORE-COUNT"
                "SIGNAL-SEMAPHORE"
                "TRY-SEMAPHORE"
-               "WAIT-ON-SEMAPHORE"))
+               "WAIT-ON-SEMAPHORE"
+               ;; Foreign thread support
+               #!+sb-foreign-thread "FOREIGN-THREAD-DEINIT"
+               #!+sb-foreign-thread "FOREIGN-THREAD-INIT"))
 
    #s(sb-cold:package-data
       :name "SB!LOOP"
