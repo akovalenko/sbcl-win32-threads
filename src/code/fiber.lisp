@@ -235,8 +235,9 @@ fiber reports."
   (alien-funcall (extern-alien fiber-deinit-runtime (function void)))
   (when *lisp-fiber-cleanup-thread*
     (join-thread *lisp-fiber-cleanup-thread* :default t))
+  (setf *lisp-fiber-cleanup-thread* nil
+        *lisp-fiber-factory-thread* nil)
   (let ((remaining-foreign-threads
          (remove-if-not #'foreign-thread-p (list-all-threads))))
     (dolist (thread (mapc #'switch-to-fiber remaining-foreign-threads))
       (join-thread thread :default nil))))
-
