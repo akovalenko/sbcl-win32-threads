@@ -62,7 +62,7 @@ size_t os_vm_page_size;
 
 #include "gc.h"
 #include "gencgc-internal.h"
-#include <Winsock2.h>
+#include <winsock2.h>
 
 #if 0
 int linux_sparc_siginfo_bug = 0;
