@@ -606,18 +606,18 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
 
     if ((mem_info.State == MEM_RESERVE) && (mem_info.RegionSize >=len)) {
       /* It would be correct to return here. However, support for Wine
-	 would be beneficial, and Wine has a strange behavior in this
-	 department. It reports all memory below KERNEL32.DLL as
-	 reserved, but disallows MEM_COMMIT.
+         would be beneficial, and Wine has a strange behavior in this
+         department. It reports all memory below KERNEL32.DLL as
+         reserved, but disallows MEM_COMMIT.
 
-	 Let's work around it: reserve the region we need for a second
-	 time. Second reservation is documented to fail on normal NT
-	 family, but it will succeed on Wine if this region is
-	 actually free.
-	 */
+         Let's work around it: reserve the region we need for a second
+         time. Second reservation is documented to fail on normal NT
+         family, but it will succeed on Wine if this region is
+         actually free.
+         */
       VirtualAlloc(addr, len, MEM_RESERVE, PAGE_EXECUTE_READWRITE);
       /* If it is wine, second call succeeds, and now the region is
-	 really reserved. */
+         really reserved. */
       return addr;
     }
 
@@ -627,7 +627,7 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
     }
 
     if (!VirtualAlloc(addr, len, (mem_info.State == MEM_RESERVE)?
-		      MEM_COMMIT: MEM_RESERVE, PAGE_EXECUTE_READWRITE)) {
+                      MEM_COMMIT: MEM_RESERVE, PAGE_EXECUTE_READWRITE)) {
         fprintf(stderr, "VirtualAlloc: 0x%lx.\n", GetLastError());
         return 0;
     }
@@ -688,7 +688,7 @@ os_map(int fd, int offset, os_vm_address_t addr, os_vm_size_t len)
 #endif
 
     if (!VirtualAlloc(addr, len, MEM_COMMIT, PAGE_EXECUTE_READWRITE)&&
-	!VirtualAlloc(addr, len, MEM_RESERVE, PAGE_EXECUTE_READWRITE)) {
+        !VirtualAlloc(addr, len, MEM_RESERVE, PAGE_EXECUTE_READWRITE)) {
         fprintf(stderr, "VirtualAlloc: 0x%lx.\n", GetLastError());
         lose("os_map: VirtualAlloc failure");
     }
