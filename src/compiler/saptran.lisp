@@ -32,21 +32,21 @@
           (if (or #+sb-xc-host t ; only static symbols on host
                   (not datap)
                   (find-foreign-symbol-in-table name *static-foreign-symbols*))
-	      #!-win32
+              #!-win32
               `(foreign-symbol-sap ,name) ; VOP
-	      #!+win32
-	      ;; instead of compiling direct reference to a function
-	      ;; defined in DLL, we may compile a dataref to import
-	      ;; table entry [if _imp__`name' is defined] and save one
-	      ;; level of indirection.
-	      (let ((import-table-entry-name
-		     (concatenate 'string "_imp__" name)))
-		(if (find-foreign-symbol-in-table import-table-entry-name
-						  *static-foreign-symbols*)
-		    ;; we have to check it even on sb-xc-host. No
-		    ;; import entries for SBCL's own statics.
-		    `(foreign-symbol-dataref-sap ,import-table-entry-name) ; VOP
-		    `(foreign-symbol-sap ,name))) ; VOP
+              #!+win32
+              ;; instead of compiling direct reference to a function
+              ;; defined in DLL, we may compile a dataref to import
+              ;; table entry [if _imp__`name' is defined] and save one
+              ;; level of indirection.
+              (let ((import-table-entry-name
+                     (concatenate 'string "_imp__" name)))
+                (if (find-foreign-symbol-in-table import-table-entry-name
+                                                  *static-foreign-symbols*)
+                    ;; we have to check it even on sb-xc-host. No
+                    ;; import entries for SBCL's own statics.
+                    `(foreign-symbol-dataref-sap ,import-table-entry-name) ; VOP
+                    `(foreign-symbol-sap ,name))) ; VOP
               `(foreign-symbol-dataref-sap ,name))) ; VOP
         (give-up-ir1-transform)))
 
