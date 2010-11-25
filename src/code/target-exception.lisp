@@ -86,16 +86,16 @@
 (defun sb!kernel:handle-win32-exception (context-sap exception-record-sap)
   (let* ((record (deref (sap-alien exception-record-sap (* (struct exception-record)))))
          (code (slot record 'exception-code))
-	 (number-parameters (slot record 'number-parameters))
+         (number-parameters (slot record 'number-parameters))
          (condition-name (cdr (assoc code *exception-code-map*)))
          (sb!debug:*stack-top-hint* (nth-value 1 (sb!kernel:find-interrupted-name-and-frame))))
     (when (and (eql code +exception-access-violation+)
-	       (> number-parameters 1)
+               (> number-parameters 1)
                (sap= (sap-ref-sap
-		      (alien-sap (addr (slot record 'exception-information)))
-		      (alien-size system-area-pointer :bytes))
-		     (extern-alien "undefined_alien_address"
-				   system-area-pointer)))
+                      (alien-sap (addr (slot record 'exception-information)))
+                      (alien-size system-area-pointer :bytes))
+                     (extern-alien "undefined_alien_address"
+                                   system-area-pointer)))
       (setf condition-name 'sb!kernel::undefined-alien-variable-error))
     (if condition-name
         (error condition-name)
