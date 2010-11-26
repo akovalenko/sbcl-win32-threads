@@ -635,6 +635,18 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
     return addr;
 }
 
+os_vm_address_t
+os_validate_recommit(os_vm_address_t addr, os_vm_size_t len)
+{
+    MEMORY_BASIC_INFORMATION mem_info;
+
+    if (!VirtualAlloc(addr, len, MEM_COMMIT, PAGE_EXECUTE_READWRITE)) {
+        fprintf(stderr, "VirtualAlloc: 0x%lx.\n", GetLastError());
+        return 0;
+    }
+    return addr;
+}
+
 /*
  * For os_invalidate(), we merely decommit the memory rather than
  * freeing the address space. This loses when freeing per-thread
@@ -781,6 +793,9 @@ extern boolean internal_errors_enabled;
 #define TRAP_CODE_WIDTH 1
 #endif
 
+#define FPU_STATE_SIZE 27
+
+
 /*
  * A good explanation of the exception handling semantics is
  * http://win32assembly.online.fr/Exceptionhandling.html .
@@ -792,8 +807,12 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                  CONTEXT *context,
                  void *dispatcher_context)
 {
-    DWORD lasterror = GetLastError();
+    DWORD lasterror;
     os_context_t ctx;
+    int fpu_state[FPU_STATE_SIZE];
+
+    fpu_save(fpu_state);
+    lasterror = GetLastError();
     ctx.win32_context = context;
 #if defined(LISP_FEATURE_SB_THREAD)
     struct thread * self = arch_os_get_current_thread();
@@ -816,6 +835,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
         gc_safepoint();
         SetLastError(lasterror);
+        fpu_restore(fpu_state);
 #endif
         return ExceptionContinueSearch;
     }
@@ -831,6 +851,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         gc_safepoint();
         #endif
         SetLastError(lasterror);
+        fpu_restore(fpu_state);
         return ExceptionContinueExecution;
     }
 
@@ -853,6 +874,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         gc_safepoint();
         #endif
         SetLastError(lasterror);
+        fpu_restore(fpu_state);
         /* Done, we're good to go! */
         return ExceptionContinueExecution;
     }
@@ -861,6 +883,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
       pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
       gc_safepoint();
       SetLastError(lasterror);
+      fpu_restore(fpu_state);
       return ExceptionContinueExecution;
     }
     #endif
@@ -901,6 +924,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                 gc_safepoint();
                 #endif
                 SetLastError(lasterror);
+                fpu_restore(fpu_state);
                 return ExceptionContinueExecution;
             }
 
@@ -911,6 +935,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
               gc_safepoint();
               #endif
               SetLastError(lasterror);
+              fpu_restore(fpu_state);
               /* gc accepts the wp violation, so resume where we left off. */
               return ExceptionContinueExecution;
           }
@@ -961,6 +986,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         gc_safepoint();
         #endif
         SetLastError(lasterror);
+        fpu_restore(fpu_state);
 
         /* FIXME: HANDLE-WIN32-EXCEPTION should be allowed to decline */
         return ExceptionContinueExecution;
@@ -990,6 +1016,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
     pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
     gc_safepoint();
     SetLastError(lasterror);
+    fpu_restore(fpu_state);
     #endif
     return ExceptionContinueSearch;
 }
