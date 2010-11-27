@@ -940,6 +940,13 @@ UNIX epoch: January 1st 1970."
   (let ((handle (get-osfhandle fd)))
     (if (= handle invalid-handle)
         (values nil ebadf)
-        (let ((socketp (plusp (socket-input-available handle))))
+        (let ((socketp
+               (and
+                ;; Wine workaround: its universal socket+pipe handles
+                ;; are closed by _any_ of closesocket/CloseHandle
+                ;; calls. On real Windows, named pipes and sockets are
+                ;; disctinct, and peek-named-pipe will fail.
+                (zerop (peek-named-pipe handle nil 0 nil nil nil))
+                (plusp (socket-input-available handle)))))
           (multiple-value-prog1 (sb!unix:unix-close fd)
             (when socketp (close-socket handle)))))))
