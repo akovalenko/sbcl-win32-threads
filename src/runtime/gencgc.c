@@ -537,9 +537,9 @@ void zero_pages_with_mmap(page_index_t start, page_index_t end) {
 
     os_invalidate(addr, length);
 #if defined(LISP_FEATURE_WIN32)
-    new_addr = os_validate(addr, length);
-#else
     new_addr = os_validate_recommit(addr, length);
+#else
+    new_addr = os_validate(addr, length);
 #endif
     if (new_addr == NULL || new_addr != addr) {
         lose("remap_free_pages: page moved, 0x%08x ==> 0x%08x",
