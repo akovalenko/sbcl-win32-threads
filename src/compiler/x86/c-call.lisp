@@ -270,13 +270,10 @@
     ;; FIXME & OAOOM: This is brittle and error-prone to maintain two
     ;; instances of the same logic, on in arch-assem.S, and one in
     ;; c-call.lisp. If you modify this, modify that one too...
-    (cond ((policy node (> space speed))
+    (cond ((or #!+(and win32 sb-thread) t
+               (policy node (> space speed)))
            (move eax function)
-           #!+(and win32 sb-thread)
-           (enter-safe-region-instructions)
-           (inst call (make-fixup "call_into_c" :foreign))
-           #!+(and win32 sb-thread)
-           (leave-region-instructions))
+           (inst call (make-fixup "call_into_c" :foreign)))
           (t
            ;; Setup the NPX for C; all the FP registers need to be
            ;; empty; pop them all.
