@@ -92,9 +92,11 @@
 
 #+sb-thread
 (with-test (:name parallel-find-class)
+  (setf (sb-alien:extern-alien "internal_errors_enabled" sb-alien:int) 1 )
   (let* ((oops nil)
-         (threads (loop repeat 10
+         (threads (loop repeat 30
                         collect (make-thread (lambda ()
+
                                                (handler-case
                                                    (loop repeat 10000
                                                          do (find-class (gensym) nil))
@@ -188,6 +190,7 @@
 ;;; are also some indications that pthread_mutex_lock is not re-entrant.
 #+(and sb-thread (not darwin))
 (with-test (:name symbol-value-in-thread.3)
+  (setf (sb-alien:extern-alien "internal_errors_enabled" sb-alien:int) 1 )
   (let* ((parent *current-thread*)
          (semaphore (make-semaphore))
          (running t)
