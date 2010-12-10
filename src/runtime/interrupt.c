@@ -1945,7 +1945,8 @@ handle_trap(os_context_t *context, int trap)
         FSHOW((stderr, "/<trap pending interrupt>\n"));
         arch_skip_instruction(context);
 #if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-        gc_safepoint();
+	/* gc_safepoint(); would be here, but it will be called by
+	   exception handler anyway */
 #else
         interrupt_handle_pending(context);
 #endif

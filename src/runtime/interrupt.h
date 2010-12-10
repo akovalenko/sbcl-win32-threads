@@ -28,7 +28,12 @@
  * stack by the kernel, so copying a libc-sized sigset_t into it will
  * overflow and cause other data on the stack to be corrupted */
 /* FIXME: do not rely on NSIG being a multiple of 8 */
+
+#ifdef LISP_FEATURE_WIN32
+#define REAL_SIGSET_SIZE_BYTES (4)
+#else
 #define REAL_SIGSET_SIZE_BYTES ((NSIG/8))
+#endif
 
 static inline void
 sigcopyset(sigset_t *new, sigset_t *old)
@@ -105,18 +110,7 @@ union interrupt_handler {
 
 extern union interrupt_handler interrupt_handlers[NSIG];
 
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-struct win32_interrupt_data {
-    int interrupts_count;
-    lispobj interrupts[MAX_INTERRUPTS];
-    pthread_mutex_t lock;
-};
-#endif
-
 struct interrupt_data {
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-    struct win32_interrupt_data win32_data;
-#endif
     /* signal information for pending signal.  pending_signal=0 when there
      * is no pending signal. */
     void (*pending_handler) (int, siginfo_t*, os_context_t*) ;
