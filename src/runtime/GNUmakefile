@@ -57,8 +57,12 @@ LIBS = ${OS_LIBS} -lm
 
 targets: $(TARGET) sbcl.nm
 
-$(TARGET): $(OBJS)
+$(TARGET): $(OBJS) $(OS_LATE_OBJS)
 	$(CC) ${LINKFLAGS} -o $@ $^ $(LIBS)
+
+sbcl-own.nm: $(OBJS)
+	$(NM) $(OBJS) | $(GREP) -v " [FUw] " > ,$@
+	mv -f ,$@ $@
 
 sbcl.nm: $(TARGET)
 	$(NM) $(TARGET) | $(GREP) -v " [FUw] " > ,$@
@@ -87,5 +91,5 @@ clean:
 # By including those files, we cause GNU make to automatically re-make
 # all dependencies of the .c file if necessary.
 ifneq ($(MAKECMDGOALS),clean)
--include $(C_SRC:.c=.d) $(ASSEM_SRC:.S=.d)
+-include $(C_SRC:.c=.d) $(ASSEM_SRC:.S=.d) $(OS_LATE_OBJS:.o=.d)
 endif
