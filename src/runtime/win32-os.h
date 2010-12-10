@@ -22,12 +22,17 @@
 #include "target-arch-os.h"
 #include "target-arch.h"
 
+#ifdef LISP_FEATURE_SB_THREAD
+#include "pthreads_win32.h"
+#endif
+
+
 typedef LPVOID os_vm_address_t;
 typedef size_t os_vm_size_t;
 typedef off_t os_vm_offset_t;
 typedef int os_vm_prot_t;
 
-typedef void *siginfo_t;
+/* typedef void *siginfo_t; */
 
 /* These are used as bitfields, but Win32 doesn't work that way, so we do a translation. */
 #define OS_VM_PROT_READ    1
@@ -40,6 +45,8 @@ typedef void *siginfo_t;
 #define SIG_STOP_FOR_GC (SIGRTMIN+1)
 #define SIG_DEQUEUE (SIGRTMIN+2)
 #define SIG_THREAD_EXIT (SIGRTMIN+3)
+
+#define FPU_STATE_SIZE 27
 
 struct lisp_exception_frame {
     struct lisp_exception_frame *next_frame;

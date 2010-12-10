@@ -111,7 +111,7 @@
 GNAME(call_into_c):
 /* Save the return Lisp address in ebx. */
 	popl	%ebx
-
+	cld
 /* Setup the NPX for C */
 	fstp	%st(0)
 	fstp	%st(0)
@@ -121,21 +121,27 @@ GNAME(call_into_c):
 	fstp	%st(0)
 	fstp	%st(0)
 	fstp	%st(0)
-
 #if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-	pusha
+	pushl %eax
 	call GNAME(gc_enter_safe_region)
-	popa
+	popl %eax
 #endif
 	call	*%eax		  # normal callout using Lisp stack
 	movl	%eax,%ecx	  # remember integer return value
-
 /* Check for a return FP value. */
 	fxam
 	fnstsw	%ax
 	andl	$0x4500,%eax
 	cmpl	$0x4100,%eax
 	jne	Lfp_rtn_value
+
+#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
+	push %edx
+	push %ecx
+	call GNAME(gc_leave_region)
+	pop %ecx
+	pop %edx
+#endif
 
 /* The return value is in eax, or eax,edx? */
 /* Set up the NPX stack for Lisp. */
@@ -147,21 +153,22 @@ GNAME(call_into_c):
 	fldz
 	fldz
 	fldz
-
 /* Restore the return value. */
 	movl	%ecx,%eax	# maybe return value
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-	pusha
-	call GNAME(gc_leave_region)
-	popa
-#endif
 
 /* Return. */
 	jmp	*%ebx
 
 Lfp_rtn_value:
-/* The return result is in st(0). */
-/* Set up the NPX stack for Lisp, placing the result in st(0). */
+/* The return result is in st(0). Only this?*/
+#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
+	sub 	$10, %esp
+	fstpl	(%esp)
+	call GNAME(gc_leave_region)
+	fldl (%esp)
+	add	$10, %esp
+#endif
+	/* Set up the NPX stack for Lisp, placing the result in st(0). */
 	fldz			# Ensure no regs are empty.
 	fldz
 	fldz
@@ -169,15 +176,10 @@ Lfp_rtn_value:
 	fldz
 	fldz
 	fldz
-	fxch	%st(7)		# Move the result back to st(0).
+	fxch %st(7)
 
 /* We don't need to restore eax, because the result is in st(0). */
 
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-	pusha
-	call GNAME(gc_leave_region)
-	popa
-#endif
 /* Return. FIXME: It would be nice to restructure this to use RET. */	
 	jmp	*%ebx
 
@@ -215,13 +217,11 @@ GNAME(call_into_lisp_first_time):
 	
 	.align	align_16byte,0x90
 GNAME(call_into_lisp):
-
 #if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
 	pusha
 	call GNAME(gc_enter_unsafe_region)
 	popa
 #endif
-  
 	pushl	%ebp		# Save old frame pointer.
 	movl	%esp,%ebp	# Establish new frame.
 Lstack:
@@ -229,7 +229,6 @@ Lstack:
 	fwait			# Catch any pending NPX exceptions.
 	subl	$108,%esp	# Make room for the NPX state.
 	fnsave	(%esp)		# save and reset NPX
-
 	movl	(%esp),%eax	# Load NPX control word.
 	andl	$0xfffff2ff,%eax	# Set rounding mode to nearest.
 	orl	$0x00000200,%eax	# Set precision to 64 bits.  (53-bit mantissa)
@@ -315,6 +314,7 @@ LsingleValue:
 
 #ifdef LISP_FEATURE_WIN32
 	/* Remove our SEH frame. */
+	mov	%fs:0,%esp
 	popl	%fs:0
 	add	$8, %esp
 #endif
@@ -360,6 +360,7 @@ GNAME(fpu_restore):
 	frstor	(%eax)		# Restore the NPX state.
 	ret
 	SIZE(GNAME(fpu_restore))
+	
 
 /*
  * the undefined-function trampoline
@@ -447,7 +448,14 @@ GNAME(do_pending_interrupt):
 	.byte 	trap_PendingInterrupt
 	ret
 	SIZE(GNAME(do_pending_interrupt))
-
+
+	
+	.globl	GNAME(reenter_into_lisp)
+	TYPE(GNAME(reenter_into_lisp))
+	.align	align_16byte,0x90
+
+
+	
 /* Allocate bytes and return the start of the allocated space
  * in the specified destination register.
  *
@@ -572,10 +580,18 @@ DEFINE_ALLOC_TO_REG(alloc_16_to_edi,%edi,$16)
 #endif
 
 /* FIXME Win32 */
-#define ALLOC_OVERFLOW(size)                                    \
-        /* Calculate the size for the allocation. */            \
-        subl    START_REGION,size;                              \
-        ALLOC(size)
+#if defined(LISP_FEATURE_SB_THREAD) && defined(LISP_FEATURE_WIN32)
+#define ALLOC_OVERFLOW(size,scratch)				\
+	/* Calculate the size for the allocation. */		\
+	movl %fs:0xE10+(4*63), scratch;			\
+	subl THREAD_ALLOC_REGION_OFFSET(scratch),size;	\
+	ALLOC(size)
+#else	
+#define ALLOC_OVERFLOW(size,scratch)			\
+	  /* Calculate the size for the allocation. */	\
+	  subl    START_REGION,size;			\
+	  ALLOC(size)
+#endif
 
 /* This routine handles an overflow with eax=crfp+size. So the
    size=eax-crfp. */
@@ -585,7 +601,7 @@ DEFINE_ALLOC_TO_REG(alloc_16_to_edi,%edi,$16)
 GNAME(alloc_overflow_eax):
         pushl   %ecx            # Save ecx
         pushl   %edx            # Save edx
-	ALLOC_OVERFLOW(%eax)
+	ALLOC_OVERFLOW(%eax,%edx)
         popl    %edx    # Restore edx.
         popl    %ecx    # Restore ecx.
         ret
@@ -597,7 +613,7 @@ GNAME(alloc_overflow_eax):
 GNAME(alloc_overflow_ecx):
         pushl   %eax            # Save eax
         pushl   %edx            # Save edx
-	ALLOC_OVERFLOW(%ecx)
+	ALLOC_OVERFLOW(%ecx,%edx)
         movl    %eax,%ecx       # setup the destination.
         popl    %edx    # Restore edx.
         popl    %eax    # Restore eax.
@@ -610,7 +626,7 @@ GNAME(alloc_overflow_ecx):
 GNAME(alloc_overflow_edx):
         pushl   %eax            # Save eax
         pushl   %ecx            # Save ecx
-	ALLOC_OVERFLOW(%edx)
+	ALLOC_OVERFLOW(%edx,%ecx)
         movl    %eax,%edx       # setup the destination.
         popl    %ecx    # Restore ecx.
         popl    %eax    # Restore eax.
@@ -626,7 +642,7 @@ GNAME(alloc_overflow_ebx):
         pushl   %eax            # Save eax
         pushl   %ecx            # Save ecx
         pushl   %edx            # Save edx
-	ALLOC_OVERFLOW(%ebx)
+	ALLOC_OVERFLOW(%ebx,%edx)
         movl    %eax,%ebx       # setup the destination.
         popl    %edx    # Restore edx.
         popl    %ecx    # Restore ecx.
@@ -643,7 +659,7 @@ GNAME(alloc_overflow_esi):
         pushl   %eax            # Save eax
         pushl   %ecx            # Save ecx
         pushl   %edx            # Save edx
-	ALLOC_OVERFLOW(%esi)
+	ALLOC_OVERFLOW(%esi,%edx)
         movl    %eax,%esi       # setup the destination.
         popl    %edx    # Restore edx.
         popl    %ecx    # Restore ecx.
@@ -658,7 +674,7 @@ GNAME(alloc_overflow_edi):
         pushl   %eax            # Save eax
         pushl   %ecx            # Save ecx
         pushl   %edx            # Save edx
-	ALLOC_OVERFLOW(%edi)
+	ALLOC_OVERFLOW(%edi,%edx)
         movl    %eax,%edi       # setup the destination.
         popl    %edx    # Restore edx.
         popl    %ecx    # Restore ecx.
@@ -678,6 +694,17 @@ GNAME(alloc_overflow_edi):
 	.globl	GNAME(exception_handler_wrapper)
 	TYPE(GNAME(exception_handler_wrapper))
 GNAME(exception_handler_wrapper):
+/*
+	fnclex
+	ffree   %st(0)
+	ffree   %st(1)
+	ffree   %st(2)
+	ffree   %st(3)
+	ffree   %st(4)
+	ffree   %st(5)
+	ffree   %st(6)
+	ffree   %st(7)
+	*/
 	/* Context layout is: */
 	/* 7 dwords before FSA. (0x1c) */
 	/* 8 dwords and 0x50 bytes in the FSA. (0x70/0x8c) */

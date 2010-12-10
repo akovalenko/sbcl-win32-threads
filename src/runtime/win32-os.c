@@ -27,7 +27,6 @@
  */
 
 #define _WIN32_WINNT 0x0500
-#define RtlUnwind RtlUnwind_FromSystemHeaders
 #include <malloc.h>
 #include <stdio.h>
 #include <sys/param.h>
@@ -72,7 +71,6 @@ int linux_supports_futex=0;
 #include <stdarg.h>
 #include <setjmp.h>
 
-#undef  RtlUnwind
 /* missing definitions for modern mingws */
 #ifndef EH_UNWINDING
 #define EH_UNWINDING 0x02
@@ -142,6 +140,9 @@ EXCEPTION_DISPOSITION handle_exception(EXCEPTION_RECORD *,
                                        struct lisp_exception_frame *,
                                        CONTEXT *,
                                        void *);
+
+void *UL_GetCurrentTeb() { return NtCurrentTeb(); };
+void *UL_GetCurrentFrame() { return __builtin_frame_address(0); }
 
 void *base_seh_frame;
 
@@ -744,6 +745,20 @@ os_protect(os_vm_address_t address, os_vm_size_t length, os_vm_prot_t prot)
     }
 }
 
+os_vm_prot_t os_current_protection(os_vm_address_t address)
+{
+  MEMORY_BASIC_INFORMATION minfo;
+  DWORD result = VirtualQuery(address, &minfo, sizeof minfo);
+  int prot;
+  for (prot = 0; prot<(sizeof(os_protect_modes)/sizeof(os_protect_modes[0])); ++prot) {
+    if (os_protect_modes[prot] == minfo.Protect)
+      return prot;
+  }
+  return OS_VM_PROT_NONE;
+}
+
+
+
 /* FIXME: Now that FOO_END, rather than FOO_SIZE, is the fundamental
  * description of a space, we could probably punt this and just do
  * (FOO_START <= x && x < FOO_END) everywhere it's called. */
@@ -792,8 +807,8 @@ extern boolean internal_errors_enabled;
     ((exception_record)->ExceptionCode == EXCEPTION_BREAKPOINT)
 #define TRAP_CODE_WIDTH 1
 #endif
+extern void exception_handler_wrapper();
 
-#define FPU_STATE_SIZE 27
 
 
 /*
@@ -807,57 +822,37 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                  CONTEXT *context,
                  void *dispatcher_context)
 {
-    DWORD lasterror;
+    DWORD lasterror = GetLastError();
     os_context_t ctx;
-    int fpu_state[FPU_STATE_SIZE];
-
-    fpu_save(fpu_state);
-    lasterror = GetLastError();
+    struct thread* self = arch_os_get_current_thread();
     ctx.win32_context = context;
-#if defined(LISP_FEATURE_SB_THREAD)
-    struct thread * self = arch_os_get_current_thread();
-    pthread_sigmask(SIG_SETMASK, NULL, &ctx.sigmask);
-    pthread_sigmask(SIG_BLOCK, &blockable_sigset, NULL);
-#endif
+
     /* For EXCEPTION_ACCESS_VIOLATION only. */
     void *fault_address = (void *)exception_record->ExceptionInformation[1];
     odprintf("handle exception, EIP = 0x%p, code = 0x%p (addr = 0x%p)", context->Eip, exception_record->ExceptionCode, fault_address);
     if (exception_record->ExceptionFlags & (EH_UNWINDING | EH_EXIT_UNWIND)) {
         /* If we're being unwound, be graceful about it. */
-
-#if defined(LISP_FEATURE_SB_THREAD)
-        pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
-#endif
         /* Undo any dynamic bindings, including *gc-safe*. */
-        unbind_to_here(exception_frame->bindstack_pointer,
-                       arch_os_get_current_thread());
-#if defined(LISP_FEATURE_SB_THREAD)
-        pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
-        gc_safepoint();
-        SetLastError(lasterror);
-        fpu_restore(fpu_state);
-#endif
-        return ExceptionContinueSearch;
+      unbind_to_here(exception_frame->bindstack_pointer,
+                     arch_os_get_current_thread());
+      gc_safepoint();
+      return ExceptionContinueSearch;
     }
-
+    ctx.sigmask = 0;
+    block_blockable_signals(NULL,&ctx.sigmask);
 
     if (single_stepping &&
         exception_record->ExceptionCode == EXCEPTION_SINGLE_STEP) {
         /* We are doing a displaced instruction. At least function
          * end breakpoints uses this. */
         restore_breakpoint_from_single_step(&ctx);
-        #if defined(LISP_FEATURE_SB_THREAD)
-        pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
+        thread_sigmask(SIG_SETMASK,&ctx.sigmask,NULL);
         gc_safepoint();
-        #endif
         SetLastError(lasterror);
-        fpu_restore(fpu_state);
         return ExceptionContinueExecution;
     }
-
     if (IS_TRAP_EXCEPTION(exception_record, ctx)) {
-        unsigned char trap;
-
+        unsigned trap;
         /* This is just for info in case the monitor wants to print an
          * approximation. */
         access_control_stack_pointer(self) =
@@ -869,21 +864,19 @@ handle_exception(EXCEPTION_RECORD *exception_record,
          * 'kind' value (eg trap_Cerror). */
         trap = *(unsigned char *)(*os_context_pc_addr(&ctx));
         handle_trap(&ctx, trap);
-        #if defined(LISP_FEATURE_SB_THREAD)
-        pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
+        thread_sigmask(SIG_SETMASK,&ctx.sigmask,NULL);
         gc_safepoint();
-        #endif
         SetLastError(lasterror);
-        fpu_restore(fpu_state);
-        /* Done, we're good to go! */
         return ExceptionContinueExecution;
     }
     #if defined(LISP_FEATURE_SB_THREAD)
-    else if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && fault_address == GC_SAFEPOINT_PAGE_ADDR) {
+    else if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION
+             && fault_address == GC_SAFEPOINT_PAGE_ADDR) {
+      /* Pick off GC-related memory fault next. */
+      MEMORY_BASIC_INFORMATION mem_info;
       pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
       gc_safepoint();
       SetLastError(lasterror);
-      fpu_restore(fpu_state);
       return ExceptionContinueExecution;
     }
     #endif
@@ -906,44 +899,50 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                 lose("handle_exception: VirtualAlloc failure");
 
             } else {
-                /*
-                 * Now, if the page is supposedly write-protected and this
-                 * is a write, tell the gc that it's been hit.
-                 *
-                 * FIXME: Are we supposed to fall-through to the Lisp
-                 * exception handler if the gc doesn't take the wp violation?
-                 */
+              /*
+               * Now, if the page is supposedly write-protected and this
+               * is a write, tell the gc that it's been hit.
+               *
+               * FIXME: Are we supposed to fall-through to the Lisp
+               * exception handler if the gc doesn't take the wp violation?
+               */
                 if (exception_record->ExceptionInformation[0]) {
                     int index = find_page_index(fault_address);
-                    if ((index != -1) && (page_table[index].write_protected)) {
-                        gencgc_handle_wp_violation(fault_address);
-                    }
+                    if ((index != -1) && (page_table[index].write_protected))
+                         gencgc_handle_wp_violation(fault_address);
                 }
-                #if defined(LISP_FEATURE_SB_THREAD)
                 pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
-                gc_safepoint();
-                #endif
                 SetLastError(lasterror);
-                fpu_restore(fpu_state);
                 return ExceptionContinueExecution;
             }
-
         } else {
+              /* It's `almost certainly' a WP fault for GC's
+               * attention. However, there is another possibility:
+               * this page could be decommitted when we hit it, but
+               * committed between that moment and our
+               * VirtualQuery. Let's check what VirtualQuery said
+               * about its protection: if it's not WP, there is no
+               * point in calling GC, we just continue execution.
+               */
+            if (mem_info.Protect == PAGE_EXECUTE_READWRITE) {
+#if defined(LISP_FEATURE_SB_THREAD)
+  pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
+#endif
+              SetLastError(lasterror);
+              return ExceptionContinueExecution;
+            }
+
             if (gencgc_handle_wp_violation(fault_address)) {
               #if defined(LISP_FEATURE_SB_THREAD)
               pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
-              gc_safepoint();
               #endif
               SetLastError(lasterror);
-              fpu_restore(fpu_state);
               /* gc accepts the wp violation, so resume where we left off. */
               return ExceptionContinueExecution;
           }
         }
-
         /* All else failed, drop through to the lisp-side exception handler. */
     }
-
     /*
      * If we fall through to here then we need to either forward
      * the exception to the lisp-side exception handler if it's
@@ -975,18 +974,16 @@ handle_exception(EXCEPTION_RECORD *exception_record,
          * exceptions, so we lose as soon as we execute any FP
          * instruction unless we do this first. */
         _clearfp();
-
         /* Call into lisp to handle things. */
         funcall2(StaticSymbolFunction(HANDLE_WIN32_EXCEPTION), context_sap,
                  exception_record_sap);
-
         /* If Lisp doesn't nlx, we need to put things back. */
         undo_fake_foreign_function_call(&ctx);
         #if defined(LISP_FEATURE_SB_THREAD)
+        pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
         gc_safepoint();
         #endif
         SetLastError(lasterror);
-        fpu_restore(fpu_state);
 
         /* FIXME: HANDLE-WIN32-EXCEPTION should be allowed to decline */
         return ExceptionContinueExecution;
@@ -1016,7 +1013,6 @@ handle_exception(EXCEPTION_RECORD *exception_record,
     pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
     gc_safepoint();
     SetLastError(lasterror);
-    fpu_restore(fpu_state);
     #endif
     return ExceptionContinueSearch;
 }
@@ -1025,7 +1021,7 @@ void
 wos_install_interrupt_handlers(struct lisp_exception_frame *handler)
 {
     handler->next_frame = get_seh_frame();
-    handler->handler = &handle_exception;
+    handler->handler = (void*)exception_handler_wrapper;
     set_seh_frame(handler);
 }
 
@@ -1081,91 +1077,6 @@ char *dirname(char *path)
 }
 
 /* This is a manually-maintained version of ldso_stubs.S. */
-
-void __stdcall RtlUnwind(void *, void *, void *, void *); /* I don't have winternl.h */
-
-void scratch(void)
-{
-    LARGE_INTEGER la = {{0}};
-    CloseHandle(0);
-    closesocket(0);
-    CreateWaitableTimerA(NULL,FALSE,NULL);
-    CancelWaitableTimer(NULL);
-    DuplicateHandle(0,0,0,0,0,0,0);
-    FlushConsoleInputBuffer(0);
-    FormatMessageA(0, 0, 0, 0, 0, 0, 0);
-    FreeLibrary(0);
-    GetACP();
-    GetCommTimeouts(0,0);
-    SetCommTimeouts(0,0);
-    ClearCommError(0,0,0);
-    GetConsoleCP();
-    GetConsoleOutputCP();
-    GetCurrentProcess();
-    GetCurrentThreadId();
-    GetExitCodeThread(0,0);
-    GetExitCodeProcess(0, 0);
-    GetFileSizeEx(0,&la);
-    GetFileType(0);
-    GetLastError();
-    GetOEMCP();
-    GetProcAddress(0, 0);
-    GetProcessTimes(0, 0, 0, 0, 0);
-    GetSystemTimeAsFileTime(0);
-    LoadLibrary(0);
-    LocalFree(0);
-    PeekConsoleInput(0, 0, 0, 0);
-    PeekNamedPipe(0, 0, 0, 0, 0, 0);
-    ReadFile(0, 0, 0, 0, 0);
-    SetWaitableTimer(NULL,NULL,0L,NULL,NULL,FALSE);
-    Sleep(0);
-    WriteFile(0, 0, 0, 0, 0);
-    _get_osfhandle(0);
-    _open_osfhandle(0,0);
-    _rmdir(0);
-    _pipe(0,0,0);
-    _lseeki64(0,0,0);
-    access(0,0);
-    close(0);
-    dup(0);
-    isatty(0);
-    strerror(42);
-    write(0, 0, 0);
-    RtlUnwind(0, 0, 0, 0);
-    SetStdHandle(0,0);
-    GetStdHandle(0);
-    MapViewOfFile(0,0,0,0,0);
-    UnmapViewOfFile(0);
-    FlushViewOfFile(0,0);
-    #ifndef LISP_FEATURE_SB_UNICODE
-      CreateDirectoryA(0,0);
-      CreateFileMappingA(0,0,0,0,0,0);
-      CreateFileA(0,0,0,0,0,0,0);
-      GetComputerNameA(0, 0);
-      GetCurrentDirectoryA(0,0);
-      GetEnvironmentVariableA(0, 0, 0);
-      GetFileAttributesA(0);
-      GetVersionExA(0);
-      MoveFileA(0,0);
-      SHGetFolderPathA(0, 0, 0, 0, 0);
-      SetCurrentDirectoryA(0);
-      SetEnvironmentVariableA(0, 0);
-    #else
-      CreateDirectoryW(0,0);
-      CreateFileMappingW(0,0,0,0,0,0);
-      CreateFileW(0,0,0,0,0,0,0);
-      FormatMessageW(0, 0, 0, 0, 0, 0, 0);
-      GetComputerNameW(0, 0);
-      GetCurrentDirectoryW(0,0);
-      GetEnvironmentVariableW(0, 0, 0);
-      GetFileAttributesW(0);
-      GetVersionExW(0);
-      MoveFileW(0,0);
-      SHGetFolderPathW(0, 0, 0, 0, 0);
-      SetCurrentDirectoryW(0);
-      SetEnvironmentVariableW(0, 0);
-    #endif
-}
 
 char *
 os_get_runtime_executable_path(int external)
@@ -1246,9 +1157,12 @@ int win32_unix_write(int fd, void * buf, int count)
       errno = EIO;
       return -1;
     } else {
+    wait_again:
       if(WaitForMultipleObjects(2,self->private_events.events,
                                    FALSE,INFINITE) != WAIT_OBJECT_0) {
         /* Something happened. Interrupt? */
+        if (!pthread_self()->signal_is_pending[SIGHUP])
+          goto wait_again;      /* Nope */
         odprintf("write(%d, 0x%p, %d) EINTR",fd,buf,count);
         CancelIo(handle);
         waitInGOR = TRUE;
@@ -1311,9 +1225,12 @@ int win32_unix_read(int fd, void * buf, int count)
       errno = EIO;
       return -1;
     } else {
+    wait_again:
       if(WaitForMultipleObjects(2,self->private_events.events,
                                 FALSE,INFINITE) != WAIT_OBJECT_0) {
         /* Something happened. Interrupt? */
+        if (!pthread_self()->signal_is_pending[SIGHUP])
+          goto wait_again;      /* Nope */
         odprintf("read(%d, 0x%p, %d) EINTR",fd,buf,count);
         CancelIo(handle);
         waitInGOR = TRUE;
