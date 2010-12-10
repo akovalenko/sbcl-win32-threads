@@ -204,5 +204,7 @@ is never in the linkage-table."
     (plusp (hash-table-count symbols)))
   (defun list-dynamic-foreign-symbols ()
     (loop for symbol being each hash-key in symbols
-         collect symbol)))
-
+         collect symbol))
+  (defun list-undefined-foreign-symbols ()
+    (loop for symbol being each hash-key in undefineds
+          collect symbol)))
