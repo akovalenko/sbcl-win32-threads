@@ -696,9 +696,28 @@ void unlock_suspend_info(const char * file, int line)
 void roll_thread_to_safepoint(struct thread * thread)
 {
   struct thread * p;
-  int in_safepoint = 0;
+  int io_resignal = 1;
   odprintf("roll_thread_to_safepoint(0x%p) begin", thread->os_thread);
-  pthread_mutex_lock(&suspend_info.world_lock);
+  /* Danger: inverted lock ordering. GC may have taken world_lock and
+     may be waiting for all_thread_lock that we hold (caller responsible).
+     We'd wait forever.
+
+     Well, what if we trylock instead? If we fail, GC is holding the
+     world_lock. Asymmetric unlocking sequence in gc_start_the_world
+     makes sure that failing trylock (with taken all_threads_lock) is
+     a sign of GC phase 1, before unmap_gc_page. Hence we take a
+     shortcut: GC will stop each and every thread that is not GC_SAFE,
+     and our interruption signal will be received. We just have to
+     resignal io interruption event for GC_SAFE ones: no
+     suspend/resume required.
+  */
+  if (pthread_mutex_trylock(&suspend_info.world_lock)) {
+    odprintf("world_lock contested. Relying on GC to deliver interrupt notification.");
+    if (SymbolValue(GC_SAFE, thread) == T) {
+      SetEvent(thread->private_events.events[1]);
+    }
+    return;
+  }
   odprintf("world_lock taken");
 
   lock_suspend_info(__FILE__, __LINE__);
@@ -717,8 +736,26 @@ void roll_thread_to_safepoint(struct thread * thread)
   // Phase 1: Make sure that th is in gc-safe code or noted the need to interrupt
 
   if (SymbolValue(GC_SAFE, thread) == NIL) {
-    wait_for_thread_state_change(thread, STATE_RUNNING);
-    in_safepoint = 1;
+    /* What if it's running GC now, stopping the world and about to
+       take a world-lock? It won't be GC-safe, definitely - and we'd
+       wait forever for thread state change here.
+
+       The answer is that it will have GC_PENDING :IN-PROGRESS.  Well,
+       what if some other thread does the same? Then it waits on
+       world-lock while we stop/restart a few other threads, including
+       our interrupt recipient; when we free the world-lock, it's free
+       to continue.
+
+       And how it depends on whether we are GC_SAFE now?
+
+    */
+    if (SymbolValue(GC_PENDING, thread) == NIL) {
+      /* If GC_PENDING is NIL _here_, safepoint will definitely happen
+         before next GC in thread, so thread will acknowledge the
+         interrupt. */
+      wait_for_thread_state_change(thread, STATE_RUNNING);
+    }
+    io_resignal = 0;
   }
 
   odprintf("mapping gc page");
@@ -731,7 +768,7 @@ void roll_thread_to_safepoint(struct thread * thread)
   suspend_info.suspend = 0;
   unlock_suspend_info(__FILE__, __LINE__);
 
-  if (!in_safepoint) {
+  if (io_resignal) {
     SetEvent(thread->private_events.events[1]);
   }
   odprintf("mapped gc page, iterating over threads and waking them");
@@ -780,8 +817,13 @@ int check_pending_gc()
   struct thread * self = arch_os_get_current_thread();
   int done = 0;
   sigset_t sigset;
+  /* Take off recursive protection as soon as GC_PENDING becomes :IN-PROGRESS */
+  if ((SymbolValue(IN_SAFEPOINT,self) == T) &&
+      (SymbolValue(GC_PENDING,self) != T)) {
+    SetSymbolValue(IN_SAFEPOINT,NIL,self);
+  }
   if (thread_may_gc() && (SymbolValue(IN_SAFEPOINT, self) == NIL)) {
-    while ((SymbolValue(GC_PENDING, self) == T)) {
+    if ((SymbolValue(GC_PENDING, self) == T)) {
       bind_variable(IN_SAFEPOINT,T,self);
       if (!get_pseudo_atomic_atomic(self) && get_pseudo_atomic_interrupted(self))
         clear_pseudo_atomic_interrupted(self);
@@ -874,11 +916,9 @@ void suspend()
   if ((SymbolValue(GC_PENDING, self) == T)&&
       (SymbolValue(STOP_FOR_GC_PENDING, self) == T)) {
     SetSymbolValue(GC_PENDING, NIL, self);
+    maybe_unblock_deferrables_blocked_by_gc(NULL);
   }
   SetSymbolValue(STOP_FOR_GC_PENDING, NIL, self);
-  if (!get_pseudo_atomic_atomic(self) && get_pseudo_atomic_interrupted(self))
-    clear_pseudo_atomic_interrupted(self);
-  maybe_unblock_deferrables_blocked_by_gc(NULL);
 }
 
 void suspend_briefly()
@@ -1067,7 +1107,6 @@ void gc_safepoint()
   done |= maybe_suspend_for_gc(); /* If we can, we suspend
                                      here. GC-PENDING goes away. */
   done |= maybe_wait_until_gc_ends(); /* If we arrived during ongoing GC.. */
-
   done |= check_pending_gc();
   done |= check_pending_interrupts(); /* After that we check _allowed_
                                          interrupts */
@@ -1300,11 +1339,14 @@ void gc_start_the_world()
         }
     }
 
-    lock_ret = pthread_mutex_unlock(&all_threads_lock);
-    gc_assert(lock_ret == 0);
 #ifdef LISP_FEATURE_WIN32
+    /* Ordering: roll_thread_to_safepoint now can be sure that if it
+       fails on world_lock while holding all_thread_lock, there is a
+       GC in phase 1 */
     pthread_mutex_unlock(&suspend_info.world_lock);
 #endif
+    lock_ret = pthread_mutex_unlock(&all_threads_lock);
+    gc_assert(lock_ret == 0);
 #ifdef LOCK_CREATE_THREAD
     lock_ret = pthread_mutex_unlock(&create_thread_lock);
     gc_assert(lock_ret == 0);
@@ -1351,19 +1393,26 @@ kill_safely(os_thread_t os_thread, int signal)
 #ifdef LISP_FEATURE_SB_THREAD
         sigset_t oldset;
         struct thread *thread;
+        /* Frequent special case: resignalling to self.  The idea is
+           that leave_region safepoint will acknowledge the signal, so
+           there is no need to take locks, roll thread to safepoint
+           etc. */
+        if (os_thread == pthread_self()) {
+          pthread_kill(os_thread, signal);
+          return 0;
+        }
         /* pthread_kill is not async signal safe and we don't want to be
          * interrupted while holding the lock. */
         block_deferrable_signals(0, &oldset);
         pthread_mutex_lock(&all_threads_lock);
         for (thread = all_threads; thread; thread = thread->next) {
-            if (thread->os_thread == os_thread) {
-              int status = pthread_kill(os_thread, signal);
-              if (status)
+          if (thread->os_thread == os_thread) {
+            /* We found the target (well, maybe just a coincided
+               thread id -- it's harmless). */
+            int status = pthread_kill(os_thread, signal);
+            roll_thread_to_safepoint(thread);
+            if (status)
                 lose("kill_safely: pthread_kill failed with %d\n", status);
-              #ifdef LISP_FEATURE_WIN32
-              if (os_thread != pthread_self())
-                roll_thread_to_safepoint(thread);
-              #endif
               break;
             }
         }

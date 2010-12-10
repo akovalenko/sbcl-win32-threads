@@ -898,7 +898,6 @@
   ;; We expect a (probable) error here: parellel readers and writers
   ;; on a hash-table are not expected to work -- but we also don't
   ;; expect this to corrupt the image.
-  #+win32 (error "Corrupts the image?")
   (let* ((hash (make-hash-table))
          (*errors* nil)
          (threads (list (sb-thread:make-thread
@@ -1235,6 +1234,8 @@
 
 (format t "backtrace test done~%")
 
+(check-deferrables-unblocked-or-lose 0)
+
 (format t "~&starting gc deadlock test: WARNING: THIS TEST WILL HANG ON FAILURE!~%")
 
 (with-test (:name (:gc-deadlock))
@@ -1299,6 +1300,8 @@
     (setf one (make-box)
           two (make-box)
           three (make-box))))
+
+(check-deferrables-unblocked-or-lose 0)
 
 (with-test (:name (:funcallable-instances))
   ;; the funcallable-instance implementation used not to be threadsafe

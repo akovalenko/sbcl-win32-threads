@@ -1109,22 +1109,21 @@ run in same the order they were sent."
       (with-interrupts (funcall function))))
   #!-(and (not sb-thread) win32)
   (without-interrupts
-    (with-all-threads-lock
-      (let ((os-thread (thread-os-thread thread)))
-        (cond ((not os-thread)
-               (error 'interrupt-thread-error :thread thread))
-              (t
-               (unless
-                   (with-interruptions-lock (thread)
-                     ;; Append to the end of the interruptions queue. It's
-                     ;; O(N), but it does not hurt to slow interruptors down a
-                     ;; bit when the queue gets long.
-                     (shiftf (thread-interruptions thread)
-                             (append (thread-interruptions thread)
-                                     (list function))))
-                 (when (minusp (kill-safely os-thread
-                                            +interrupt-signal+))
-                   (error 'interrupt-thread-error :thread thread)))))))))
+    (let ((os-thread (thread-os-thread thread)))
+      (cond ((not os-thread)
+             (error 'interrupt-thread-error :thread thread))
+            (t
+             (unless
+                 (with-interruptions-lock (thread)
+                   ;; Append to the end of the interruptions queue. It's
+                   ;; O(N), but it does not hurt to slow interruptors down a
+                   ;; bit when the queue gets long.
+                   (shiftf (thread-interruptions thread)
+                           (append (thread-interruptions thread)
+                                   (list function))))
+               (when (minusp (kill-safely os-thread
+                                          +interrupt-signal+))
+                 (error 'interrupt-thread-error :thread thread))))))))
 
 (defun terminate-thread (thread)
   #!+sb-doc
