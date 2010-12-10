@@ -39,10 +39,14 @@
               ;; defined in DLL, we may compile a dataref to import
               ;; table entry [if _imp__`name' is defined] and save one
               ;; level of indirection.
-              (let ((import-table-entry-name
-                     (concatenate 'string "_imp__" name)))
-                (if (find-foreign-symbol-in-table import-table-entry-name
-                                                  *static-foreign-symbols*)
+              (let* ((import-table-entry-name
+                      (concatenate 'string "_imp__" name))
+                     (import-table-entry-addr
+                      (find-foreign-symbol-in-table import-table-entry-name
+                                                  *static-foreign-symbols*)))
+
+                (if (and import-table-entry-addr
+                         (not (zerop import-table-entry-addr)))
                     ;; we have to check it even on sb-xc-host. No
                     ;; import entries for SBCL's own statics.
                     `(foreign-symbol-dataref-sap ,import-table-entry-name) ; VOP
