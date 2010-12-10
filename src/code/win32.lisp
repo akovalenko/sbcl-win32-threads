@@ -247,13 +247,17 @@
   (handle handle))
 
 (defun microsleep (microseconds)
-  (without-interrupts
-    (let ((timer (create-waitable-timer nil 0 nil)))
-      (set-waitable-timer timer (- (* 10 microseconds)) 0 nil nil 0)
-      (unwind-protect
-           (do () ((with-local-interrupts
-                     (zerop (wait-object-or-signal timer)))))
-        (close-handle timer)))))
+  (let ((*allow-with-interrupts* *interrupts-enabled*))
+    (without-interrupts
+      (let ((timer (create-waitable-timer nil 0 nil)))
+        (set-waitable-timer timer (- (* 10 microseconds)) 0 nil nil 0)
+        (unwind-protect
+             (do () ((with-local-interrupts
+                       (zerop (wait-object-or-signal timer)))))
+          (close-handle timer))))))
+
+(defun sb!unix:nanosleep (sec nsec)
+  (microsleep (+ (* sec 1000000) (* nsec 1000))))
 
 #!+sb-unicode
 (progn
@@ -588,7 +592,7 @@
 ;;
 ;; http://msdn.microsoft.com/library/en-us/dllproc/base/getcurrentprocess.asp
 (declaim (inline get-current-process))
-(define-alien-routine ("GetCurrentProcess@0" get-current-process) handle)
+(define-alien-routine ("GetCurrentProcess" get-current-process) handle)
 
 ;;;; Process time information
 
@@ -690,6 +694,12 @@ UNIX epoch: January 1st 1970."
   (declare (type simple-string name value))
   (void-syscall* (("SetEnvironmentVariable" 8 t) system-string system-string)
                  name value))
+
+;; Let SETENV be an accessor for POSIX-GETENV. Just for fun.
+(defun (setf sb!unix::posix-getenv) (new-value name)
+  (if (setenv name new-value)
+      new-value
+      (posix-getenv name)))
 
 (defmacro c-sizeof (s)
   "translate alien size (in bits) to c-size (in bytes)"
@@ -947,6 +957,16 @@ UNIX epoch: January 1st 1970."
                 ;; calls. On real Windows, named pipes and sockets are
                 ;; disctinct, and peek-named-pipe will fail.
                 (zerop (peek-named-pipe handle nil 0 nil nil nil))
+                (/= 5 (get-last-error))
                 (plusp (socket-input-available handle)))))
           (multiple-value-prog1 (sb!unix:unix-close fd)
-            (when socketp (close-socket handle)))))))
+            (when socketp
+              (close-socket handle)))))))
+
+(define-alien-routine ("GetExitCodeProcess" get-exit-code-process)
+    int
+  (handle unsigned) (exit-code unsigned :out))
+
+(define-alien-routine ("GetExitCodeThread" get-exit-code-thread)
+    int
+  (handle handle) (exit-code dword :out))
