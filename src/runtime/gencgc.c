@@ -536,11 +536,8 @@ void zero_pages_with_mmap(page_index_t start, page_index_t end) {
       return;
 
     os_invalidate(addr, length);
-#if defined(LISP_FEATURE_WIN32)
-    new_addr = os_validate_recommit(addr, length);
-#else
     new_addr = os_validate(addr, length);
-#endif
+
     if (new_addr == NULL || new_addr != addr) {
         lose("remap_free_pages: page moved, 0x%08x ==> 0x%08x",
              start, new_addr);
@@ -3858,7 +3855,7 @@ preserve_context_registers (os_context_t *c)
     /* On Darwin the signal context isn't a contiguous block of memory,
      * so just preserve_pointering its contents won't be sufficient.
      */
-#if defined(LISP_FEATURE_DARWIN)
+#if defined(LISP_FEATURE_DARWIN) || defined(LISP_FEATURE_WIN32)
 #if defined LISP_FEATURE_X86
     preserve_pointer((void*)*os_context_register_addr(c,reg_EAX));
     preserve_pointer((void*)*os_context_register_addr(c,reg_ECX));
@@ -3985,16 +3982,11 @@ garbage_collect_generation(generation_index_t generation, int raise)
                 {
                   CONTEXT context;
                   os_context_t ctx;
-                  if (!pthread_np_get_thread_context(th->os_thread, &context))
-                    lose("Unable to get thread context for thread 0x%x\n", (int)th->os_thread);
+/*                  if (!pthread_np_get_thread_context(th->os_thread, &context))
+                    lose("Unable to get thread context for thread 0x%x\n", (int)th->os_thread); */
+                  pthread_np_get_my_context_subset(&context);
                   ctx.win32_context = &context;
                   preserve_context_registers(&ctx);
-
-                  pthread_mutex_lock(&th->interrupt_data->win32_data.lock);
-                  for (i = 0; i < th->interrupt_data->win32_data.interrupts_count; ++i) {
-                    preserve_pointer((void*)th->interrupt_data->win32_data.interrupts[i]);
-                  }
-                  pthread_mutex_unlock(&th->interrupt_data->win32_data.lock);
                 }
 #endif
             } else {
@@ -4008,12 +4000,6 @@ garbage_collect_generation(generation_index_t generation, int raise)
                 preserve_context_registers(&ctx);
                 pthread_np_resume(th->os_thread);
                 esp = (void**)context.Esp;
-
-                pthread_mutex_lock(&th->interrupt_data->win32_data.lock);
-                for (i = 0; i < th->interrupt_data->win32_data.interrupts_count; ++i) {
-                  preserve_pointer((void*)th->interrupt_data->win32_data.interrupts[i]);
-                }
-                pthread_mutex_unlock(&th->interrupt_data->win32_data.lock);
 #else
                 void **esp1;
                 free=fixnum_value(SymbolValue(FREE_INTERRUPT_CONTEXT_INDEX,th));
@@ -4706,9 +4692,7 @@ general_alloc_internal(long nbytes, int page_type_flag, struct alloc_region *reg
                         (context ? os_context_sigmask_addr(context) : NULL);
                 }
 #else
-#ifndef LISP_FEATURE_WIN32
                 maybe_save_gc_mask_and_block_deferrables(NULL);
-#endif
 #endif
             }
         }
@@ -4735,6 +4719,8 @@ general_alloc_internal(long nbytes, int page_type_flag, struct alloc_region *reg
 lispobj *
 general_alloc(long nbytes, int page_type_flag)
 {
+  lispobj* result;
+  DWORD lastError = GetLastError();
     struct thread *thread = arch_os_get_current_thread();
     /* Select correct region, and call general_alloc_internal with it.
      * For other then boxed allocation we must lock first, since the
@@ -4745,23 +4731,28 @@ general_alloc(long nbytes, int page_type_flag)
 #else
         struct alloc_region *region = &boxed_region;
 #endif
-        return general_alloc_internal(nbytes, page_type_flag, region, thread);
+        result = general_alloc_internal(nbytes, page_type_flag, region, thread);
     } else if (UNBOXED_PAGE_FLAG == page_type_flag) {
         lispobj * obj;
         gc_assert(0 == thread_mutex_lock(&allocation_lock));
         obj = general_alloc_internal(nbytes, page_type_flag, &unboxed_region, thread);
         gc_assert(0 == thread_mutex_unlock(&allocation_lock));
-        return obj;
+        result = obj;
     } else {
         lose("bad page type flag: %d", page_type_flag);
     }
+    SetLastError(lastError);
+    return result;
 }
 
 lispobj *
 alloc(long nbytes)
 {
-    gc_assert(get_pseudo_atomic_atomic(arch_os_get_current_thread()));
-    return general_alloc(nbytes, BOXED_PAGE_FLAG);
+  lispobj* obj;
+  gc_assert(get_pseudo_atomic_atomic(arch_os_get_current_thread()));
+
+  obj = general_alloc(nbytes, BOXED_PAGE_FLAG);
+  return obj;
 }
 
 /*
@@ -4816,14 +4807,15 @@ gencgc_handle_wp_violation(void* fault_addr)
              * we had better not have the second one lose here if it
              * does this test after the first one has already set wp=0
              */
-            if(page_table[page_index].write_protected_cleared != 1)
-                lose("fault in heap page %d not marked as write-protected\nboxed_region.first_page: %d, boxed_region.last_page %d\n",
+            if(page_table[page_index].write_protected_cleared != 1) {
+                lose(stderr,"fault in heap page %d not marked as write-protected\nboxed_region.first_page: %d, boxed_region.last_page %d\n",
                      page_index, boxed_region.first_page,
                      boxed_region.last_page);
+            }
         }
         ret = thread_mutex_unlock(&free_pages_lock);
         gc_assert(ret == 0);
-        /* Don't worry, we can handle it. */
+         /* Don't worry, we can handle it. */
         return 1;
     }
 }
