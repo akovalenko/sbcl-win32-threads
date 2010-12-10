@@ -232,19 +232,17 @@ futex_wait(int *lock_word, int oldval, long sec, unsigned long usec)
     int ret, result;
     struct futex *futex;
     sigset_t oldset;
+    int interrupted_by_signal = 0;
     struct timeval tv, *timeout;
-
-#if defined(LISP_FEATURE_WIN32)
-    gc_enter_safe_region();
-#endif
 
 again:
     if (sec < 0)
         timeout = NULL;
     else {
         ret = gettimeofday(&tv, NULL);
-        if (ret != 0)
-            return ret;
+        if (ret != 0) {
+          return ret;
+        }
         tv.tv_sec = tv.tv_sec + sec + (tv.tv_usec + usec) / 1000000;
         tv.tv_usec = (tv.tv_usec + usec) % 1000000;
         timeout = &tv;
@@ -268,10 +266,8 @@ again:
 
     /* It's not possible to unwind frames across pthread_cond_wait(3). */
     for (;;) {
-#if !defined(LISP_FEATURE_WIN32)
         int i;
         sigset_t pendset;
-#endif
         struct timespec abstime;
 
         ret = futex_relative_to_abs(&abstime, FUTEX_WAIT_NSEC);
@@ -294,31 +290,27 @@ again:
         /* futex system call of Linux returns with EINTR errno when
          * it's interrupted by signals.  Check pending signals here to
          * emulate this behaviour. */
-#if !defined(LISP_FEATURE_WIN32)
         sigpending(&pendset);
         for (i = 1; i < NSIG; i++) {
-            if (sigismember(&pendset, i) && sigismember(&newset, i)) {
-                result = EINTR;
-                goto done;
+            if (sigismember(&pendset, i) && !sigismember(&oldset, i)) {
+              result = EINTR;
+              interrupted_by_signal = 1;
+              goto done;
             }
         }
-#endif
     }
 done:
     ; /* Null statement is required between label and pthread_cleanup_pop. */
     pthread_cleanup_pop(1);
     pthread_sigmask(SIG_SETMASK, &oldset, NULL);
-
     /* futex_wake() in linux-os.c loops when futex system call returns
      * EINTR.  */
     if (result == EINTR) {
         sched_yield();
-        goto again;
+        if (!interrupted_by_signal)
+          goto again;
+        return 2;
     }
-
-#if defined(LISP_FEATURE_WIN32)
-        gc_leave_region();
-#endif
 
     if (result == ETIMEDOUT)
         return 1;
