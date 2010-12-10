@@ -895,16 +895,12 @@ int thread_may_gc()
   // Thread may gc if all of these are true:
   // 1) SIG_STOP_FOR_GC is unblocked
   // 2) GC_INHIBIT is NIL
-  // 3) INTERRUPTS_ENABLED is not-NIL //?
+  // 3) INTERRUPTS_ENABLED is not-NIL //? not so
   // 4) !pseudo_atomic
 
   struct thread * self = arch_os_get_current_thread();
 
   if (SymbolValue(GC_INHIBIT, self) != NIL) {
-    return 0;
-  }
-
-  if (SymbolValue(INTERRUPTS_ENABLED, self) == NIL) {
     return 0;
   }
 
