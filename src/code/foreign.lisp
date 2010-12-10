@@ -54,21 +54,27 @@ Dynamic symbols are entered into the linkage-table if they aren't there already.
 
 On non-linkage-table ports signals an error if the symbol isn't found."
   (declare (ignorable datap))
-  (let ((static (find-foreign-symbol-in-table name  *static-foreign-symbols*)))
+  (let ((static (find-foreign-symbol-in-table name *static-foreign-symbols*))
+        (static-import #!+win32
+          (find-foreign-symbol-in-table
+                        (concatenate 'base-string "_imp__" name)
+                        *static-foreign-symbols*)))
     (if static
         (values static nil)
-        #!+os-provides-dlopen
-        (progn
-          #-sb-xc-host
-          (values #!-linkage-table
-                  (ensure-dynamic-foreign-symbol-address name)
-                  #!+linkage-table
-                  (ensure-foreign-symbol-linkage name datap)
-                  t)
-          #+sb-xc-host
-          (error 'undefined-alien-error :name name))
-        #!-os-provides-dlopen
-        (error 'undefined-alien-error :name name))))
+        (if #!+win32 (and static-import (not (zerop static-import))) #!-win32 nil
+            (values static-import t)
+            #!+os-provides-dlopen
+            (progn
+              #-sb-xc-host
+              (values #!-linkage-table
+                      (ensure-dynamic-foreign-symbol-address name)
+                      #!+linkage-table
+                      (ensure-foreign-symbol-linkage name datap)
+                      t)
+              #+sb-xc-host
+              (error 'undefined-alien-error :name name))
+            #!-os-provides-dlopen
+            (error 'undefined-alien-error :name name)))))
 
 (defun foreign-symbol-sap (symbol &optional datap)
   "Returns a SAP corresponding to the foreign symbol. DATAP must be true if the
