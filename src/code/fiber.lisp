@@ -73,6 +73,8 @@
 
 (in-package "SB-THREAD")
 
+(load-shared-object "kernel32.dll")
+
 ;;; Typedef for foreign thread: unsigned word. Should be maintained to
 ;;; accept value range returned by (current-thread-os-thread),
 ;;; (thread-os-thread) etc.
@@ -118,7 +120,7 @@
 ;;; Create fiber (see MAKE-THREAD). Turned out that fiber running an
 ;;; empty inner function is still usable for many purposes, so
 ;;; function argument is now a keyword one, unlike in make-thread.
-(defun make-fiber (&key function name)
+(defun make-fiber (&key function name ephemeral)
   (set-fiber-factory-mode 1)
   ;; SBCL uses semaphore to synchronize thread creator with thread
   ;; setup. Fibers aren't scheduled automatically now, with the only
@@ -134,7 +136,8 @@
              (switch-to-fiber self)
              ;; C-side callback API makes empty fiber functions useful.
              (when function (funcall function))))
-      (unwind-protect (make-thread #'run-fiber :name name)
+      (unwind-protect (make-thread #'run-fiber :name name
+                                   :ephemeral ephemeral)
         (set-fiber-factory-mode 0)))))
 
 ;;; Make fiber for entering callbacks in a foreign thread.  Fibers
@@ -221,9 +224,11 @@ fiber reports."
     (setf
      *lisp-fiber-cleanup-thread*
      (make-thread #'fiber-queue-monitor
-                  :name "foreign-thread-cleanup")
+                  :name "foreign-thread-cleanup"
+                  :ephemeral t)
      *lisp-fiber-factory-thread*
-     (make-fiber :name "foreign-thread-helper")))
+     (make-fiber :name "foreign-thread-helper"
+                 :ephemeral t)))
    (alien-sap make-lisp-fiber)))
 
 (defun foreign-thread-p (thread)
