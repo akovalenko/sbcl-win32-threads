@@ -44,7 +44,8 @@
     sb!di::handle-breakpoint
     sb!di::handle-single-step-trap
     fdefinition-object
-    #!+win32 sb!kernel::handle-win32-exception))
+    #!+win32 sb!kernel::handle-win32-exception
+    #!+sb-thread sb!thread::run-interruption))
 
 (defparameter *common-static-symbols*
   '(t
