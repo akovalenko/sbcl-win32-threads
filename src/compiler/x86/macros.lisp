@@ -236,20 +236,36 @@
 (defun allocation-inline (alloc-tn size)
   (let ((ok (gen-label))
         (done (gen-label))
+        #!+(and sb-thread win32)
+        (scratch-tn (loop for my-tn in `(,eax-tn ,ebx-tn ,edx-tn)
+                          until (and (not (location= alloc-tn my-tn))
+                                     (or (not (tn-p size))
+                                         (not (location= size my-tn))))
+                          finally (return my-tn)))
+        (tls-prefix #!+sb-thread :fs)
         (free-pointer
          (make-ea :dword :disp
                   #!+sb-thread (* n-word-bytes thread-alloc-region-slot)
                   #!-sb-thread (make-fixup "boxed_region" :foreign)
-                  :scale 1)) ; thread->alloc_region.free_pointer
+                  :scale 1))       ; thread->alloc_region.free_pointer
         (end-addr
          (make-ea :dword :disp
                   #!+sb-thread (* n-word-bytes (1+ thread-alloc-region-slot))
                   #!-sb-thread (make-fixup "boxed_region" :foreign 4)
-                  :scale 1)))   ; thread->alloc_region.end_addr
+                  :scale 1)))          ; thread->alloc_region.end_addr
     (unless (and (tn-p size) (location= alloc-tn size))
       (inst mov alloc-tn size))
-    (inst add alloc-tn free-pointer #!+sb-thread :fs)
-    (inst cmp alloc-tn end-addr #!+sb-thread :fs)
+    #!+(and sb-thread win32)
+    (progn
+      (inst push scratch-tn)
+      (inst mov scratch-tn
+            (make-ea :dword :disp
+                     +win32-tib-arbitrary-field-offset+) tls-prefix)
+      (setf (ea-base free-pointer) scratch-tn
+            (ea-base end-addr) scratch-tn
+            tls-prefix nil))
+    (inst add alloc-tn free-pointer tls-prefix)
+    (inst cmp alloc-tn end-addr tls-prefix)
     (inst jmp :be ok)
     (let ((dst (ecase (tn-offset alloc-tn)
                  (#.eax-offset "alloc_overflow_eax")
@@ -264,14 +280,15 @@
     ;; Swap ALLOC-TN and FREE-POINTER
     (cond ((and (tn-p size) (location= alloc-tn size))
            ;; XCHG is extremely slow, use the xor swap trick
-           (inst xor alloc-tn free-pointer #!+sb-thread :fs)
-           (inst xor free-pointer alloc-tn #!+sb-thread :fs)
-           (inst xor alloc-tn free-pointer #!+sb-thread :fs))
+           (inst xor alloc-tn free-pointer tls-prefix)
+           (inst xor free-pointer alloc-tn tls-prefix)
+           (inst xor alloc-tn free-pointer tls-prefix))
           (t
            ;; It's easier if SIZE is still available.
-           (inst mov free-pointer alloc-tn #!+sb-thread :fs)
+           (inst mov free-pointer alloc-tn tls-prefix)
            (inst sub alloc-tn size)))
-    (emit-label done))
+    (emit-label done)
+    (inst pop scratch-tn))
   (values))
 
 
@@ -290,10 +307,6 @@
     (dynamic-extent
      (allocation-dynamic-extent alloc-tn size lowtag))
     ((or (null inline) (policy inline (>= speed space)))
-     ;; FIXME Win32
-     #!+win32
-     (allocation-notinline alloc-tn size)
-     #!-win32
      (allocation-inline alloc-tn size))
     (t
      (allocation-notinline alloc-tn size)))
