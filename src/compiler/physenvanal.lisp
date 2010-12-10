@@ -41,6 +41,7 @@
   (recheck-dynamic-extent-lvars component)
   (find-cleanup-points component)
   (tail-annotate component)
+  (analyze-indirect-lambda-vars component)
 
   (dolist (fun (component-lambdas component))
     (when (null (leaf-refs fun))
@@ -207,6 +208,35 @@
                                 (flood (get-node-physenv ref))))))))))
       (flood ref-physenv)))
   (values))
+
+;;; Find LAMBDA-VARs that are marked as needing to support indirect
+;;; access (SET at some point after initial creation) that are present
+;;; in CLAMBDAs not marked as being DYNAMIC-EXTENT (meaning that the
+;;; value-cell involved must be able to survive past the extent of the
+;;; allocating frame), and mark them (the LAMBDA-VARs) as needing
+;;; explicit value-cells.  Because they are already closed-over, the
+;;; LAMBDA-VARs already appear in the closures of all of the CLAMBDAs
+;;; that need checking.
+(defun analyze-indirect-lambda-vars (component)
+  (dolist (fun (component-lambdas component))
+    (let ((entry-fun (functional-entry-fun fun)))
+      ;; We also check the ENTRY-FUN, as XEPs for LABELS or FLET
+      ;; functions aren't set to be DX even if their underlying
+      ;; CLAMBDAs are, and if we ever get LET-bound anonymous function
+      ;; DX working, it would mark the XEP as being DX but not the
+      ;; "real" CLAMBDA.  This works because a FUNCTIONAL-ENTRY-FUN is
+      ;; either NULL, a self-pointer (for :TOPLEVEL functions), a
+      ;; pointer from an XEP to its underlying function (for :EXTERNAL
+      ;; functions), or a pointer from an underlying function to its
+      ;; XEP (for non-:TOPLEVEL functions with XEPs).
+      (unless (or (leaf-dynamic-extent fun)
+                  (and entry-fun
+                       (leaf-dynamic-extent entry-fun)))
+        (let ((closure (physenv-closure (lambda-physenv fun))))
+          (dolist (var closure)
+            (when (and (lambda-var-p var)
+                       (lambda-var-indirect var))
+              (setf (lambda-var-explicit-value-cell var) t))))))))
 
 ;;;; non-local exit
 

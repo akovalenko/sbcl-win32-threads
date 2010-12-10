@@ -963,7 +963,7 @@
 ;;; If X is a symbol, see whether it is present in *FEATURES*. Also
 ;;; handle arbitrary combinations of atoms using NOT, AND, OR.
 (defun featurep (x)
-  (etypecase x
+  (typecase x
     (cons
      (case (car x)
        ((:not not)
@@ -977,7 +977,10 @@
        ((:or or) (some #'featurep (cdr x)))
        (t
         (error "unknown operator in feature expression: ~S." x))))
-    (symbol (not (null (memq x *features*))))))
+    (symbol (not (null (memq x *features*))))
+    (t
+      (error "invalid feature expression: ~S" x))))
+
 
 ;;;; utilities for two-VALUES predicates
 
@@ -1126,10 +1129,54 @@
       (translate-logical-pathname possibly-logical-pathname)
       possibly-logical-pathname))
 
-(defun deprecation-warning (bad-name &optional good-name)
-  (warn "using deprecated ~S~@[, should use ~S instead~]"
-        bad-name
-        good-name))
+;;;; Deprecating stuff
+
+(defun deprecation-error (since name replacement)
+  (error 'deprecation-error
+          :name name
+          :replacement replacement
+          :since since))
+
+(defun deprecation-warning (state since name replacement
+                            &key (runtime-error (neq :early state)))
+  (warn (ecase state
+          (:early 'early-deprecation-warning)
+          (:late 'late-deprecation-warning)
+          (:final 'final-deprecation-warning))
+        :name name
+        :replacement replacement
+        :since since
+        :runtime-error runtime-error))
+
+(defun deprecated-function (since name replacement)
+  (lambda (&rest deprecated-function-args)
+    (declare (ignore deprecated-function-args))
+    (deprecation-error since name replacement)))
+
+(defun deprecation-compiler-macro (state since name replacement)
+  (lambda (form env)
+    (declare (ignore env))
+    (deprecation-warning state since name replacement)
+    form))
+
+(defmacro define-deprecated-function (state since name replacement lambda-list &body body)
+  (let ((doc (let ((*package* (find-package :keyword)))
+               (format nil "~@<~S has been deprecated as of SBCL ~A~@[, use ~S instead~].~:>"
+                       name since replacement))))
+    `(progn
+       ,(ecase state
+               ((:early :late)
+                `(defun ,name ,lambda-list
+                   ,doc
+                   ,@body))
+               ((:final)
+                `(progn
+                   (declaim (ftype (function * nil) ,name))
+                   (setf (fdefinition ',name)
+                         (deprecated-function ',name ',replacement ,since))
+                   (setf (documentation ',name 'function) ,doc))))
+       (setf (compiler-macro-function ',name)
+             (deprecation-compiler-macro ,state ,since ',name ',replacement)))))
 
 ;;; Anaphoric macros
 (defmacro awhen (test &body body)

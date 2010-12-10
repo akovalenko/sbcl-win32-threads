@@ -6,6 +6,9 @@
 ;;; possible blank lines or other whitespace, and a single
 ;;; double-quoted string value alone on its own line.
 ;;;
+;;; Local additions to the version number can be effected via
+;;; branch-version.lisp-expr, which is not stored in the CVS.
+;;;
 ;;; ANSI says LISP-IMPLEMENTATION-VERSION can be NIL "if no
 ;;; appropriate and relevant result can be produced", but as long as
 ;;; we control the build, we can always assign an appropriate and
@@ -17,4 +20,4 @@
 ;;; checkins which aren't released. (And occasionally for internal
 ;;; versions, especially for internal versions off the main CVS
 ;;; branch, it gets hairier, e.g. "0.pre7.14.flaky4.13".)
-"1.0.44.wth.223"
+"1.0.44.wth.224"
