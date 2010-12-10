@@ -514,6 +514,9 @@
 ;;; the cold core starts up
 (defvar *current-debug-sources*)
 
+;;; foreign symbol references
+(defparameter *cold-foreign-undefined-symbols* nil)
+
 ;;; the name of the object file currently being cold loaded (as a string, not a
 ;;; pathname), or NIL if we're not currently cold loading any object file
 (defvar *cold-load-filename* nil)
@@ -1598,38 +1601,41 @@ core and return a descriptor to it."
                                 (subseq line (1+ p2)))
                         (values (parse-integer line :end p1 :radix 16)
                                 (subseq line (1+ p2))))
-                  ;; KLUDGE CLH 2010-05-31: on darwin, nm gives us
-                  ;; _function but dlsym expects us to look up
-                  ;; function, without the leading _ . Therefore, we
-                  ;; strip it off here.
-                  #!+darwin
-                  (when (equal (char name 0) #\_)
-                    (setf name (subseq name 1)))
-                  (multiple-value-bind (old-value found)
-                      (gethash name *cold-foreign-symbol-table*)
-                    (when (and found
-                               (not (= old-value value)))
-                      (warn "redefining ~S from #X~X to #X~X"
-                            name old-value value)))
-                  (/show "adding to *cold-foreign-symbol-table*:" name value)
-                  (setf (gethash name *cold-foreign-symbol-table*) value)
-                  #!+win32
-                  (let ((at-position (position #\@ name)))
-                    (when at-position
-                      (let ((name (subseq name 0 at-position)))
-                        (multiple-value-bind (old-value found)
-                            (gethash name *cold-foreign-symbol-table*)
-                          (when (and found
-                                     (not (= old-value value)))
-                            (warn "redefining ~S from #X~X to #X~X"
-                                  name old-value value)))
-                        (setf (gethash name *cold-foreign-symbol-table*)
-                              value)))))))))
+                  (unless (zerop value)
+                    ;; KLUDGE CLH 2010-05-31: on darwin, nm gives us
+                    ;; _function but dlsym expects us to look up
+                    ;; function, without the leading _ . Therefore, we
+                    ;; strip it off here.
+                    #!+darwin
+                    (when (equal (char name 0) #\_)
+                      (setf name (subseq name 1)))
+                    (multiple-value-bind (old-value found)
+                        (gethash name *cold-foreign-symbol-table*)
+                      (when (and found
+                                 (not (= old-value value)))
+                        (warn "redefining ~S from #X~X to #X~X"
+                              name old-value value)))
+                    (/show "adding to *cold-foreign-symbol-table*:" name value)
+                    (setf (gethash name *cold-foreign-symbol-table*) value)
+                    #!+win32
+                    (let ((at-position (position #\@ name)))
+                      (when at-position
+                        (let ((name (subseq name 0 at-position)))
+                          (multiple-value-bind (old-value found)
+                              (gethash name *cold-foreign-symbol-table*)
+                            (when (and found
+                                       (not (= old-value value)))
+                              (warn "redefining ~S from #X~X to #X~X"
+                                    name old-value value)))
+                          (setf (gethash name *cold-foreign-symbol-table*)
+                                value))))))))))
   (values))     ;; PROGN
 
 (defun cold-foreign-symbol-address (name)
   (or (find-foreign-symbol-in-table name *cold-foreign-symbol-table*)
-      *foreign-symbol-placeholder-value*
+      (progn
+        (pushnew name *cold-foreign-undefined-symbols* :test 'string=)
+        *foreign-symbol-placeholder-value*)
       (progn
         (format *error-output* "~&The foreign symbol table is:~%")
         (maphash (lambda (k v)
@@ -3253,9 +3259,11 @@ initially undefined function references:~2%")
   (let ((*cold-foreign-symbol-table* (make-hash-table :test 'equal)))
 
     (when core-file-name
-      (if symbol-table-file-name
-          (load-cold-foreign-symbol-table symbol-table-file-name)
+      (unless symbol-table-file-name
           (error "can't output a core file without symbol table file input")))
+
+    (when symbol-table-file-name
+      (load-cold-foreign-symbol-table symbol-table-file-name))
 
     ;; Now that we've successfully read our only input file (by
     ;; loading the symbol table, if any), it's a good time to ensure
