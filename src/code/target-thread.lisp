@@ -148,13 +148,15 @@ any time."
   `(with-system-mutex (*all-threads-lock*)
      ,@body))
 
-(defun list-all-threads ()
+(defun list-all-threads (&key ephemeral-too)
   #!+sb-doc
   "Return a list of the live threads. Note that the return value is
 potentially stale even before the function returns, as new threads may be
 created and old ones may exit at any time."
-  (with-all-threads-lock
-    (copy-list *all-threads*)))
+  (delete-if
+   (if ephemeral-too 'null 'thread-%ephemeral-p)
+   (with-all-threads-lock
+     (copy-list *all-threads*))))
 
 (declaim (inline current-thread-sap))
 (defun current-thread-sap ()
@@ -362,12 +364,11 @@ HOLDING-MUTEX-P."
   (sb!ext:compare-and-swap (mutex-%owner mutex) nil nil))
 
 (defun get-mutex (mutex &optional (new-owner *current-thread*)
-                                  (waitp t) (timeout nil))
+                  (waitp t) (timeout nil))
   #!+sb-doc
   "Deprecated in favor of GRAB-MUTEX."
   (declare (type mutex mutex) (optimize (speed 3))
            #!-sb-thread (ignore waitp timeout))
-  (let (#!+(and win32 sb-thread) (sb!impl::*disable-safepoints* t))
   ;; FIXME: reindent after merging windows-threads
   (unless new-owner
     (setq new-owner *current-thread*))
@@ -396,12 +397,12 @@ HOLDING-MUTEX-P."
       (when timeout
         (error "Mutex timeouts not supported on this platform."))
       (when (zerop (with-lutex-address (lutex (mutex-lutex mutex))
-                    (if waitp
-                        (with-interrupts (%lutex-lock lutex))
-                        (%lutex-trylock lutex))))
-       (setf (mutex-%owner mutex) new-owner)
-       (barrier (:write))
-       t))
+                     (if waitp
+                         (with-interrupts (%lutex-lock lutex))
+                         (%lutex-trylock lutex))))
+        (setf (mutex-%owner mutex) new-owner)
+        (barrier (:write))
+        t))
     #!-sb-lutex
     ;; This is a direct translation of the Mutex 2 algorithm from
     ;; "Futexes are Tricky" by Ulrich Drepper.
@@ -418,19 +419,19 @@ HOLDING-MUTEX-P."
                                                         +lock-contested+))))
              ;; Wait on the contested lock.
              (loop
-              (multiple-value-bind (to-sec to-usec stop-sec stop-usec deadlinep)
-                  (decode-timeout timeout)
-                (declare (ignore stop-sec stop-usec))
-                (case (with-pinned-objects (mutex)
-                        (futex-wait (mutex-state-address mutex)
-                                    (get-lisp-obj-address +lock-contested+)
-                                    (or to-sec -1)
-                                    (or to-usec 0)))
-                  ((1) (if deadlinep
-                           (signal-deadline)
-                           (return-from get-mutex nil)))
-                  ((2))
-                  (otherwise (return))))))
+               (multiple-value-bind (to-sec to-usec stop-sec stop-usec deadlinep)
+                   (decode-timeout timeout)
+                 (declare (ignore stop-sec stop-usec))
+                 (case (with-pinned-objects (mutex)
+                         (futex-wait (mutex-state-address mutex)
+                                     (get-lisp-obj-address +lock-contested+)
+                                     (or to-sec -1)
+                                     (or to-usec 0)))
+                   ((1) (if deadlinep
+                            (signal-deadline)
+                            (return-from get-mutex nil)))
+                   ((2))
+                   (otherwise (return))))))
            (setf old (sb!ext:compare-and-swap (mutex-state mutex)
                                               +lock-free+
                                               +lock-contested+))
@@ -444,7 +445,7 @@ HOLDING-MUTEX-P."
                  (bug "Old owner in free mutex: ~S" prev))
                t))
             (waitp
-             (bug "Failed to acquire lock with WAITP.")))))))
+             (bug "Failed to acquire lock with WAITP."))))))
 
 (defun grab-mutex (mutex &key (waitp t) (timeout nil))
   #!+sb-doc
@@ -502,8 +503,6 @@ IF-NOT-OWNER is :FORCE)."
   (declare (type mutex mutex))
   ;; Order matters: set owner to NIL before releasing state.
   (let* ((self *current-thread*)
-         #!+(and win32 sb-thread)
-         (sb!impl::*disable-safepoints* t)
          (old-owner (sb!ext:compare-and-swap (mutex-%owner mutex) self nil)))
     (unless (eql self old-owner)
       (ecase if-not-owner
@@ -570,7 +569,6 @@ time we reacquire MUTEX and return to the caller.
 Note that if CONDITION-WAIT unwinds (due to eg. a timeout) instead of
 returning normally, it may do so without holding the mutex."
   #!-sb-thread (declare (ignore queue))
-  (let (#!+(and win32 sb-thread) (sb!impl::*disable-safepoints* t))
   (assert mutex)
   #!-sb-thread (error "Not supported in unithread builds.")
   #!+sb-thread
@@ -641,7 +639,7 @@ returning normally, it may do so without holding the mutex."
             ((2))
             ;; EWOULDBLOCK, -1 here, is the possible spurious wakeup
             ;; case. 0 is the normal wakeup.
-            (otherwise (return)))))))))
+            (otherwise (return))))))))
 
 (defun condition-notify (queue &optional (n 1))
   #!+sb-doc
@@ -652,9 +650,6 @@ this call."
   #!-sb-thread (error "Not supported in unithread builds.")
   #!+sb-thread
   (declare (type (and fixnum (integer 1)) n))
-  (let (#!+(and win32 sb-thread) (sb!impl::*disable-safepoints* t))
-  ;; FIXME: reindent after merging windows-threads
-  (/show0 "Entering CONDITION-NOTIFY")
   #!+sb-thread
   (progn
     #!+sb-lutex
@@ -672,7 +667,7 @@ this call."
     (progn
       (setf (waitqueue-token queue) queue)
       (with-pinned-objects (queue)
-        (futex-wake (waitqueue-token-address queue) n))))))
+        (futex-wake (waitqueue-token-address queue) n)))))
 
 (defun condition-broadcast (queue)
   #!+sb-doc
@@ -939,7 +934,7 @@ have the foreground next."
 #!+(and win32 sb-thread)
 (sb!alien:define-alien-routine ("gc_safepoint" gc-safepoint) sb!alien:void)
 
-(defun make-thread (function &key name)
+(defun make-thread (function &key name ephemeral)
   #!+sb-doc
   "Create a new thread of NAME that runs FUNCTION. When the function
 returns the thread exits. The return values of FUNCTION are kept
@@ -947,7 +942,7 @@ around and can be retrieved by JOIN-THREAD."
   #!-sb-thread (declare (ignore function name))
   #!-sb-thread (error "Not supported in unithread builds.")
   #!+sb-thread
-  (let* ((thread (%make-thread :name name))
+  (let* ((thread (%make-thread :name name :%ephemeral-p ephemeral))
          (setup-sem (make-semaphore :name "Thread setup semaphore"))
          (real-function (coerce function 'function))
          (initial-function
@@ -1007,6 +1002,12 @@ around and can be retrieved by JOIN-THREAD."
                                ;; other threads, it's time to enable
                                ;; signals.
                                (sb!unix::unblock-deferrable-signals)
+                               #!+win32
+                               ;; FPU state, on win32 at least, is
+                               ;; per-thread and it isn't
+                               ;; automatically inherited. FIXME on
+                               ;; other platforms?
+                               (float-cold-init-or-reinit)
                                (let ((r (cons t
                                            (multiple-value-list
                                             (funcall real-function)))))
@@ -1068,8 +1069,9 @@ return DEFAULT if given or else signal JOIN-THREAD-ERROR."
   `(with-system-mutex ((thread-interruptions-lock ,thread))
      ,@body))
 
+(defconstant +interrupt-signal+ #!-win32 sb!unix:sigpipe #!+win32 1)
+
 ;;; Called from the signal handler.
-#!-win32
 (defun run-interruption ()
   (let ((interruption (with-interruptions-lock (*current-thread*)
                         (pop (thread-interruptions *current-thread*)))))
@@ -1078,14 +1080,10 @@ return DEFAULT if given or else signal JOIN-THREAD-ERROR."
     ;; OS's point of view the signal we are in the handler for is no
     ;; longer pending, so the signal will not be lost.
     (when (thread-interruptions *current-thread*)
-      (kill-safely (thread-os-thread *current-thread*) sb!unix:sigpipe))
+      (kill-safely (thread-os-thread *current-thread*)
+                   +interrupt-signal+))
     (when interruption
-      (funcall interruption))))
-
-#!+(and sb-thread win32)
-(sb!alien:define-alien-routine interrupt-lisp-thread sb!alien:int
-  (thread sb!alien:int)
-  (fn sb!alien:int))
+      (invoke-interruption interruption))))
 
 (defun interrupt-thread (thread function)
   #!+sb-doc
@@ -1099,39 +1097,29 @@ enable interrupts (GET-MUTEX when contended, for instance) so the
 first thing to do is usually a WITH-INTERRUPTS or a
 WITHOUT-INTERRUPTS. Within a thread interrupts are queued, they are
 run in same the order they were sent."
-  #!+(and sb-thread win32)
-  (with-all-threads-lock
-    (if (thread-alive-p thread)
-        (let ((other-thread (sap-int (%thread-sap thread)))
-              (interrupt-function (lambda ()
-                                    (sb!unix::invoke-interruption function))))
-          (sb!sys:with-pinned-objects (interrupt-function)
-            (let ((r (interrupt-lisp-thread other-thread
-                                            (get-lisp-obj-address interrupt-function))))
-              (zerop r))))
-        (error 'interrupt-thread-error :thread thread)))
   #!+(and (not sb-thread) win32)
   (progn
     (declare (ignore thread))
     (with-interrupt-bindings
       (with-interrupts (funcall function))))
-  #!-win32
-  (let ((os-thread (thread-os-thread thread)))
-    (cond ((not os-thread)
-           (error 'interrupt-thread-error :thread thread))
-          (t
-           (with-interruptions-lock (thread)
-             ;; Append to the end of the interruptions queue. It's
-             ;; O(N), but it does not hurt to slow interruptors down a
-             ;; bit when the queue gets long.
-             (setf (thread-interruptions thread)
-                   (append (thread-interruptions thread)
-                           (list (lambda ()
-                                   (without-interrupts
-                                     (allow-with-interrupts
-                                       (funcall function))))))))
-           (when (minusp (kill-safely os-thread sb!unix:sigpipe))
-             (error 'interrupt-thread-error :thread thread))))))
+  #!-(and (not sb-thread) win32)
+  (without-interrupts
+    (with-all-threads-lock
+      (let ((os-thread (thread-os-thread thread)))
+        (cond ((not os-thread)
+               (error 'interrupt-thread-error :thread thread))
+              (t
+               (unless
+                   (with-interruptions-lock (thread)
+                     ;; Append to the end of the interruptions queue. It's
+                     ;; O(N), but it does not hurt to slow interruptors down a
+                     ;; bit when the queue gets long.
+                     (shiftf (thread-interruptions thread)
+                             (append (thread-interruptions thread)
+                                     (list function))))
+                 (when (minusp (kill-safely os-thread
+                                            +interrupt-signal+))
+                   (error 'interrupt-thread-error :thread thread)))))))))
 
 (defun terminate-thread (thread)
   #!+sb-doc
