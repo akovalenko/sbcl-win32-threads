@@ -4,11 +4,22 @@
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0500
 #endif
+#define PTHREAD_INTERNALS
 #include "pthreads_win32.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
 #include <sys/time.h>
+
+#ifdef PTHREAD_DEBUG_OUTPUT
+#define pthshow(fmt,...)                        \
+  do {                                          \
+  fprintf(stderr,fmt "\n", __VA_ARGS__);        \
+  fflush(stderr);                               \
+  } while (0)
+#else
+#define pthshow(fmt,...) do {} while (0)
+#endif
 
 int pthread_attr_init(pthread_attr_t *attr)
 {
@@ -35,7 +46,6 @@ int pthread_attr_setstacksize(pthread_attr_t *attr, size_t stacksize)
 }
 
 
-
 typedef unsigned char boolean;
 
 /* TLS management internals */
@@ -50,6 +60,20 @@ static pthread_t tls_impersonate(pthread_t other) {
   pthread_t old = pthread_self();
   TlsSetValue(thread_self_tls_index,other);
   return old;
+}
+
+void pthread_np_get_my_context_subset(CONTEXT* ctx)
+{
+  ctx->ContextFlags = CONTEXT_FULL;
+  ctx->Eip = pthread_np_get_my_context_subset;
+  asm volatile ("mov %%eax,%0": "=m"(ctx->Eax));
+  asm volatile ("mov %%ebx,%0": "=m"(ctx->Ebx));
+  asm volatile ("mov %%ecx,%0": "=m"(ctx->Ecx));
+  asm volatile ("mov %%edx,%0": "=m"(ctx->Edx));
+  asm volatile ("mov %%esp,%0": "=m"(ctx->Esp));
+  asm volatile ("mov %%ebp,%0": "=m"(ctx->Ebp));
+  asm volatile ("mov %%esi,%0": "=m"(ctx->Esi));
+  asm volatile ("mov %%edi,%0": "=m"(ctx->Edi));
 }
 
 static void do_nothing() {}
@@ -96,29 +120,49 @@ void pthread_np_suspend(pthread_t thread)
   /* If thread is about to run another fiber, fiber_context should be
      non-NULL. No point in really suspending it, as it won't be
      reentered without taking fiber_lock. */
-  if (!thread->fiber_context) {
+  if (!thread->fiber_context.Esp) {
     /* For ANY fiber without saved context record, fiber_group should
        be present. */
+    fprintf(stderr,"Had to really suspend thread #x%p\n",thread);
+    fflush(stderr);
     SuspendThread(thread->fiber_group->handle);
-    /* context.ContextFlags = CONTEXT_FULL; */
-    /* GetThreadContext(thread->fiber_group->handle, &context); */
+    context.ContextFlags = CONTEXT_FULL;
+    GetThreadContext(thread->fiber_group->handle, &context);
   }
 }
 
 int pthread_np_get_thread_context(pthread_t thread, CONTEXT* context)
 {
   context->ContextFlags = CONTEXT_FULL;
-  if (thread->fiber_context) {
-    *context = *thread->fiber_context;
+  if (thread->fiber_context.Esp) {
+    *context = thread->fiber_context;
     return 1;
   } else {
     return GetThreadContext(thread->fiber_group->handle, context) != 0;
   }
 }
 
+CONTEXT* pthread_np_publish_context(CONTEXT* maybe_save_old_one)
+{
+  pthread_t self = pthread_self();
+
+  if (maybe_save_old_one && self->fiber_context.Esp)
+    *maybe_save_old_one = self->fiber_context;
+  pthread_np_get_my_context_subset(&self->fiber_context);
+  self->fiber_context.Esp = __builtin_frame_address(0);
+  self->fiber_context.Eip = __builtin_return_address(0);
+  return &self->fiber_context;
+}
+
+void pthread_np_unpublish_context()
+{
+  pthread_t self = pthread_self();
+  self->fiber_context.Esp = 0;
+}
+
 void pthread_np_resume(pthread_t thread)
 {
-  if (!thread->fiber_context) {
+  if (!thread->fiber_context.Esp) {
     ResumeThread(thread->fiber_group->handle);
   }
   pthread_mutex_unlock(&thread->fiber_lock);
@@ -182,6 +226,7 @@ static void thread_or_fiber_function(pthread_t self)
 DWORD WINAPI Thread_Function(LPVOID param)
 {
   pthread_t self = (pthread_t) param;
+
   self->teb = NtCurrentTeb();
   thread_or_fiber_function(param);
   CloseHandle(self->handle);
@@ -212,6 +257,21 @@ VOID CALLBACK Fiber_Function(LPVOID param)
     }
     DeleteFiber(GetCurrentFiber()); /* Exits */
   }
+}
+
+/* Signals */
+struct sigaction signal_handlers[NSIG];
+
+int sigaction(int signum, const struct sigaction* act, struct sigaction* oldact)
+{
+  struct sigaction newact = *act;
+  if (oldact)
+    *oldact = signal_handlers[signum];
+  if (!(newact.sa_flags & SA_SIGINFO)) {
+    newact.sa_sigaction = newact.sa_handler;
+  }
+  signal_handlers[signum] = newact;
+  return 0;
 }
 
 int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
@@ -381,50 +441,32 @@ int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset)
   if (oldset)
     *oldset = self->blocked_signal_set;
   if (set) {
-    const char * action;
-
     switch (how) {
       case SIG_BLOCK:
-        action = "blocking";
         self->blocked_signal_set |= *set;
         break;
       case SIG_UNBLOCK:
-        action = "unblocking";
         self->blocked_signal_set &= ~(*set);
         break;
       case SIG_SETMASK:
-        action = "setting";
         self->blocked_signal_set = *set;
         break;
     }
-    if (0)
-    {
-      char buf[100];
-      sprintf(buf, "[0x%p] set signals mask to 0x%x by %s of 0x%x", self, self->blocked_signal_set, action, *set);
-      OutputDebugString(buf);
-    }
-  }
-  if (set)
-  {
-    int i;
-    for (i = 1; i < NSIG; ++i) {
-      if (!sigismember(&self->blocked_signal_set, i)) {
-        unsigned int is_pending = InterlockedExchange(&self->signal_is_pending[i], 0);
-        if (is_pending) {
-          pthread_np_pending_signal_handler(i);
-        }
-      }
-    }
   }
   return 0;
+}
+
+void pthread_np_pending_signal_handler(int i, void* ucontext_arg)
+{
 }
 
 pthread_mutex_t mutex_init_lock;
 
 int pthread_mutex_init(pthread_mutex_t * mutex, const pthread_mutexattr_t * attr)
 {
-  *mutex = (CRITICAL_SECTION*)malloc(sizeof(CRITICAL_SECTION));
-  InitializeCriticalSection(*mutex);
+  *mutex = (struct _pthread_mutex_info*)malloc(sizeof(struct _pthread_mutex_info));
+  InitializeCriticalSection(&(*mutex)->cs);
+  (*mutex)->file = " (free) ";
   return 0;
 }
 
@@ -445,14 +487,21 @@ int pthread_mutexattr_settype(pthread_mutexattr_t* attr,int mutex_type)
 int pthread_mutex_destroy(pthread_mutex_t *mutex)
 {
   if (*mutex != PTHREAD_MUTEX_INITIALIZER)
-    DeleteCriticalSection(*mutex);
+    DeleteCriticalSection(&(*mutex)->cs);
   return 0;
 }
 
 void pthread_np_add_pending_signal(pthread_t thread, int signum)
 {
   const char * s = thread->signal_is_pending[signum] ? "pending" : "not pending";
+
   thread->signal_is_pending[signum] = 1;
+}
+
+int pthread_kill(pthread_t thread, int signum)
+{
+  pthread_np_add_pending_signal(thread,signum);
+  return 0;
 }
 
 void pthread_np_remove_pending_signal(pthread_t thread, int signum)
@@ -466,12 +515,12 @@ int pthread_mutex_lock(pthread_mutex_t *mutex)
   if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
     pthread_mutex_lock(&mutex_init_lock);
     if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
-      *mutex = (CRITICAL_SECTION*)malloc(sizeof(CRITICAL_SECTION));
       pthread_mutex_init(mutex, NULL);
     }
     pthread_mutex_unlock(&mutex_init_lock);
   }
-  EnterCriticalSection(*mutex);
+  EnterCriticalSection(&(*mutex)->cs);
+  (*mutex)->owner = pthread_self();
   return 0;
 }
 
@@ -480,41 +529,159 @@ int pthread_mutex_trylock(pthread_mutex_t *mutex)
   if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
     pthread_mutex_lock(&mutex_init_lock);
     if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
-      *mutex = (CRITICAL_SECTION*)malloc(sizeof(CRITICAL_SECTION));
       pthread_mutex_init(mutex, NULL);
     }
     pthread_mutex_unlock(&mutex_init_lock);
   }
-  if (TryEnterCriticalSection(*mutex))
+  if (TryEnterCriticalSection(&(*mutex)->cs)) {
+    (*mutex)->owner = pthread_self();
     return 0;
+  }
+  else
+    return EBUSY;
+}
+
+int pthread_mutex_lock_annotate_np(pthread_mutex_t *mutex, const char* file, int line)
+{
+  int contention = 0;
+  if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
+    pthread_mutex_lock(&mutex_init_lock);
+    if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
+      pthread_mutex_init(mutex, NULL);
+      pthshow("Mutex #x%p: automatic initialization; #x%p %s +%d",
+              mutex, *mutex,
+              file, line);
+    }
+    pthread_mutex_unlock(&mutex_init_lock);
+  }
+  if ((*mutex)->owner) {
+    pthshow("Mutex #x%p -> #x%p: contention; owned by #x%p, wanted by #x%p",
+            mutex, *mutex,
+            (*mutex)->owner,
+            pthread_self());
+    pthshow("Mutex #x%p -> #x%p: contention notes: old %s +%d, new %s +%d",
+            mutex, *mutex,
+            (*mutex)->file,(*mutex)->line, file, line);
+    contention = 1;
+  }
+  EnterCriticalSection(&(*mutex)->cs);
+  if (contention) {
+    pthshow("Mutex #x%p -> #x%p: contention end; left by #x%p, taken by #x%p",
+            mutex, *mutex,
+            (*mutex)->owner,
+            pthread_self());
+    pthshow("Mutex #x%p -> #x%p: contention notes: old %s +%d, new %s +%d",
+            mutex, *mutex,
+            (*mutex)->file,(*mutex)->line, file, line);
+  }
+  (*mutex)->owner = pthread_self();
+  (*mutex)->file = file;
+  (*mutex)->line = line;
+  return 0;
+}
+
+int pthread_mutex_trylock_annotate_np(pthread_mutex_t *mutex, const char* file, int line)
+{
+  int contention = 0;
+  if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
+    pthread_mutex_lock(&mutex_init_lock);
+    if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
+      pthread_mutex_init(mutex, NULL);
+    }
+    pthread_mutex_unlock(&mutex_init_lock);
+  }
+  if ((*mutex)->owner) {
+    pthshow("Mutex #x%p -> #x%p: tried contention; owned by #x%p, wanted by #x%p",
+            mutex, *mutex,
+            (*mutex)->owner,
+            pthread_self());
+    pthshow("Mutex #x%p -> #x%p: contention notes: old %s +%d, new %s +%d",
+            mutex, *mutex,
+            (*mutex)->file,(*mutex)->line, file, line);
+    contention = 1;
+  }
+  if (TryEnterCriticalSection(&(*mutex)->cs)) {
+    if (contention) {
+      pthshow("Mutex #x%p -> #x%p: contention end; left by #x%p, taken by #x%p",
+              mutex, *mutex,
+              (*mutex)->owner,
+              pthread_self());
+      pthshow("Mutex #x%p -> #x%p: contention notes: old %s +%d, new %s +%d",
+              mutex, *mutex,
+              (*mutex)->file,(*mutex)->line, file, line);
+    }
+    (*mutex)->owner = pthread_self();
+    (*mutex)->file = file;
+    (*mutex)->line = line;
+    return 0;
+  }
   else
     return EBUSY;
 }
 
 int pthread_mutex_unlock(pthread_mutex_t *mutex)
 {
-  LeaveCriticalSection(*mutex);
+  (*mutex)->owner = NULL;
+  LeaveCriticalSection(&(*mutex)->cs);
   return 0;
+}
+static pthread_key_t cv_event_key;
+
+static void cv_event_destroy(void* event)
+{
+  CloseHandle((HANDLE)event);
 }
 
 static HANDLE cv_default_event_get_fn()
 {
-  return CreateEvent(NULL, FALSE, FALSE, NULL);
+  HANDLE event = pthread_getspecific(cv_event_key);
+  if (!event) {
+    event = CreateEvent(NULL, FALSE, FALSE, NULL);
+    pthread_setspecific(cv_event_key, event);
+  } else {
+    ResetEvent(event);
+  }
+  return event;
 }
 
 static void cv_default_event_return_fn(HANDLE event)
 {
-  CloseHandle(event);
 }
+
+static pthread_condattr_t cv_default_attr = {
+  0,                            /* alertable */
+  cv_default_event_get_fn,      /* get_fn */
+  cv_default_event_return_fn    /* return_fn */
+};
 
 int pthread_cond_init(pthread_cond_t * cv, const pthread_condattr_t * attr)
 {
+  if (!attr)
+    attr = &cv_default_attr;
   pthread_mutex_init(&cv->wakeup_lock, NULL);
   cv->first_wakeup = NULL;
   cv->last_wakeup = NULL;
-  cv->alertable = 0;
-  cv->get_fn = cv_default_event_get_fn;
-  cv->return_fn = cv_default_event_return_fn;
+  cv->alertable = attr->alertable;
+  cv->get_fn = attr->get_fn;
+  cv->return_fn = attr->return_fn;
+  return 0;
+}
+
+int pthread_condattr_init(pthread_condattr_t *attr)
+{
+  *attr = cv_default_attr;
+  return 0;
+}
+
+int pthread_condattr_destroy(pthread_condattr_t *attr)
+{
+  return 0;
+}
+int pthread_condattr_setevent_np(pthread_condattr_t *attr,
+                                 cv_event_get_fn get_fn, cv_event_return_fn ret_fn)
+{
+  attr->get_fn = get_fn ? get_fn : cv_default_event_get_fn;
+  attr->return_fn = ret_fn ? ret_fn : cv_default_event_return_fn;
   return 0;
 }
 
@@ -559,9 +726,9 @@ int pthread_cond_signal(pthread_cond_t *cv)
 
 void cv_wakeup_add(struct pthread_cond_t* cv, struct thread_wakeup* w)
 {
-  w->event = cv->get_fn();
   w->next = NULL;
   pthread_mutex_lock(&cv->wakeup_lock);
+  w->event = cv->get_fn();
   if (cv->last_wakeup == w) {
     fprintf(stderr, "cv->last_wakeup == w\n");
     fflush(stderr);
@@ -657,8 +824,9 @@ int pthread_cond_timedwait(pthread_cond_t * cv, pthread_mutex_t * cs, const stru
     }
   }
   pthread_self()->waiting_cond = NULL;
-  if (rv == WAIT_TIMEOUT)
+  if (rv == WAIT_TIMEOUT) {
     cv_wakeup_remove(cv, &w);
+  }
   cv->return_fn(w.event);
   pthread_mutex_lock(cs);
   if (rv == WAIT_TIMEOUT)
@@ -669,6 +837,8 @@ int pthread_cond_timedwait(pthread_cond_t * cv, pthread_mutex_t * cs, const stru
 
 int sched_yield()
 {
+  /* http://stackoverflow.com/questions/1383943/switchtothread-vs-sleep1
+     SwitchToThread(); was here. Unsure what's better for us, just trying.. */
   SwitchToThread();
   return 0;
 }
@@ -684,12 +854,14 @@ void pthread_unlock_structures()
 }
 
 static int pthread_initialized = 0;
+
 void pthreads_win32_init()
 {
   if (!pthread_initialized) {
     thread_self_tls_index = TlsAlloc();
     pthread_mutex_init(&mutex_init_lock, NULL);
     pthread_np_notice_thread();
+    pthread_key_create(&cv_event_key,cv_event_destroy);
     pthread_initialized = 1;
   }
 }
@@ -784,7 +956,6 @@ int pthread_np_set_fiber_factory_mode(int on)
 int pthread_np_switch_to_fiber(pthread_t pth)
 {
   pthread_t self = pthread_self();
-  CONTEXT ctx;
 
  again:
   if (pth == self) {
@@ -826,11 +997,9 @@ int pthread_np_switch_to_fiber(pthread_t pth)
     return -1;
   }
   if (self) {
-    ctx.ContextFlags = CONTEXT_FULL;
-    GetThreadContext(GetCurrentThread(), &ctx);
     /* From now on, any attempt to get context of self receives ctx
        content, and suspend/resume work with fiber reentrance lock. */
-    self->fiber_context = &ctx;
+    pthread_np_publish_context(NULL);
     /* Target fiber group is like mine */
     pth->fiber_group = self->fiber_group;
   } else {
@@ -864,7 +1033,7 @@ int pthread_np_switch_to_fiber(pthread_t pth)
 
   pthread_mutex_lock(&self->fiber_lock);
   /* Thus we avoid racing with GC */
-  self->fiber_context = NULL;
+  pthread_np_unpublish_context();
   pthread_mutex_unlock(&self->fiber_lock);
 
   /* From now on, pthread_np_get_thread_context on self calls real
@@ -945,4 +1114,16 @@ int sigismember(const sigset_t *set, int signum)
 {
   return (*set & (1 << signum)) != 0;
 }
+int sigpending(sigset_t *set)
+{
+  int i;
+  sigemptyset(set);
+  for (i=0; i<NSIG;++i) {
+    if (pthread_self()->signal_is_pending[i]) {
+      sigaddset(set, i);
+    }
+  }
+  return 0;
+}
+
 #endif

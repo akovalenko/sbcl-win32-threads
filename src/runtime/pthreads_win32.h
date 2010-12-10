@@ -5,6 +5,11 @@
 #include <errno.h>
 #include <sys/types.h>
 
+#ifndef _SIGSET_T
+typedef int sigset_t;
+#endif
+
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -37,9 +42,7 @@
 
 #define SIGRTMIN  23
 
-#define SIG_DEFER SIGHUP
-
-#define NSIG 31     /* maximum signal number + 1 */
+#define NSIG 32     /* maximum signal number + 1 */
 
 /* To avoid overusing system TLS, pthread provides its own */
 #define PTHREAD_KEYS_MAX 128
@@ -70,6 +73,8 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_
 int pthread_equal(pthread_t thread1, pthread_t thread2);
 int pthread_detach(pthread_t thread);
 int pthread_join(pthread_t thread, void **retval);
+int pthread_kill(pthread_t thread, int signum);
+
 pthread_t pthread_self(void);
 
 typedef DWORD pthread_key_t;
@@ -86,10 +91,19 @@ void pthread_np_suspend(pthread_t thread);
 void pthread_np_suspend_with_signal(pthread_t thread, int signum);
 void pthread_np_resume(pthread_t thread);
 void pthread_np_request_interruption(pthread_t thread);
+CONTEXT* pthread_np_publish_context(CONTEXT* maybe_save_old_one);
+void pthread_np_unpublish_context();
+void pthread_np_get_my_context_subset(CONTEXT* ctx);
 
 /* 2 - Mutex */
 
-typedef CRITICAL_SECTION* pthread_mutex_t;
+typedef struct _pthread_mutex_info {
+  CRITICAL_SECTION cs;
+  pthread_t owner;
+  const char* file;
+  int line;
+} *pthread_mutex_t;
+
 typedef int pthread_mutexattr_t;
 #define PTHREAD_MUTEX_INITIALIZER ((pthread_mutex_t)-1)
 int pthread_mutex_init(pthread_mutex_t * mutex, const pthread_mutexattr_t * attr);
@@ -100,6 +114,8 @@ int pthread_mutexattr_settype(pthread_mutexattr_t*, int);
 int pthread_mutex_destroy(pthread_mutex_t *mutex);
 int pthread_mutex_lock(pthread_mutex_t *mutex);
 int pthread_mutex_trylock(pthread_mutex_t *mutex);
+int pthread_mutex_lock_annotate_np(pthread_mutex_t *mutex, const char* file, int line);
+int pthread_mutex_trylock_annotate_np(pthread_mutex_t *mutex, const char* file, int line);
 int pthread_mutex_unlock(pthread_mutex_t *mutex);
 
 /* 3 - Condition variable */
@@ -135,6 +151,10 @@ typedef struct timespec {
 #endif
 
 // not implemented: PTHREAD_COND_INITIALIZER
+int pthread_condattr_init(pthread_condattr_t *attr);
+int pthread_condattr_destroy(pthread_condattr_t *attr);
+int pthread_condattr_setevent_np(pthread_condattr_t *attr,
+                                 cv_event_get_fn get_fn, cv_event_return_fn ret_fn);
 int pthread_cond_destroy(pthread_cond_t *cond);
 int pthread_cond_init(pthread_cond_t * cond, const pthread_condattr_t * attr);
 int pthread_cond_broadcast(pthread_cond_t *cond);
@@ -204,8 +224,16 @@ typedef struct pthread_thread {
 
   /* For non-running fiber, this field provides context of its
      last-known running state: not for jumps et al., but for
-     conservative stack GCing */
-  CONTEXT* fiber_context;
+     conservative stack GCing.
+
+     With pthread_np_publish_context and pthread_np_unpublish_context
+     application may manage its thread context cooperatively, not
+     requiring real SuspendThread and ResumeThread for threads that
+     don't do anything interesting (as defined by application).
+
+     Esp field of fiber_context is used as a validity flag (must not
+     be NULL). */
+  CONTEXT fiber_context;
 
   /* Thread TEB base (mostly informative/debugging) */
   void* teb;
@@ -241,11 +269,28 @@ static inline int pthread_setspecific(pthread_key_t key, const void *value)
   return 0;
 }
 
-void pthread_np_pending_signal_handler(int signum);
+typedef struct {
+  int bogus;
+} siginfo_t;
+
+#define SA_SIGINFO (1u<<1)
+#define SA_NODEFER (1u<<2)
+#define SA_RESTART (1u<<3)
+#define SA_ONSTACK (1u<<4)
+
+struct sigaction {
+  void (*sa_handler)(int);
+  void (*sa_sigaction)(int, siginfo_t*, void*);
+  sigset_t sa_mask;
+  int sa_flags;
+};
+int sigaction(int signum, const struct sigaction* act, struct sigaction* oldact);
+
+int sigpending(sigset_t *set);
+void pthread_np_pending_signal_handler(int signum, void *ucontext_arg);
 
 void pthread_np_add_pending_signal(pthread_t thread, int signum);
 void pthread_np_remove_pending_signal(pthread_t thread, int signum);
-
 int pthread_np_notice_thread();
 int pthread_np_get_thread_context(pthread_t thread, CONTEXT* context);
 int pthread_np_convert_self_to_fiber();
@@ -257,6 +302,7 @@ int pthread_np_fiber_save_tls(int slot, int enable);
 HANDLE pthread_np_get_handle(pthread_t pth);
 void* pthread_np_get_lowlevel_fiber(pthread_t pth);
 int pthread_np_delete_lowlevel_fiber(void* ll_fiber);
+int pthread_np_ack_pending_signals(void* ucontext_arg);
 
 /* Fiber context hooks */
 extern void (*pthread_save_context_hook)();
@@ -270,4 +316,12 @@ int sigismember(const sigset_t *set, int signum);
 
 typedef int sig_atomic_t;
 
+#ifndef PTHREAD_INTERNALS
+#ifdef PTHREAD_DEBUG_OUTPUT
+#define pthread_mutex_lock(mutex)               \
+  pthread_mutex_lock_annotate_np(mutex, __FILE__, __LINE__ )
+#define pthread_mutex_trylock(mutex)            \
+  pthread_mutex_trylock_annotate_np(mutex, __FILE__ ,__LINE__)
+#endif
+#endif
 #endif
