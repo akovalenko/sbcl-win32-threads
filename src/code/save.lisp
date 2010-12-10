@@ -171,7 +171,7 @@ sufficiently motivated to do lengthy fixes."
   #!+sb-foreign-thread
   (when (fboundp 'sb!thread:foreign-thread-deinit)
     (sb!thread:foreign-thread-deinit))
-  (when (rest (sb!thread:list-all-threads))
+  (when (rest (sb!thread:list-all-threads :ephemeral-too t))
     (error "Cannot save core with multiple threads running."))
   (float-deinit)
   (profile-deinit)
