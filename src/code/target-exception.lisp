@@ -52,8 +52,8 @@
      (cons +exception-flt-underflow+         'floating-point-underflow)
      (cons +exception-flt-overflow+          'floating-point-overflow)
      (cons +exception-flt-inexact-result+    'floating-point-inexact)
-     (cons +exception-flt-denormal-operand+  'floating-point-exception)
-     (cons +exception-flt-stack-check+       'floating-point-exception)
+     (cons +exception-flt-denormal-operand+  'sb!kernel::floating-point-exception)
+     (cons +exception-flt-stack-check+       'sb!kernel::floating-point-exception)
      ;; Stack overflow
      (cons +exception-stack-overflow+        'sb!kernel::control-stack-exhausted)
      ;; Various
@@ -88,7 +88,12 @@
          (code (slot record 'exception-code))
          (number-parameters (slot record 'number-parameters))
          (condition-name (cdr (assoc code *exception-code-map*)))
-         (sb!debug:*stack-top-hint* (nth-value 1 (sb!kernel:find-interrupted-name-and-frame))))
+         (sb!debug:*stack-top-hint*
+          (nth-value 1 (sb!kernel:find-interrupted-name-and-frame))))
+    (when (eql +exception-flt-stack-check+ code)
+      (format t "Floating stack check at ~X~%"
+              (slot record 'exception-address))
+      (sb!debug:backtrace))
     (when (and (eql code +exception-access-violation+)
                (> number-parameters 1)
                (sap= (sap-ref-sap
@@ -115,7 +120,6 @@
 
 #!+sb-thread
 (progn
-
   (defun receive-pending-interrupt ()
     (receive-pending-interrupt))
 
@@ -131,7 +135,7 @@
           (sb!pcl::*dfun-miss-gfs-on-stack* nil))
        ,@body))
 
-  ;;; Evaluate CLEANUP-FORMS iff PROTECTED-FORM does a non-local exit.
+;;; Evaluate CLEANUP-FORMS iff PROTECTED-FORM does a non-local exit.
   (defmacro nlx-protect (protected-form &rest cleanup-froms)
     (with-unique-names (completep)
       `(let ((,completep nil))
@@ -171,18 +175,18 @@
   (sb!alien:define-alien-routine ("apply_sigmask"
                                   %apply-sigmask)
       sb!alien:void
-      (mask sb!alien:unsigned-long))
+    (mask sb!alien:unsigned-long))
 
   (defmacro without-interrupts/with-deferrables-blocked (&body body)
     (let ((mask-var (gensym)))
       `(without-interrupts
          (let ((,mask-var (%block-deferrables-and-return-mask)))
            (unwind-protect
-               (progn ,@body)
+                (progn ,@body)
              (%apply-sigmask ,mask-var))))))
 
   (defun invoke-interruption (function)
-    (without-interrupts/with-deferrables-blocked
+    (without-interrupts
       ;; Reset signal mask: the C-side handler has blocked all
       ;; deferrable signals before funcalling into lisp. They are to be
       ;; unblocked the first time interrupts are enabled. With this
@@ -191,20 +195,19 @@
       ;; provided there is no WITH-INTERRUPTS.
       (let ((sb!unix::*unblock-deferrables-on-enabling-interrupts-p* t))
         (with-interrupt-bindings
-          (let ((sb!debug:*stack-top-hint*
-                 (nth-value 1 (sb!kernel:find-interrupted-name-and-frame))))
-            (allow-with-interrupts
-              (nlx-protect (funcall function)
-                           ;; We've been running with deferrables
-                           ;; blocked in Lisp called by a C signal
-                           ;; handler. If we return normally the sigmask
-                           ;; in the interrupted context is restored.
-                           ;; However, if we do an nlx the operating
-                           ;; system will not restore it for us.
-                           (when sb!unix::*unblock-deferrables-on-enabling-interrupts-p*
-                             ;; This means that storms of interrupts
-                             ;; doing an nlx can still run out of stack.
-                             (unblock-deferrable-signals)))))))))
+          (allow-with-interrupts
+            (nlx-protect
+             (funcall function)
+             ;; We've been running with deferrables
+             ;; blocked in Lisp called by a C signal
+             ;; handler. If we return normally the sigmask
+             ;; in the interrupted context is restored.
+             ;; However, if we do an nlx the operating
+             ;; system will not restore it for us.
+             (when sb!unix::*unblock-deferrables-on-enabling-interrupts-p*
+               ;; This means that storms of interrupts
+               ;; doing an nlx can still run out of stack.
+               (unblock-deferrable-signals))))))))
 
   (defmacro in-interruption ((&key) &body body)
     #!+sb-doc
