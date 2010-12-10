@@ -13,24 +13,24 @@
 
 (define-alien-type hinstance long)
 
-(define-alien-routine ("LoadLibraryA@4" loadlibrary) hinstance
+(define-alien-routine ("LoadLibraryA" loadlibrary) hinstance
   (file c-string))
 
-(define-alien-routine ("FreeLibrary@4" freelibrary) int
+(define-alien-routine ("FreeLibrary" freelibrary) int
   (handle hinstance))
 
-(define-alien-routine ("GetProcAddress@8" getprocaddress) system-area-pointer
+(define-alien-routine ("GetProcAddress" getprocaddress) system-area-pointer
   (handle hinstance)
   (symbol c-string))
 
-(define-alien-routine ("GetLastError@0" getlasterror) unsigned-int)
+(define-alien-routine ("GetLastError" getlasterror) unsigned-int)
 
-(define-alien-routine ("SetStdHandle@8" set-std-handle)
+(define-alien-routine ("SetStdHandle" set-std-handle)
    void
  (id int)
  (handle int))
 
-(sb!alien:define-alien-routine ("GetStdHandle@4" get-std-handle)
+(sb!alien:define-alien-routine ("GetStdHandle" get-std-handle)
    sb!alien:int
  (id sb!alien:int))
 
