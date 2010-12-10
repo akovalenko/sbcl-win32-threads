@@ -693,11 +693,24 @@ void unlock_suspend_info(const char * file, int line)
   pthread_mutex_unlock(&suspend_info.lock);
 }
 
-void roll_thread_to_safepoint(struct thread * thread)
+void wake_thread(struct thread * thread)
 {
   struct thread * p;
   int io_resignal = 1;
-  odprintf("roll_thread_to_safepoint(0x%p) begin", thread->os_thread);
+  odprintf("wake_thread(0x%p) begin", thread->os_thread);
+  /* Opportunistic optimizations:
+
+     - if thread has GC_PENDING, INTERRUPT_PENDING, or
+     STOP_FOR_GC_PENDING non-NIL, it's about to notice deferred signal
+     soon. However, for INTERRUPT_PENDING io resignalling is still
+     done.
+  */
+  if (SymbolValue(GC_PENDING, thread) != NIL)
+    return;
+
+  if (SymbolValue(STOP_FOR_GC_PENDING, thread) != NIL)
+    return;
+
   /* Danger: inverted lock ordering. GC may have taken world_lock and
      may be waiting for all_thread_lock that we hold (caller responsible).
      We'd wait forever.
@@ -711,7 +724,8 @@ void roll_thread_to_safepoint(struct thread * thread)
      resignal io interruption event for GC_SAFE ones: no
      suspend/resume required.
   */
-  if (pthread_mutex_trylock(&suspend_info.world_lock)) {
+  if (SymbolValue(INTERRUPT_PENDING, thread)!=NIL ||
+      pthread_mutex_trylock(&suspend_info.world_lock)) {
     odprintf("world_lock contested. Relying on GC to deliver interrupt notification.");
     if (SymbolValue(GC_SAFE, thread) == T) {
       SetEvent(thread->private_events.events[1]);
@@ -779,7 +793,7 @@ void roll_thread_to_safepoint(struct thread * thread)
   }
 
   pthread_mutex_unlock(&suspend_info.world_lock);
-  odprintf("roll_thread_to_safepoint(0x%p) end", thread->os_thread);
+  odprintf("wake_thread(0x%p) end", thread->os_thread);
 }
 
 
@@ -1340,7 +1354,7 @@ void gc_start_the_world()
     }
 
 #ifdef LISP_FEATURE_WIN32
-    /* Ordering: roll_thread_to_safepoint now can be sure that if it
+    /* Ordering: wake_thread now can be sure that if it
        fails on world_lock while holding all_thread_lock, there is a
        GC in phase 1 */
     pthread_mutex_unlock(&suspend_info.world_lock);
@@ -1410,7 +1424,7 @@ kill_safely(os_thread_t os_thread, int signal)
             /* We found the target (well, maybe just a coincided
                thread id -- it's harmless). */
             int status = pthread_kill(os_thread, signal);
-            roll_thread_to_safepoint(thread);
+            wake_thread(thread);
             if (status)
                 lose("kill_safely: pthread_kill failed with %d\n", status);
               break;
