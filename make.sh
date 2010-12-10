@@ -29,12 +29,6 @@ print_help="no"
 # need an alternate solution for the init file overrides. --no-foos
 # have now been available long enough that this should not stop anyone
 # from building.
-if [ "$OSTYPE" = "cygwin" -o "$OSTYPE" = "msys" ]
-then
-    SBCL_PREFIX="$PROGRAMFILES/sbcl"
-else
-    SBCL_PREFIX="/usr/local"
-fi
 SBCL_XC_HOST="sbcl --disable-debugger --no-userinit --no-sysinit"
 export SBCL_XC_HOST
 
@@ -225,7 +219,9 @@ tools-for-build/canonicalize-whitespace
 # procedure above should still work, but you can skip the "copy" steps.
 time sh make-host-1.sh
 time sh make-target-1.sh
-time sh make-host-2.sh
+time sh make-host-1a.sh
+time sh make-target-1a.sh
+time sh make-genesis-2.sh
 time sh make-target-2.sh
 time sh make-target-contrib.sh
 
