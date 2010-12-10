@@ -19,6 +19,16 @@
 
 (setf sb-unix::*on-dangerous-wait* :error)
 
+(sb-alien:define-alien-routine "check_deferrables_blocked_or_lose"
+    void
+  (where sb-alien:unsigned-long))
+(sb-alien:define-alien-routine "check_deferrables_unblocked_or_lose"
+    void
+  (where sb-alien:unsigned-long))
+
+;(sb-unix::unblock-deferrable-signals)
+(check-deferrables-unblocked-or-lose 0)
+
 (defun wait-for-threads (threads)
   (mapc (lambda (thread) (sb-thread:join-thread thread :default nil)) threads)
   (assert (not (some #'sb-thread:thread-alive-p threads))))
@@ -41,13 +51,6 @@
   (let ((spinlock (make-spinlock)))
     (with-spinlock (spinlock))))
 
-(sb-alien:define-alien-routine "check_deferrables_blocked_or_lose"
-    void
-  (where sb-alien:unsigned-long))
-(sb-alien:define-alien-routine "check_deferrables_unblocked_or_lose"
-    void
-  (where sb-alien:unsigned-long))
-
 (with-test (:name (:interrupt-thread :basics :no-unwinding))
   (let ((a 0))
     (interrupt-thread *current-thread* (lambda () (setq a 1)))
@@ -65,6 +68,7 @@
                                   (check-deferrables-unblocked-or-lose 0)))))
 
 (with-test (:name (:interrupt-thread :nlx))
+  (check-deferrables-unblocked-or-lose 0)
   (catch 'xxx
     (sb-thread:interrupt-thread sb-thread:*current-thread*
                                 (lambda ()
@@ -397,10 +401,9 @@
     (sb-ext:timeout () t)))
 
 (with-test (:name (:semaphore :wait-forever)
-            :fails-on :win32)
-  #+win32
+                  #-(and) #-(and) :fails-on :win32)
+  #+win32 #-(and)
   (error "No timeout support on win32")
-  #-win32
   (let ((sem (make-semaphore :count 0)))
     (assert (raises-timeout-p
               (sb-ext:with-timeout 0.1
@@ -541,9 +544,7 @@
   #-win32
   (test-interrupt #'loop-forever :quit))
 
-(with-test (:name (:interrupt-thread :interrupt-sleep)
-            :fails-on :win32)
-  #+win32 (error "Sleep is not interruptible on win32")
+(with-test (:name (:interrupt-thread :interrupt-sleep))
   (let ((child (test-interrupt (lambda () (loop (sleep 2000))))))
     (terminate-thread child)
     (wait-for-threads (list child))))
@@ -893,10 +894,11 @@
   (sb-debug:backtrace)
   (catch 'done))
 
-(with-test (:name (:unsynchronized-hash-table))
+(with-test (:name (:unsynchronized-hash-table) :fails-on :win32)
   ;; We expect a (probable) error here: parellel readers and writers
   ;; on a hash-table are not expected to work -- but we also don't
   ;; expect this to corrupt the image.
+  #+win32 (error "Corrupts the image?")
   (let* ((hash (make-hash-table))
          (*errors* nil)
          (threads (list (sb-thread:make-thread
