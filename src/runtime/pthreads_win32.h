@@ -287,7 +287,6 @@ struct sigaction {
 int sigaction(int signum, const struct sigaction* act, struct sigaction* oldact);
 
 int sigpending(sigset_t *set);
-void pthread_np_pending_signal_handler(int signum, void *ucontext_arg);
 
 void pthread_np_add_pending_signal(pthread_t thread, int signum);
 void pthread_np_remove_pending_signal(pthread_t thread, int signum);

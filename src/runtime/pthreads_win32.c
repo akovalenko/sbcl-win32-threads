@@ -110,9 +110,9 @@ void (*pthread_restore_context_hook)() = do_nothing;
    [4] Exit/death for fibers -> switch to its FCAT group.
 
    [2],[3],[4] doesn't apply to threads-converted-to-fibers: full
-   stop/resume is always done on them (?).
+   stop/resume is done on them if there is no cooperatively-accessed
+   published context (of which see below).
 */
-
 void pthread_np_suspend(pthread_t thread)
 {
   CONTEXT context;
@@ -142,11 +142,52 @@ int pthread_np_get_thread_context(pthread_t thread, CONTEXT* context)
   }
 }
 
+/* When fiber switches to other fiber using pthread_np API, its
+   CONTEXT is saved. There is no GetFiberContext call; also, we can't
+   save fiber context during SwitchToFiber itself, so it's always some
+   approximation, not a real fiber context for the moment of switching
+   out.
+
+   This approximation is enough for conservative GC: no extra
+   information from GC-sensitive world will be ever added to real
+   context before switching.
+
+   Why talk about conservative GCs here? Well, except that this
+   pthreads implementation is part of SBCL, one more reason is that
+   SuspendThread, GetThreadContext, ResumeThread are mostly used for
+   exactly that purpose, when not for debugging.
+
+   In the world of win32 GC implementations, there are two strategies
+   for stopping the world when GC requires it: (1) use of long-term
+   SuspendThread/ResumeThread, (2) use of some cooperative interthread
+   communication. The first strategy, being simple, has some
+   disadvantages (e.g. a possibility of suspending thread holding an
+   important lock in a system library). That's why SuspendThread and
+   ResumeThread is discommended by Microsoft, except for debugging.
+
+   GC could still use SuspendThread/ResumeThread for brief intervals
+   when target threads are in some predictable state. However, if
+   stopped threads are require to cooperate, they can provide context
+   data for conservative GC before stopping as well.
+
+   Hence we introduce pthread_np_publish_context API. Context of the
+   calling thread (again, some approximation of it, enough for
+   conservative GC) is copied to *pthread_self() structure; if such
+   published context exists, thread will never be suspended by
+   pthread_np_suspend or resumed by pthread_np_resume, and
+   pthread_np_get_thread_context will use last published context
+   instead of calling GetThreadContext(). */
+
+/* Returns the pointer to new published CONTEXT stored in
+   pthread_self() structure. If maybe_save_old_one is given,
+   previous published context is saved.
+*/
+
 CONTEXT* pthread_np_publish_context(CONTEXT* maybe_save_old_one)
 {
   pthread_t self = pthread_self();
 
-  if (maybe_save_old_one && self->fiber_context.Esp)
+  if (maybe_save_old_one)
     *maybe_save_old_one = self->fiber_context;
   pthread_np_get_my_context_subset(&self->fiber_context);
   self->fiber_context.Esp = __builtin_frame_address(0);
@@ -154,6 +195,13 @@ CONTEXT* pthread_np_publish_context(CONTEXT* maybe_save_old_one)
   return &self->fiber_context;
 }
 
+/* Validity of cooperatively-published context is designated by stack
+   pointer (Esp) being non-null: no real context with Esp==0 may exist.
+
+   pthread_np_unpublish_context invalidates published context, so
+   pthread_np_suspend et al. on this thread reacquire their usual
+   "syscall" semantics.
+*/
 void pthread_np_unpublish_context()
 {
   pthread_t self = pthread_self();
@@ -168,6 +216,7 @@ void pthread_np_resume(pthread_t thread)
   pthread_mutex_unlock(&thread->fiber_lock);
 }
 
+/* FIXME shouldn't be used. */
 void pthread_np_request_interruption(pthread_t thread)
 {
   if (thread->waiting_cond) {
@@ -175,6 +224,24 @@ void pthread_np_request_interruption(pthread_t thread)
   }
 }
 
+/* Thread identity, as much as pthreads are concerned, is determined
+   by pthread_t structure that is stored in TLS slot
+   (thread_self_tls_index). This slot is reassigned when fibers are
+   switched with pthread_np API.
+
+   Two reasons for not using fiber-local storage for this purpose: (1)
+   Fls is too young: all other things work with Win2000, it requires
+   WinXP; (2) this implementation works also with threads that aren't
+   fibers, and it's a good thing.
+
+   There is one more case, besides fiber switching, when pthread_self
+   identity migrates between system threads: for non-main system
+   thread that is not [pthread_create]d, thread-specific data
+   destructors run in a thread from a system thread pool, after the
+   original thread dies. In order to provide compatibility with
+   classic pthread TSD, the system pool thread acquires dead thread's
+   identity for the duration of destructor calls.
+*/
 pthread_t pthread_self()
 {
   return (pthread_t)TlsGetValue(thread_self_tls_index);
@@ -190,6 +257,12 @@ const char * state_to_str(pthread_thread_state state)
   }
 }
 
+/* Two kinds of threads (or fibers) are supported: (1) created by
+   pthread_create, (2) created independently and noticed by
+   pthread_np_notice_thread. The first kind is running a predefined
+   thread function or fiber function; thread_or_fiber_function
+   incorporates whatever they have in common.
+*/
 static void thread_or_fiber_function(pthread_t self)
 {
   pthread_t prev = tls_impersonate(self);
@@ -223,6 +296,10 @@ static void thread_or_fiber_function(pthread_t self)
   tls_call_destructors();
 }
 
+/* Thread function for [pthread_create]d threads. Thread may become a
+   fiber later, but (as stated above) it isn't supposed to be
+   reattached to other system thread, even after it happens.
+*/
 DWORD WINAPI Thread_Function(LPVOID param)
 {
   pthread_t self = (pthread_t) param;
@@ -234,12 +311,21 @@ DWORD WINAPI Thread_Function(LPVOID param)
     void* fiber = self->fiber;
     free(self);
     if (fiber) {
-      DeleteFiber(GetCurrentFiber()); /* Exits */
+      /* If thread was converted to fiber, deleting the fiber from
+         itself exits the thread. There are some rumors on possible
+         memory leaks if we just ExitThread or return here, hence the
+         statement below. However, no memory leaks on bare ExitThread
+         were observed yet. */
+      DeleteFiber(GetCurrentFiber());
     }
   }
   return 0;
 }
 
+/* Fiber can't delete itself without exiting the current thread
+   simultaneously. We arrange for some other fiber calling
+   fiber_destructor when fiber dies but doesn't want to terminate its
+   thread. */
 static void fiber_destructor(void* fiber) { DeleteFiber(fiber); }
 
 VOID CALLBACK Fiber_Function(LPVOID param)
@@ -250,18 +336,36 @@ VOID CALLBACK Fiber_Function(LPVOID param)
     /* fiber_group is a main thread into which we are to call */
     pthread_t group = self->fiber_group;
     free(self);
+    /* pthread_np_run_in_fiber (see below) normally switches back to
+       caller. Nullify our identity, so it knows there is nothing to
+       switch to, and continues running instead. */
     tls_impersonate(NULL);
     if (group) {
-      /* `Call and continue' semantics */
+      /* Every running [pthread_create]d fiber runs in some thread
+         that has its own pthread_self identity (that was created as
+         thread and later converted to fiber). `group' field of
+         running fiber always points to that other pthread.
+
+         Now switch to our group ("current master fiber created as
+         thread"), asking it to delete our (OS) fiber data with
+         fiber_destructor. */
       pthread_np_run_in_fiber(group, fiber_destructor, GetCurrentFiber());
     }
-    DeleteFiber(GetCurrentFiber()); /* Exits */
+    /* Within current pthread API we never end up here.
+
+     BTW, if fibers are ever pooled, to avoid stack space reallocation
+     etc, jumping to the beginning of Fiber_Function should be the
+     thing to do here. */
+    DeleteFiber(GetCurrentFiber()); /* Exits. See Thread_Function for
+                                       explanation -- why not
+                                       ExitThread. */
   }
 }
 
 /* Signals */
 struct sigaction signal_handlers[NSIG];
 
+/* Never called for now */
 int sigaction(int signum, const struct sigaction* act, struct sigaction* oldact)
 {
   struct sigaction newact = *act;
@@ -274,6 +378,10 @@ int sigaction(int signum, const struct sigaction* act, struct sigaction* oldact)
   return 0;
 }
 
+/* Create thread or fiber, depending on current thread's "fiber
+   factory mode". In the latter case, switch into newly-created fiber
+   immediately.
+*/
 int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
                    void *(*start_routine) (void *), void *arg)
 {
@@ -359,7 +467,10 @@ int pthread_join(pthread_t thread, void **retval)
   return 0;
 }
 
-/* Manage our own TLS. */
+/* We manage our own TSD instead of relying on system TLS for anything
+   other than pthread identity itself. Reasons: (1) Windows NT TLS
+   slots are expensive, (2) pthread identity migration requires only
+   one TLS slot assignment, instead of massive copying. */
 int pthread_key_create(pthread_key_t *key, void (*destructor)(void*))
 {
   pthread_key_t index;
@@ -399,6 +510,7 @@ int pthread_key_delete(pthread_key_t key)
   return 0;
 }
 
+/* Internal function calling destructors for current pthread */
 static void tls_call_destructors()
 {
   pthread_key_t key;
@@ -435,6 +547,7 @@ int pthread_once(pthread_once_t *once_control, void (*init_routine)(void))
   return 0;
 }
 
+/* TODO call signal handlers */
 int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset)
 {
   pthread_t self = pthread_self();
@@ -454,10 +567,6 @@ int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset)
     }
   }
   return 0;
-}
-
-void pthread_np_pending_signal_handler(int i, void* ucontext_arg)
-{
 }
 
 pthread_mutex_t mutex_init_lock;
@@ -491,6 +600,7 @@ int pthread_mutex_destroy(pthread_mutex_t *mutex)
   return 0;
 }
 
+/* Add pending signal to (other) thread */
 void pthread_np_add_pending_signal(pthread_t thread, int signum)
 {
   const char * s = thread->signal_is_pending[signum] ? "pending" : "not pending";
@@ -498,6 +608,8 @@ void pthread_np_add_pending_signal(pthread_t thread, int signum)
   thread->signal_is_pending[signum] = 1;
 }
 
+/* This pthread_kill doesn't do anything to notify target pthread of a
+   new pending signal. */
 int pthread_kill(pthread_t thread, int signum)
 {
   pthread_np_add_pending_signal(thread,signum);
@@ -510,6 +622,11 @@ void pthread_np_remove_pending_signal(pthread_t thread, int signum)
   thread->signal_is_pending[signum] = 0;
 }
 
+/* Mutex implementation uses CRITICAL_SECTIONs. Somethings to keep in
+   mind: (1) uncontested locking is cheap; (2) long wait on a busy
+   lock causes exception, so it should never be attempted; (3) those
+   mutexes are recursive; (4) one thread locks, the other unlocks ->
+   the next one hangs. */
 int pthread_mutex_lock(pthread_mutex_t *mutex)
 {
   if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
@@ -540,6 +657,9 @@ int pthread_mutex_trylock(pthread_mutex_t *mutex)
   else
     return EBUSY;
 }
+
+/* Versions of lock/trylock useful for debugging. Our header file
+   conditionally redefines lock/trylock to call them. */
 
 int pthread_mutex_lock_annotate_np(pthread_mutex_t *mutex, const char* file, int line)
 {
@@ -621,10 +741,17 @@ int pthread_mutex_trylock_annotate_np(pthread_mutex_t *mutex, const char* file, 
 
 int pthread_mutex_unlock(pthread_mutex_t *mutex)
 {
+  /* Owner is for debugging only; NB if mutex is used recursively,
+     owner field will lie. */
   (*mutex)->owner = NULL;
   LeaveCriticalSection(&(*mutex)->cs);
   return 0;
 }
+
+/* Condition variables implemented with events and wakeup queues. */
+
+/* Thread-local wakeup events are kept in TSD to avoid kernel object
+   creation on each call to pthread_cond_[timed]wait */
 static pthread_key_t cv_event_key;
 
 static void cv_event_destroy(void* event)
@@ -639,13 +766,22 @@ static HANDLE cv_default_event_get_fn()
     event = CreateEvent(NULL, FALSE, FALSE, NULL);
     pthread_setspecific(cv_event_key, event);
   } else {
-    ResetEvent(event);
+    /* ResetEvent(event); used to be here. Let's try without.  It's
+       safe in pthread_cond_wait: if WaitForSingleObjectEx ever
+       returns, event is reset automatically, and the wakeup queue item
+       is removed by the signaller under wakeup_lock.
+
+       pthread_cond_timedwait should reset the event if
+       cv_wakeup_remove failed to find its wakeup record, otherwise
+       it's safe too. */
   }
   return event;
 }
 
 static void cv_default_event_return_fn(HANDLE event)
 {
+  /* ResetEvent(event); could be here as well (and used to be).
+     Avoiding syscalls makes sense, however. */
 }
 
 static pthread_condattr_t cv_default_attr = {
@@ -747,28 +883,33 @@ void cv_wakeup_add(struct pthread_cond_t* cv, struct thread_wakeup* w)
   pthread_mutex_unlock(&cv->wakeup_lock);
 }
 
-void cv_wakeup_remove(struct pthread_cond_t* cv, struct thread_wakeup* w)
+/* Return true if wakeup found, false if missing */
+int cv_wakeup_remove(struct pthread_cond_t* cv, struct thread_wakeup* w)
 {
+  int result = 0;
   pthread_mutex_lock(&cv->wakeup_lock);
   {
     if (cv->first_wakeup == w) {
       cv->first_wakeup = w->next;
       if (cv->last_wakeup == w)
         cv->last_wakeup = NULL;
+      result = 1;
     } else {
       struct thread_wakeup * prev = cv->first_wakeup;
       while (prev && prev->next != w)
         prev = prev->next;
       if (!prev) {
-        pthread_mutex_unlock(&cv->wakeup_lock);
-        return;
+        goto unlock;
       }
       prev->next = w->next;
       if (cv->last_wakeup == w)
         cv->last_wakeup = prev;
+      result = 1;
     }
   }
+ unlock:
   pthread_mutex_unlock(&cv->wakeup_lock);
+  return result;
 }
 
 int pthread_cond_wait(pthread_cond_t * cv, pthread_mutex_t * cs)
@@ -793,6 +934,7 @@ int pthread_cond_wait(pthread_cond_t * cv, pthread_mutex_t * cs)
     WaitForSingleObject(w.event, INFINITE);
   }
   pthread_self()->waiting_cond = NULL;
+  /* Event is signalled once, wakeup is dequeued by signaller. */
   cv->return_fn(w.event);
   pthread_mutex_lock(cs);
   return 0;
@@ -825,7 +967,11 @@ int pthread_cond_timedwait(pthread_cond_t * cv, pthread_mutex_t * cs, const stru
   }
   pthread_self()->waiting_cond = NULL;
   if (rv == WAIT_TIMEOUT) {
-    cv_wakeup_remove(cv, &w);
+    if (!cv_wakeup_remove(cv, &w)) {
+      /* Someone removed our wakeup record: though we got a timeout,
+         event was signalled before we are here. Reset it. */
+      ResetEvent(w.event);
+    }
   }
   cv->return_fn(w.event);
   pthread_mutex_lock(cs);

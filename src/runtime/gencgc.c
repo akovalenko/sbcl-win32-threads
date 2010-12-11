@@ -3855,7 +3855,7 @@ preserve_context_registers (os_context_t *c)
     /* On Darwin the signal context isn't a contiguous block of memory,
      * so just preserve_pointering its contents won't be sufficient.
      */
-#if defined(LISP_FEATURE_DARWIN) || defined(LISP_FEATURE_WIN32)
+#if defined(LISP_FEATURE_DARWIN)
 #if defined LISP_FEATURE_X86
     preserve_pointer((void*)*os_context_register_addr(c,reg_EAX));
     preserve_pointer((void*)*os_context_register_addr(c,reg_ECX));
@@ -4692,7 +4692,9 @@ general_alloc_internal(long nbytes, int page_type_flag, struct alloc_region *reg
                         (context ? os_context_sigmask_addr(context) : NULL);
                 }
 #else
+#ifndef LISP_FEATURE_WIN32
                 maybe_save_gc_mask_and_block_deferrables(NULL);
+#endif
 #endif
             }
         }

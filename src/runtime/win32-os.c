@@ -926,7 +926,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                */
             if (mem_info.Protect == PAGE_EXECUTE_READWRITE) {
 #if defined(LISP_FEATURE_SB_THREAD)
-  pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
+              pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
 #endif
               SetLastError(lasterror);
               return ExceptionContinueExecution;
@@ -959,7 +959,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
          * aren't supposed to happen during cold init or reinit
          * anyway. */
 
-        fake_foreign_function_call(&ctx);
+        /* fake_foreign_function_call(&ctx); */
 
         #if defined(LISP_FEATURE_SB_THREAD)
         pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
@@ -978,7 +978,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         funcall2(StaticSymbolFunction(HANDLE_WIN32_EXCEPTION), context_sap,
                  exception_record_sap);
         /* If Lisp doesn't nlx, we need to put things back. */
-        undo_fake_foreign_function_call(&ctx);
+        /* undo_fake_foreign_function_call(&ctx); */
         #if defined(LISP_FEATURE_SB_THREAD)
         pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
         gc_safepoint();

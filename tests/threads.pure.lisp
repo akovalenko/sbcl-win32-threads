@@ -107,8 +107,7 @@
 
 ;; win32 doesn't have signal timers
 #+sb-thread
-(with-test (:name :semaphore-multiple-waiters
-            :fails-on :win32)
+(with-test (:name :semaphore-multiple-waiters)
   (let ((semaphore (make-semaphore :name "test sem")))
     (labels ((make-readers (n i)
                (values

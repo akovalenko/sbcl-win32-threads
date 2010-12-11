@@ -727,7 +727,7 @@ void wake_thread(struct thread * thread)
   if (SymbolValue(INTERRUPT_PENDING, thread)!=NIL ||
       pthread_mutex_trylock(&suspend_info.world_lock)) {
     odprintf("world_lock contested. Relying on GC to deliver interrupt notification.");
-    if (SymbolValue(GC_SAFE, thread) == T) {
+    if (SymbolValue(GC_SAFE, thread) != NIL) {
       SetEvent(thread->private_events.events[1]);
     }
     return;
@@ -802,35 +802,12 @@ int check_pending_interrupts();
 int thread_may_gc();
 int thread_may_suspend_for_gc();
 
-int maybe_unblock_deferrables_blocked_by_gc(sigset_t* where)
-{
-  struct thread * self = arch_os_get_current_thread();
-  struct interrupt_data *data = self->interrupt_data;
-  if (data->gc_blocked_deferrables) {
-    /* Restore the saved signal mask from the original signal (the
-     * one that interrupted us during the critical section) into
-     * the os_context for the signal we're currently in the
-     * handler for. This should ensure that when we return from
-     * the handler the blocked signals are unblocked. */
-    if (where) {
-      sigcopyset(where,&data->pending_mask);
-    } else {
-      pthread_np_remove_pending_signal(self->os_thread,SIGHUP);
-      thread_sigmask(SIG_SETMASK, &data->pending_mask,0);
-    }
-    data->gc_blocked_deferrables = 0;
-    return 1;
-  } else {
-    return 0;
-  }
-}
-
 // returns 0 if skipped, 1 otherwise
 int check_pending_gc()
 {
   struct thread * self = arch_os_get_current_thread();
   int done = 0;
-  sigset_t sigset;
+  sigset_t sigset = 0;
   /* Take off recursive protection as soon as GC_PENDING becomes :IN-PROGRESS */
   if ((SymbolValue(IN_SAFEPOINT,self) == T) &&
       (SymbolValue(GC_PENDING,self) != T)) {
@@ -844,16 +821,18 @@ int check_pending_gc()
       block_deferrable_signals(NULL,&sigset);
       lispobj gc_happened = funcall0(StaticSymbolFunction(SUB_GC));
       unbind_variable(IN_SAFEPOINT,self);
-      maybe_unblock_deferrables_blocked_by_gc(&sigset);
       thread_sigmask(SIG_SETMASK,&sigset,NULL);
       if (gc_happened == T) {
+        /* POST_GC runs finalizers with GC disabled.
+         */
         if (SymbolValue(INTERRUPTS_ENABLED,self) == T ||
             SymbolValue(ALLOW_WITH_INTERRUPTS,self) == T)
           funcall0(StaticSymbolFunction(POST_GC));
+        done = 1;
       }
     }
   }
-  return 0;
+  return done;
 }
 
 int thread_may_interrupt();
@@ -883,11 +862,20 @@ void gc_enter_safe_region()
 {
   struct thread * self = arch_os_get_current_thread();
   int errorCode = GetLastError();
-  bind_variable(GC_SAFE, thread_may_suspend_for_gc() ? T : NIL, self);
-  pthread_np_publish_context(NULL);
+  int may_suspend = thread_may_suspend_for_gc();
+  if (may_suspend) {
+    bind_variable(GC_SAFE, T, self);
+  } else {
+    /* !NIL !T trick: thread is in foreign code and should be skipped
+        at phase 1, but waited upon at phase 2 */
+    bind_variable(GC_SAFE, GC_SAFE, self);
+  }
   gc_safepoint();
   /* Within gc-safe code, thread context is published, so real
      suspend/resume should never be attempted */
+  if (may_suspend) {
+    pthread_np_publish_context(NULL);
+  }
   SetLastError(errorCode);
 }
 
@@ -930,7 +918,6 @@ void suspend()
   if ((SymbolValue(GC_PENDING, self) == T)&&
       (SymbolValue(STOP_FOR_GC_PENDING, self) == T)) {
     SetSymbolValue(GC_PENDING, NIL, self);
-    maybe_unblock_deferrables_blocked_by_gc(NULL);
   }
   SetSymbolValue(STOP_FOR_GC_PENDING, NIL, self);
 }
@@ -1035,73 +1022,56 @@ int maybe_ack_gc_poll()
     unlock_suspend_info(__FILE__, __LINE__);
     return 0;
   }
-  if (suspend_info.reason == SUSPEND_REASON_GC
-      && self != suspend_info.gc_thread
-      && suspend_info.phase == 1
-     ) {
-    suspend_briefly();
-    SetSymbolValue(STOP_FOR_GC_PENDING, T, self);
-  } else
-    if (suspend_info.reason == SUSPEND_REASON_INTERRUPT) {
-      suspend_briefly();
+
+  switch (suspend_info.reason) {
+  case SUSPEND_REASON_GC:
+    /* Happens when someone runs gc_stop_the_world.  Since there isn't
+       any safepoint in gc_stop_the_world itself, we know for sure that
+       it's some _other_ thread requesting suspend.*/
+    if (thread_may_suspend_for_gc()) {
+      /* Suspend until gc_start_the_world, if we can, even on phase 1. */
+      suspend();
     } else {
-      unlock_suspend_info(__FILE__, __LINE__);
+      /* GCing disabled. In phase 1 we should acknowledge GC page
+         access ASAP. */
+      if (suspend_info.phase == 1) {
+        suspend_briefly();
+        /* Why count this case as "skipped"? Because there is no point
+           on reentering suspend loop while in the same safepoint: we
+           can't magically acquire thread_may_suspend_for_gc()
+           property. */
+      } else {
+        /* Phase 2 disallows suspend_briefly */
+        unlock_suspend_info(__FILE__, __LINE__);
+      }
+      SetSymbolValue(STOP_FOR_GC_PENDING, T, self);
       return 0;
     }
-  return 1;
-}
-
-// returns 0 if skipped, 1 otherwise
-int maybe_suspend_for_gc()
-{
-  if (!suspend_info.suspend) return 0;
-  lock_suspend_info(__FILE__, __LINE__);
-  if (!suspend_info.suspend) {
-    unlock_suspend_info(__FILE__, __LINE__);
-    return 0;
-  }
-  struct thread * self = arch_os_get_current_thread();
-  if (suspend_info.reason == SUSPEND_REASON_GC && suspend_info.phase == 2) {
+    break;
+  case SUSPEND_REASON_GCING:
+    /* This one may happen in nested safepoints. */
     if (self == suspend_info.gc_thread) {
+      /* Recursively-entered safepoint in SUB_GC. */
       unlock_suspend_info(__FILE__, __LINE__);
       return 0;
     } else {
+      /* Some other thread is GCing. We may come here only if GC_SAFE
+         was set and gc_stop_the_world didn't touch us. */
       if (thread_may_suspend_for_gc()) {
         suspend();
       } else {
         unlock_suspend_info(__FILE__, __LINE__);
-        return 0;
+        lose("suspend_info.reason = SUSPEND_REASON_GCING, !thread_may_suspend_for_gc()");
       }
     }
-  } else {
+    break;
+  case SUSPEND_REASON_INTERRUPT:
+    /* Interrupt is enqueued. Target thread doesn't matter: suspend briefly. */
+    suspend_briefly();
+    break;
+  default:
     unlock_suspend_info(__FILE__, __LINE__);
-    return 0;
-  }
-  return 1;
-}
-
-// rreturns 0 if skipped, 1 otherwise
-int maybe_wait_until_gc_ends()
-{
-  if (!suspend_info.suspend) return 0;
-  lock_suspend_info(__FILE__, __LINE__);
-  if (!suspend_info.suspend) {
-    unlock_suspend_info(__FILE__, __LINE__);
-    return 0;
-  }
-  struct thread * self = arch_os_get_current_thread();
-  if (suspend_info.reason == SUSPEND_REASON_GCING
-      && suspend_info.gc_thread != self
-      ) {
-    if (thread_may_suspend_for_gc()) {
-      suspend();
-    } else {
-      unlock_suspend_info(__FILE__, __LINE__);
-      lose("suspend_info.reason = SUSPEND_REASON_GCING, !thread_may_suspend_for_gc()");
-    }
-  } else {
-    unlock_suspend_info(__FILE__, __LINE__);
-    return 0;
+    lose("Unknown suspend reason (%d)", suspend_info.reason);
   }
   return 1;
 }
@@ -1117,18 +1087,30 @@ void gc_safepoint()
   if (!get_pseudo_atomic_atomic(self) && get_pseudo_atomic_interrupted(self))
     clear_pseudo_atomic_interrupted(self);
 
-  done = maybe_ack_gc_poll();   /* Confirmed GC page access */
-  done |= maybe_suspend_for_gc(); /* If we can, we suspend
-                                     here. GC-PENDING goes away. */
-  done |= maybe_wait_until_gc_ends(); /* If we arrived during ongoing GC.. */
+  /* Handle all suspend requests once and for all (i.e. suspend, if
+     needed, for all interval requested or possible). */
+  done |= maybe_ack_gc_poll();
+  /* Here we may have STOP_FOR_GC_PENDING if suspended briefly. */
   done |= check_pending_gc();
-  done |= check_pending_interrupts(); /* After that we check _allowed_
-                                         interrupts */
-  maybe_again:
+  done |= check_pending_interrupts();
+  /* After that we check _allowed_ interrupts. */
   if (done) {
     done = 0;
     goto again;
   }
+
+  /* Our invariants are not _that_ hairy */
+  gc_assert(!self->interrupt_data->gc_blocked_deferrables);
+  gc_assert(SymbolValue(GC_PENDING,self) == NIL ||
+            SymbolValue(IN_SAFEPOINT,self) == T ||
+            !thread_may_gc());
+  gc_assert(SymbolValue(INTERRUPT_PENDING,self) == NIL ||
+            !thread_may_interrupt());
+  gc_assert(SymbolValue(STOP_FOR_GC_PENDING,self) == NIL ||
+            !thread_may_suspend_for_gc());
+  gc_assert(get_pseudo_atomic_atomic(self) ||
+            !get_pseudo_atomic_interrupted(self));
+
   SetLastError(lasterror);
 }
 
@@ -1262,10 +1244,15 @@ void gc_stop_the_world()
                      p->os_thread,status,strerror(status));
             }
 #else
-          if (SymbolValue(GC_SAFE, p) == T) continue;
-          odprintf("waiting for 0x%p to change state from RUNNING");
-          wait_for_thread_state_change(p, STATE_RUNNING);
-          odprintf("0x%p has changed state to %s", p->os_thread, get_thread_state_as_string(p));
+            /* at phase 1 we skip any thread that is `out of sight',
+               even if its safe region is really unsafe. The latter
+               case is designated by a special (currently '*GC-SAFE*)
+               value of *GC-SAFE*, non-NIL and non-T. */
+            if (SymbolValue(GC_SAFE, p) != NIL) continue;
+            odprintf("waiting for 0x%p to change state from RUNNING");
+            wait_for_thread_state_change(p, STATE_RUNNING);
+            odprintf("0x%p has changed state to %s", p->os_thread,
+                     get_thread_state_as_string(p));
 #endif
         }
     }
@@ -1279,6 +1266,18 @@ void gc_stop_the_world()
     map_gc_page();
     suspend_info.phase = 2;
     unlock_suspend_info(__FILE__, __LINE__);
+
+    /* Threads that are in STATE_SUSPENDED_BRIEFLY here have GC
+       disabled. They may be contesting for without-gc mutex. We have
+       to continue all those threads together and then wait for them
+       to become suspended again. */
+    for(p=all_threads;p;p=p->next) {
+        if (p!=th) {
+          if (p->state == STATE_SUSPENDED_BRIEFLY) {
+            set_thread_state(p, STATE_RUNNING);
+          }
+        }
+    }
 #endif
 
     FSHOW_SIGNAL((stderr,"/gc_stop_the_world:signals sent\n"));
@@ -1294,13 +1293,10 @@ void gc_stop_the_world()
                 lose("/gc_stop_the_world: unexpected state");
 #else
             odprintf("looking at 0x%p, state is %s, GC_SAFE is %s", p->os_thread, get_thread_state_as_string(p), t_nil_str(SymbolValue(GC_SAFE, p)));
-            if (SymbolValue(GC_SAFE, p) == NIL) {
-              if (thread_state(p) == STATE_SUSPENDED_BRIEFLY) {
-                set_thread_state(p, STATE_RUNNING);
-                odprintf("waiting for 0x%p to change state from RUNNING");
-                wait_for_thread_state_change(p, STATE_RUNNING);
-              }
-            }
+            /* This time, skip only threads that are really GC-SAFE,
+               wait for all other threads. */
+            if (SymbolValue(GC_SAFE, p) == T) continue;
+            wait_for_thread_state_change(p, STATE_RUNNING);
             odprintf("looking at 0x%p, state is %s, GC_SAFE is %s", p->os_thread, get_thread_state_as_string(p), t_nil_str(SymbolValue(GC_SAFE, p)));
 #endif
         }
