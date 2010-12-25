@@ -32,7 +32,7 @@ echo //building runtime objects and static symbol table
 # The clean is needed for Darwin's readonlyspace hack.
 $GNUMAKE -C src/runtime clean
 
-$GNUMAKE -C src/runtime sbcl-own.nm
+$GNUMAKE -C src/runtime own-runtime-symbol-table
 
 # Use a little C program to grab stuff from the C header files and
 # smash it into Lisp source code.

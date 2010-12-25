@@ -55,7 +55,7 @@ OBJS = $(C_SRC:.c=.o) $(ASSEM_SRC:.S=.o) ${OS_OBJS}
 
 LIBS = ${OS_LIBS} -lm
 
-targets: $(TARGET) sbcl.nm
+targets: $(TARGET) final-runtime-symbol-table
 
 $(TARGET): $(OBJS) $(OS_LATE_OBJS)
 	$(CC) ${LINKFLAGS} -o $@ $^ $(LIBS)
@@ -63,6 +63,22 @@ $(TARGET): $(OBJS) $(OS_LATE_OBJS)
 sbcl-own.nm: $(OBJS)
 	$(NM) $(OBJS) | $(GREP) -v " [FUw] \|^$$\|.o:$$" > ,$@
 	mv -f ,$@ $@
+
+# When LISP_FEATURE_SB_DYNAMIC_CORE is enabled, runtime uses dynamic
+# linking to resolve "static" foreign references in the core. Genesis
+# needs no symbol table in this case.
+
+ifndef LISP_FEATURE_SB_DYNAMIC_CORE
+
+own-runtime-symbol-table:	sbcl-own.nm
+final-runtime-symbol-table:	sbcl.nm
+
+else
+
+own-runtime-symbol-table:
+final-runtime-symbol-table:	
+
+endif
 
 sbcl.nm: $(TARGET)
 	$(NM) $(TARGET) | $(GREP) -v " [FUw] " > ,$@

@@ -65,6 +65,3 @@ after-grovel-headers: mangled-stuff.nm
 else
 OS_LATE_OBJS = 
 endif
-
-
-
