@@ -34,6 +34,10 @@
    sb!alien:int
  (id sb!alien:int))
 
+(define-alien-routine ("GetModuleHandleW" get-module-handle)
+    hinstance
+  (name (c-string :external-format :ucs-2)))
+
 (defvar *reset-stdio-on-dlopen* t)
 
 (defconstant +stdio-handle+ -10)
@@ -48,16 +52,18 @@
           (set-std-handle +stdio-handle+ stdio)))
       (loadlibrary namestring)))
 
-(defun dlopen-or-lose (obj)
-  (let* ((namestring (shared-object-namestring obj))
-         (handle (loadlibrary-withouth-stdio namestring)))
-    (aver namestring)
-    (when (zerop handle)
-      (setf (shared-object-handle obj) nil)
-      (error "Error opening shared object ~S:~%  ~A."
-             namestring (getlasterror)))
-    (setf (shared-object-handle obj) handle)
-    handle))
+(defun dlopen-or-lose (&optional obj)
+  (if obj
+      (let* ((namestring (shared-object-namestring obj))
+             (handle (loadlibrary-withouth-stdio namestring)))
+        (aver namestring)
+        (when (zerop handle)
+          (setf (shared-object-handle obj) nil)
+          (error "Error opening shared object ~S:~%  ~A."
+                 namestring (getlasterror)))
+        (setf (shared-object-handle obj) handle)
+        handle)
+      (get-module-handle nil)))
 
 (defun dlclose-or-lose (&optional (obj nil objp))
   (when (and objp (shared-object-handle obj))
@@ -82,11 +88,26 @@
   ;; GetProcAddress() won't return NULL on success.
   (let* ((extern (coerce symbol 'base-string))
          (result nil))
-    (dolist (obj *shared-objects*)
-      (let ((handle (shared-object-handle obj)))
-        (when handle
-          (setf result (sap-int (getprocaddress handle extern)))
-          (when (not (zerop result))
-            (return result)))))))
+    (dolist (handle
+              (cons *runtime-dlhandle*
+                    (mapcar #'shared-object-handle *shared-objects*)))
+      (when handle
+        (setf result (sap-int (getprocaddress handle extern)))
+        (when (not (zerop result))
+          (return result))))))
 
-
+(defun runtime-exported-symbols ()
+  (let* ((image-base (int-sap (get-module-handle nil)))
+         (pe-base (sap+ image-base (sap-ref-32 image-base 60)))
+         (export-directory (sap+ pe-base (- 248 (* 16 8))))
+         (export-data (sap+ image-base (sap-ref-32 export-directory 0)))
+         (n-functions (sap-ref-32 export-data 20))
+         (n-names (sap-ref-32 export-data 24))
+         (functions-sap (sap+ image-base (sap-ref-32 export-data 28)))
+         (names-sap (sap+ image-base (sap-ref-32 export-data 32))))
+    (loop repeat (min n-functions n-names)
+          for offset from 0 by #.sb!vm::n-word-bytes
+          collect
+       (cons
+         (sap-int (sap+ image-base (sap-ref-32 functions-sap offset)))
+         (sap-int (sap+ image-base (sap-ref-32 names-sap offset)))))))
