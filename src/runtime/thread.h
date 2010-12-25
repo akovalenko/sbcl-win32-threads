@@ -33,7 +33,12 @@ struct alloc_region { };
 
 #ifdef LISP_FEATURE_WIN32
 
-enum threads_suspend_reason { SUSPEND_REASON_NONE, SUSPEND_REASON_GC, SUSPEND_REASON_INTERRUPT, SUSPEND_REASON_GCING };
+enum threads_suspend_reason {
+    SUSPEND_REASON_NONE,
+    SUSPEND_REASON_GC,
+    SUSPEND_REASON_INTERRUPT,
+    SUSPEND_REASON_GCING
+};
 
 struct threads_suspend_info {
   int suspend;
@@ -61,7 +66,7 @@ thread_state(struct thread *thread)
 }
 
 #if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-static const char * get_thread_state_string(lispobj state)
+static inline const char * get_thread_state_string(lispobj state)
 {
   if (state == STATE_RUNNING) return "RUNNING";
   if (state == STATE_SUSPENDED) return "SUSPENDED";
@@ -103,6 +108,8 @@ wait_for_thread_state_change(struct thread *thread, lispobj state)
 
 extern pthread_key_t lisp_thread;
 #endif
+
+extern int thread_yield();
 
 extern int kill_safely(os_thread_t os_thread, int signal);
 
@@ -252,6 +259,10 @@ StaticSymbolFunction(lispobj sym)
 extern __thread struct thread *current_thread;
 #endif
 
+#if defined(LISP_FEATURE_WIN32)
+static inline struct thread* arch_os_get_current_thread()
+    __attribute__((__const__));
+#endif
 /* This is clearly per-arch and possibly even per-OS code, but we can't
  * put it somewhere sensible like x86-linux-os.c because it needs too
  * much stuff like struct thread and all_threads to be defined, which
@@ -263,7 +274,7 @@ static inline struct thread *arch_os_get_current_thread(void)
 #if defined(LISP_FEATURE_X86)
     register struct thread *me=0;
 #if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-    __asm__ __volatile__ ("movl %%fs:0xE10+(4*63), %0" : "=r"(me) :);
+    __asm__ ("movl %%fs:0xE10+(4*63), %0" : "=r"(me) :);
     return me;
 #endif
     if(all_threads) {
@@ -291,7 +302,7 @@ static inline struct thread *arch_os_get_current_thread(void)
 #endif
         return th;
 #endif
-        __asm__ __volatile__ ("movl %%fs:%c1,%0" : "=r" (me)
+        __asm__ ("movl %%fs:%c1,%0" : "=r" (me)
                  : "i" (offsetof (struct thread,this)));
     }
     return me;
