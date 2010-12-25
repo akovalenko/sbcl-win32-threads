@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <sys/types.h>
 #include <stdlib.h>
+#include <strings.h>
 #include <setjmp.h>
 #include <sys/time.h>
 #ifndef LISP_FEATURE_WIN32
