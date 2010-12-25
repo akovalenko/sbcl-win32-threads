@@ -79,4 +79,6 @@ swap_lispobjs(volatile lispobj *dest, lispobj value)
 extern void fast_bzero_detect(void *, size_t);
 extern void (*fast_bzero_pointer)(void *, size_t);
 
+#include "x86-fpu-x87.h"
+
 #endif /* _X86_ARCH_H */

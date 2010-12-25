@@ -9,7 +9,9 @@
  * files for more information.
  */
 
-#define _WIN32_WINNT 0x0500
+#ifndef SBCL_INCLUDED_WIN32_OS_H
+#define SBCL_INCLUDED_WIN32_OS_H
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <stdlib.h>
@@ -38,6 +40,12 @@ typedef int os_vm_prot_t;
 #define OS_VM_PROT_READ    1
 #define OS_VM_PROT_WRITE   2
 #define OS_VM_PROT_EXECUTE 4
+#define OS_VM_MMAP_GRANULARITY_SHIFT 6
+
+#define os_open_core(file,mode) win32_open_for_mmap(file)
+#define HAVE_os_open_core
+
+extern int win32_open_for_mmap(const char* file);
 
 #define OUR_TLS_INDEX 63
 #define SIG_MEMORY_FAULT SIGSEGV
@@ -57,5 +65,19 @@ struct lisp_exception_frame {
 void wos_install_interrupt_handlers(struct lisp_exception_frame *handler);
 char *dirname(char *path);
 
+#define HAVE_os_invalidate_free
+#define HAVE_os_validate_commit
+#define HAVE_os_allocate_lazily
+
 void os_invalidate_free(os_vm_address_t addr, os_vm_size_t len);
 void os_validate_commit(os_vm_address_t addr, os_vm_size_t len);
+void* os_validate_recommit(os_vm_address_t addr, os_vm_size_t len);
+os_vm_address_t os_allocate_lazily(os_vm_size_t len);
+void accept_post_mortem_startup();
+
+void win32_interrupt_console_input();
+void os_link_runtime();
+
+/* #define bcopy(src,dest,n) memmove(dest,src,n) */
+
+#endif  /* SBCL_INCLUDED_WIN32_OS_H */

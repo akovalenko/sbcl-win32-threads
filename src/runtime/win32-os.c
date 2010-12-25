@@ -26,9 +26,9 @@
  * yet.
  */
 
-#define _WIN32_WINNT 0x0500
 #include <malloc.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/param.h>
 #include <sys/file.h>
 #include <io.h>
@@ -54,9 +54,11 @@
 #include <float.h>
 
 #include <excpt.h>
+#include <setjmp.h>
 
 #include "validate.h"
 #include "thread.h"
+
 size_t os_vm_page_size;
 
 #include "gc.h"
@@ -69,7 +71,7 @@ int linux_supports_futex=0;
 #endif
 
 #include <stdarg.h>
-#include <setjmp.h>
+#include <string.h>
 
 /* missing definitions for modern mingws */
 #ifndef EH_UNWINDING
@@ -79,59 +81,177 @@ int linux_supports_futex=0;
 #define EH_EXIT_UNWIND 0x04
 #endif
 
+/* Local `policy' macro, to prefer code that doesn't conceal
+ * problems, even if it's less effective. */
+#define EXTRA_CHECK_DOES_NOT_HURT
+
+int dyndebug_lazy_fpu = 0;
+int dyndebug_lazy_fpu_careful = 0;
+int dyndebug_skip_averlax = 0;
+int dyndebug_survive_aver = 0;
+int dyndebug_runtime_link = 0;
+
+unsigned int dyndebug_charge_count = 0;
+FILE* dyndebug_output = NULL;
+
+static inline
+void dyndebug_init()
+{
+    dyndebug_output = stderr;
+    dyndebug_lazy_fpu = GetEnvironmentVariableA("SBCL_DYNDEBUG__LAZY_FPU",NULL,0);
+    dyndebug_lazy_fpu_careful =
+        GetEnvironmentVariableA("SBCL_DYNDEBUG__LAZY_FPU_CAREFUL",NULL,0);
+    dyndebug_skip_averlax =
+        GetEnvironmentVariableA("SBCL_DYNDEBUG__SKIP_AVERLAX",NULL,0);
+    dyndebug_survive_aver =
+        GetEnvironmentVariableA("SBCL_DYNDEBUG__SURVIVE_AVER",NULL,0);
+    dyndebug_runtime_link =
+        GetEnvironmentVariableA("SBCL_DYNDEBUG__RUNTIME_LINK",NULL,0);
+}
+
+/* wrappers for winapi calls that must be successful */
+static inline
+void* win_aver(void* value, char* comment, char* file, int line,
+               int justwarn)
+{
+    if (dyndebug_skip_averlax)
+        return value;
+    if (!value) {
+        LPSTR errorMessage = "<FormatMessage failed>";
+        DWORD errorCode = GetLastError(), allocated=0;
+        int posixerrno = errno;
+        const char* posixstrerror = strerror(errno);
+        char* report_template =
+            "Expression unexpectedly false: %s:%d\n"
+            " ... %s\n"
+            "     ===> returned #X%p, \n"
+            " ... Win32 thinks:\n"
+            "     ===> code %u, message => %s\n"
+            " ... CRT thinks:\n"
+            "     ===> code %u, message => %s\n";
+
+        allocated =
+            FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER|
+                           FORMAT_MESSAGE_FROM_SYSTEM,
+                           NULL,
+                           errorCode,
+                           MAKELANGID(LANG_ENGLISH,SUBLANG_ENGLISH_US),
+                           (LPSTR)&errorMessage,
+                           1024u,
+                           NULL);
+
+        if (justwarn || dyndebug_survive_aver) {
+            fprintf(dyndebug_output, report_template,
+                    file, line,
+                    comment, value,
+                    (unsigned)errorCode, errorMessage,
+                    posixerrno, posixstrerror);
+        } else {
+            lose(report_template,
+                    file, line,
+                    comment, value,
+                    (unsigned)errorCode, errorMessage,
+                    posixerrno, posixstrerror);
+        }
+        if (allocated)
+            LocalFree(errorMessage);
+    }
+    return value;
+}
+
+static inline
+long sys_aver(long value, char* comment, char* file, int line,
+              int justwarn)
+{
+    win_aver((void*)(value>=0),comment,file,line,justwarn);
+    return value;
+}
+
+#define AVER(call)                                                      \
+    ({ __typeof__(call) __attribute__((unused)) me =                    \
+            (__typeof__(call))                                          \
+            win_aver((void*)(call), #call, __FILE__, __LINE__, 0);      \
+        me;})
+
+#define AVERLAX(call)                                                   \
+    ({ __typeof__(call) __attribute__((unused)) me =                    \
+            (__typeof__(call))                                          \
+            win_aver((void*)(call), #call, __FILE__, __LINE__, 1);      \
+        me;})
+
+#define CRT_AVER_NONNEGATIVE(call)                              \
+    ({ __typeof__(call) __attribute__((unused)) me =            \
+            (__typeof__(call))                                  \
+            sys_aver((call), #call, __FILE__, __LINE__, 0);     \
+        me;})
+
+#define CRT_AVERLAX_NONNEGATIVE(call)                           \
+    ({ __typeof__(call) __attribute__((unused)) me =            \
+            (__typeof__(call))                                  \
+            sys_aver((call), #call, __FILE__, __LINE__, 1);     \
+        me;})
+
+#define CRT_AVER(booly)                                         \
+    ({ __typeof__(booly) __attribute__((unused)) me = (booly);  \
+        sys_aver((booly)?0:-1, #booly, __FILE__, __LINE__, 0);  \
+        me;})
+
 void odprint(const char * msg)
 {
-  char buf[1024];
-  DWORD lastError = GetLastError();
-  #if defined(LISP_FEATURE_SB_THREAD)
-  sprintf(buf, "[0x%p] %s\n", pthread_self(), msg);
-  OutputDebugString(buf);
-  #else
-  OutputDebugString(msg);
-  #endif
-  SetLastError(lastError);
+    char buf[1024];
+    DWORD lastError = GetLastError();
+#if defined(LISP_FEATURE_SB_THREAD)
+    sprintf(buf, "[0x%p] %s\n", pthread_self(), msg);
+    OutputDebugString(buf);
+#else
+    OutputDebugString(msg);
+#endif
+    SetLastError(lastError);
 }
 const char * t_nil_s(lispobj symbol);
 
 void odprintf_(const char * fmt, ...)
 {
-  char buf[1024];
-  va_list args;
-  int n;
-  DWORD lastError = GetLastError();
-  struct thread * self = arch_os_get_current_thread();
-  #if defined(LISP_FEATURE_SB_THREAD)
-  if (self) {
-    sprintf(buf, "[0x%p] %s, %s, %s, %s ", pthread_self(), t_nil_s(GC_SAFE), t_nil_s(GC_INHIBIT), t_nil_s(INTERRUPTS_ENABLED), t_nil_s(IN_SAFEPOINT));
-  } else {
-    sprintf(buf, "[0x%p] (arch_os_get_current_thread() is NULL) ", pthread_self());
-  }
-  #else
-  buf[0] = 0;
-  #endif
-  n = strlen(buf);
-  va_start(args, fmt);
-  vsprintf(buf + n, fmt, args);
-  va_end(args);
-  n = strlen(buf);
-  buf[n] = '\n';
-  buf[n + 1] = 0;
-  OutputDebugString(buf);
-  SetLastError(lastError);
+    char buf[1024];
+    va_list args;
+    int n;
+    DWORD lastError = GetLastError();
+    struct thread * self = arch_os_get_current_thread();
+#if defined(LISP_FEATURE_SB_THREAD)
+    if (self) {
+        sprintf(buf, "[0x%p] %s, %s, %s, %s ", pthread_self(), t_nil_s(GC_SAFE), t_nil_s(GC_INHIBIT), t_nil_s(INTERRUPTS_ENABLED), t_nil_s(IN_SAFEPOINT));
+    } else {
+        sprintf(buf, "[0x%p] (arch_os_get_current_thread() is NULL) ", pthread_self());
+    }
+#else
+    buf[0] = 0;
+#endif
+    n = strlen(buf);
+    va_start(args, fmt);
+    vsprintf(buf + n, fmt, args);
+    va_end(args);
+    n = strlen(buf);
+    buf[n] = '\n';
+    buf[n + 1] = 0;
+    OutputDebugString(buf);
+    SetLastError(lastError);
 }
+
+#define this_thread (arch_os_get_current_thread())
+
 
 unsigned long block_deferrables_and_return_mask()
 {
-  sigset_t sset;
-  block_deferrable_signals(0, &sset);
-  return (unsigned long)sset;
+    sigset_t sset;
+    block_deferrable_signals(0, &sset);
+    return (unsigned long)sset;
 }
 
 #if defined(LISP_FEATURE_SB_THREAD)
 void apply_sigmask(unsigned long sigmask)
 {
-  sigset_t sset = (sigset_t)sigmask;
-  pthread_sigmask(SIG_SETMASK, &sset, 0);
+    sigset_t sset = (sigset_t)sigmask;
+    pthread_sigmask(SIG_SETMASK, &sset, 0);
 }
 #endif
 
@@ -145,6 +265,9 @@ void *UL_GetCurrentTeb() { return NtCurrentTeb(); };
 void *UL_GetCurrentFrame() { return __builtin_frame_address(0); }
 
 void *base_seh_frame;
+void *real_uwp_seh_handler;
+
+os_vm_address_t core_mmap_end;
 
 static void *get_seh_frame(void)
 {
@@ -180,31 +303,198 @@ inline static void *get_stack_frame(void)
 #if defined(LISP_FEATURE_SB_THREAD)
 void alloc_gc_page()
 {
-  void* addr = VirtualAlloc(GC_SAFEPOINT_PAGE_ADDR, 4, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-  if (!addr) {
-    DWORD lastError = GetLastError();
-    lose("in alloc_gc_page, VirtualAlloc returned NULL");
-  }
+    AVER(VirtualAlloc(GC_SAFEPOINT_PAGE_ADDR, 4,
+                      MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
 }
 
 void map_gc_page()
 {
-  DWORD oldProt;
-  if (!VirtualProtect(GC_SAFEPOINT_PAGE_ADDR, 4, PAGE_READWRITE, &oldProt)) {
-    DWORD lastError = GetLastError();
-    lose("in map_gc_page, VirtualProtect returned FALSE");
-  }
+    DWORD oldProt;
+    AVER(VirtualProtect(GC_SAFEPOINT_PAGE_ADDR, 4,
+                        PAGE_READWRITE, &oldProt));
 }
 
 void unmap_gc_page()
 {
-  DWORD oldProt;
-  if (!VirtualProtect(GC_SAFEPOINT_PAGE_ADDR, 4, PAGE_NOACCESS, &oldProt)) {
-    DWORD lastError = GetLastError();
-    lose("in unmap_gc_page, VirtualProtect returned FALSE");
-  }
+    DWORD oldProt;
+    AVER(VirtualProtect(GC_SAFEPOINT_PAGE_ADDR, 4,
+                        PAGE_NOACCESS, &oldProt));
 }
+
 #endif
+
+#if defined(LISP_FEATURE_SB_DYNAMIC_CORE)
+
+u32 os_get_build_time_shared_libraries(u32 excl_maximum,
+                                       void* opt_root,
+                                       void** opt_store_handles,
+                                       const char *opt_store_names[])
+{
+    void* base = opt_root ? opt_root : (void*)GetModuleHandle(NULL);
+    void* base_magic_location =
+        base + ((IMAGE_DOS_HEADER*)base)->e_lfanew;
+    void* check_duplicates[excl_maximum];
+
+    if ((*(u32*)base_magic_location)!=0x4550) {
+        /* We don't need this DLL thingie _that_ much. If the world
+         * has changed to a degree where PE magic isn't found, let's
+         * silently return `no libraries detected'. */
+        return 0;
+    } else {
+        IMAGE_FILE_HEADER* image_file_header = (base_magic_location + 4);
+        IMAGE_OPTIONAL_HEADER* image_optional_header =
+            (void*)(image_file_header + 1);
+        IMAGE_DATA_DIRECTORY* image_import_direntry =
+            &image_optional_header->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+        IMAGE_IMPORT_DESCRIPTOR* image_import_descriptor =
+            base + image_import_direntry->VirtualAddress;
+        u32 nlibrary, i,j;
+
+        for (nlibrary=0u; nlibrary < excl_maximum
+                          && image_import_descriptor->FirstThunk;
+             ++image_import_descriptor)
+        {
+            MEMORY_BASIC_INFORMATION moduleMapping;
+            if (dyndebug_runtime_link) {
+                fprintf(dyndebug_output,"Now should know DLL: %s\n",
+                        (base + image_import_descriptor->Name));
+            }
+            if (VirtualQuery
+                (*(LPCVOID**)
+                 ((LPCVOID)base + image_import_descriptor->FirstThunk),
+                 &moduleMapping, sizeof (moduleMapping)))
+            {
+                for (j=0; j<nlibrary; ++j)
+                {
+                    if(check_duplicates[j] == moduleMapping.AllocationBase)
+                        break;
+                }
+                if (j<nlibrary) continue;
+
+                check_duplicates[nlibrary] = moduleMapping.AllocationBase;
+                if (opt_store_handles) {
+                    opt_store_handles[nlibrary] = moduleMapping.AllocationBase;
+                }
+                if (opt_store_names) {
+                    opt_store_names[nlibrary] = (const char *)
+                        (base + image_import_descriptor->Name);
+                }
+                if (dyndebug_runtime_link) {
+                    fprintf(stderr,"DLL detection: %u, base %p: %s\n",
+                            nlibrary, moduleMapping.AllocationBase,
+                            (base + image_import_descriptor->Name));
+                }
+                ++ nlibrary;
+            }
+        }
+        return nlibrary;
+    }
+}
+
+
+#define FOLLOW(obj,lowtagtype,ctype)            \
+    (*(struct ctype*)(obj - lowtagtype##_LOWTAG))
+
+#define FOTHERPTR(obj,ctype)                    \
+    FOLLOW(obj,OTHER_POINTER,ctype)
+
+static inline lispobj car(lispobj conscell)
+{
+    return FOLLOW(conscell,LIST_POINTER,cons).car;
+}
+
+static inline lispobj cdr(lispobj conscell)
+{
+    return FOLLOW(conscell,LIST_POINTER,cons).cdr;
+}
+extern void undefined_alien_function(); /* see interrupt.c */
+void os_link_runtime()
+{
+    lispobj head;
+    void **link_table = 0x21010000;
+    u32 nsymbol;
+    lispobj symbol_name;
+    char *namechars;
+    char namecopy[256];
+    int namelength;
+    char *at;
+    void *myself = GetModuleHandleW(NULL);
+    HMODULE buildTimeImages[16] = {myself};
+    u32 i;
+    /* Somewhat arbitrary (and DLL topic itself is dirty on
+       pre-WinXP).  What I want is to get module handles for the
+       libraries that _are_ already loaded because of our build-time
+       dependencies. What I don't what is to list some preselected set
+       of libraries. */
+    u32 nlibraries =
+        1 + os_get_build_time_shared_libraries(15u, myself,
+                                               &buildTimeImages[1], NULL);
+
+    if (dyndebug_runtime_link) {
+        for (i=0; i<nlibraries; ++i) {
+            fprintf(dyndebug_output,"Got library %u/%u with base %p\n",
+                    i,nlibraries, buildTimeImages[i]);
+        }
+    }
+    os_validate((void*)0x21010000, 65536);
+    os_validate_recommit((void*)0x21010000, 65536);
+
+    for (head = SymbolValue(REQUIRED_RUNTIME_C_SYMBOLS,0), nsymbol = 0u;
+         head!=NIL; head = cdr(head), ++nsymbol)
+    {
+        int linked = 0;
+
+        symbol_name = car(car(head));
+        namechars = FOTHERPTR(symbol_name,vector).data;
+        namelength = fixnum_value(FOTHERPTR(symbol_name,vector).length);
+        AVERLAX(namelength<(sizeof(namecopy))) ||
+            (namelength = (sizeof(namecopy))-1);
+        memcpy(namecopy, namechars, namelength);
+        namecopy[namelength] = 0;
+
+        /* no stdcall mangling when ll/gpa */
+        if ((at = strrchr(namecopy,'@'))) { (*at) = 0; }
+
+        /* special cases */
+        if (!memcmp(namecopy,"_$jump[",sizeof("_$jump[")))
+        {
+            link_table[nsymbol] = (void*)0x68909090; /* nop nop nop, pushl  $___ */
+            continue;
+        } else if (!memcmp(namecopy,"_].",sizeof("_].")))
+        {
+            link_table[nsymbol] = (void*)0x000000C3; /* ret, zeroes */
+            continue;
+        }
+
+        for (i=0u; i<nlibraries; ++i) {
+            void* result = GetProcAddress(buildTimeImages[i],
+                                          namecopy + 2);
+            if (result)
+            {
+                link_table[nsymbol] = result;
+                if (dyndebug_runtime_link) {
+                    fprintf(dyndebug_output,
+                            "Core requests linking [0x%p] <= [%s]: => [0x%p]\n",
+                            link_table+nsymbol, namecopy, result);
+                }
+                break;
+            }
+        }
+        if (i == nlibraries)
+        {
+            if (dyndebug_runtime_link) {
+                fprintf(stderr,"Core requests linking [0x%p] <= [%s]: failed\n",
+                        link_table+nsymbol, namecopy);
+            }
+            link_table[nsymbol] = undefined_alien_function;
+        }
+    }
+    /* exit(111); */
+}
+
+#endif
+
+
 
 #if defined(LISP_FEATURE_SB_THREAD)
 /* We want to get a slot in TIB that (1) is available at constant
@@ -229,10 +519,10 @@ void unmap_gc_page()
    To summarize, let's list the assumptions we make:
 
    - TIB, which is FS segment base, contains first 64 TLS slots at the
-     offset #xE10 (i.e. TIB layout compatibility);
+   offset #xE10 (i.e. TIB layout compatibility);
    - TLS slots are allocated from lower to higher ones;
    - All libraries together with CRT startup have not requested 64
-     slots yet.
+   slots yet.
 
    All these assumptions together don't seem to be less warranted than
    the availability of TIB arbitrary data slot for our use. There are
@@ -259,9 +549,6 @@ void os_preinit()
             TlsSetValue(OUR_TLS_INDEX, (void*)(intptr_t)0xFEEDBAC4);
             if ((intptr_t)(void*)arch_os_get_current_thread()!=(intptr_t)0xFEEDBAC4)
                 lose("TLS slot assertion failed: TIB layout change detected");
-            TlsSetValue(OUR_TLS_INDEX, (void*)(intptr_t)0xDEADBEAD);
-            if ((intptr_t)(void*)arch_os_get_current_thread()!=(intptr_t)0xDEADBEAD)
-                lose("TLS slot assertion failed: TIB content unstable");
             TlsSetValue(OUR_TLS_INDEX, NULL);
             break;
         }
@@ -302,11 +589,11 @@ static void (*fiber_factory_callback) (void*) = NULL;
 void fiber_announce_factory(pthread_t thread,
                             void(*callback)(void*))
 {
-  pthread_mutex_lock(&fiber_factory_lock);
-  fiber_factory_callback = callback;
-  fiber_factory_fiber = thread;
-  pthread_cond_broadcast(&fiber_factory_condition);
-  pthread_mutex_unlock(&fiber_factory_lock);
+    pthread_mutex_lock(&fiber_factory_lock);
+    fiber_factory_callback = callback;
+    fiber_factory_fiber = thread;
+    pthread_cond_broadcast(&fiber_factory_condition);
+    pthread_mutex_unlock(&fiber_factory_lock);
 }
 
 /* For Lisp fibers whose foreign threads are finished, we need another
@@ -338,8 +625,8 @@ static pthread_mutex_t fiber_dead_mutex = PTHREAD_MUTEX_INITIALIZER;
 static HANDLE fiber_dead_wakeup;
 
 struct fiber_dead_record {
-  pthread_t companion_pthread;
-  struct fiber_dead_record* next;
+    pthread_t companion_pthread;
+    struct fiber_dead_record* next;
 };
 
 static struct fiber_dead_record *first_dead, *last_dead;
@@ -347,21 +634,21 @@ static struct fiber_dead_record *first_dead, *last_dead;
 /* To be called from foreign thread TLS destructor */
 static void fiber_is_dead(void* companion_pthread)
 {
-  struct fiber_dead_record* next;
-  next = malloc(sizeof(*next));
-  next->next = NULL;
-  next->companion_pthread = companion_pthread;
-  pthread_mutex_lock(&fiber_dead_mutex);
-  if (!last_dead) {
-    first_dead = last_dead = next;
-  } else {
-    last_dead->next = next;
-    last_dead = next;
-  }
-  if (fiber_dead_wakeup) {
-    SetEvent(fiber_dead_wakeup);
-  }
-  pthread_mutex_unlock(&fiber_dead_mutex);
+    struct fiber_dead_record* next;
+    next = malloc(sizeof(*next));
+    next->next = NULL;
+    next->companion_pthread = companion_pthread;
+    pthread_mutex_lock(&fiber_dead_mutex);
+    if (!last_dead) {
+        first_dead = last_dead = next;
+    } else {
+        last_dead->next = next;
+        last_dead = next;
+    }
+    if (fiber_dead_wakeup) {
+        SetEvent(fiber_dead_wakeup);
+    }
+    pthread_mutex_unlock(&fiber_dead_mutex);
 }
 
 /* Simplified condition for handling obsolete foreign threads. TODO:
@@ -373,185 +660,193 @@ static void fiber_is_dead(void* companion_pthread)
 
 void fiber_dead_synchronization(int op)
 {
-  struct thread * self = arch_os_get_current_thread();
-  switch(op) {
-  case FIBER_DEAD_LOCK:
-    pthread_mutex_lock(&fiber_dead_mutex);
-    break;
-  case FIBER_DEAD_UNLOCK:
-    pthread_mutex_unlock(&fiber_dead_mutex);
-    break;
-  case FIBER_DEAD_WAIT:
-    fiber_dead_wakeup = self->private_events.events[0];
-    ResetEvent(fiber_dead_wakeup);
-    pthread_mutex_unlock(&fiber_dead_mutex);
-    WaitForMultipleObjects(2, self->private_events.events, FALSE, INFINITE);
-    pthread_mutex_lock(&fiber_dead_mutex);
-    fiber_dead_wakeup = NULL;
-    break;
-  }
+    struct thread * self = arch_os_get_current_thread();
+    switch(op) {
+    case FIBER_DEAD_LOCK:
+        pthread_mutex_lock(&fiber_dead_mutex);
+        break;
+    case FIBER_DEAD_UNLOCK:
+        pthread_mutex_unlock(&fiber_dead_mutex);
+        break;
+    case FIBER_DEAD_WAIT:
+        fiber_dead_wakeup = self->private_events.events[0];
+        ResetEvent(fiber_dead_wakeup);
+        pthread_mutex_unlock(&fiber_dead_mutex);
+        WaitForMultipleObjects(2, self->private_events.events, FALSE, INFINITE);
+        pthread_mutex_lock(&fiber_dead_mutex);
+        fiber_dead_wakeup = NULL;
+        break;
+    }
 }
 
 pthread_t fiber_dead_get()
 {
-  pthread_t result = NULL;
-  if (first_dead) {
-    result = first_dead->companion_pthread;
-    if (first_dead == last_dead) {
-      first_dead = last_dead = NULL;
-    } else {
-      struct fiber_dead_record* prev = first_dead;
-      first_dead = first_dead->next;
-      free(prev);
+    pthread_t result = NULL;
+    if (first_dead) {
+        result = first_dead->companion_pthread;
+        if (first_dead == last_dead) {
+            first_dead = last_dead = NULL;
+        } else {
+            struct fiber_dead_record* prev = first_dead;
+            first_dead = first_dead->next;
+            free(prev);
+        }
     }
-  }
-  return result;
+    return result;
 }
 
 void fiber_deinit_runtime()
 {
-  pthread_t factory;
-  pthread_mutex_lock(&fiber_factory_lock);
-  factory = fiber_factory_fiber;
-  if (!factory) {
+    pthread_t factory;
+    pthread_mutex_lock(&fiber_factory_lock);
+    factory = fiber_factory_fiber;
+    if (!factory) {
+        pthread_mutex_unlock(&fiber_factory_lock);
+        return;
+    }
+    fiber_factory_fiber = NULL;
+    pthread_cond_signal(&fiber_factory_condition);
     pthread_mutex_unlock(&fiber_factory_lock);
-    return;
-  }
-  fiber_factory_fiber = NULL;
-  pthread_cond_signal(&fiber_factory_condition);
-  pthread_mutex_unlock(&fiber_factory_lock);
 
-  fiber_is_dead(factory);
-  /* Lisp side should join factory thread */
+    fiber_is_dead(factory);
+    /* Lisp side should join factory thread */
 }
 
 /* Structure used to pass callback arguments into a companion fiber */
 typedef struct fff_call_info {
-  lispobj args[3];
-  int done;
+    lispobj args[3];
+    int done;
 } fff_call_info;
 
 void fff_foreign_callback( void *v_info_ptr)
 {
-  fff_call_info *info_ptr = v_info_ptr;
-  lispobj *args = info_ptr->args;
-  gc_enter_unsafe_region();
-  funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,arch_os_get_current_thread()),
-           LISPOBJ(args[0]),LISPOBJ(args[1]),LISPOBJ(args[2]));
-  gc_leave_region();
-  info_ptr->done = 1;
-  return;
+    fff_call_info *info_ptr = v_info_ptr;
+    lispobj *args = info_ptr->args;
+    gc_enter_unsafe_region();
+    funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,arch_os_get_current_thread()),
+             LISPOBJ(args[0]),LISPOBJ(args[1]),LISPOBJ(args[2]));
+    gc_leave_region();
+    info_ptr->done = 1;
+    return;
 }
 
-void fff_generic_callback(lispobj arg0,lispobj arg1, lispobj arg2) {
-  struct thread* th = arch_os_get_current_thread();
-  pthread_t companion_fiber;
-  if (th) {
-    gc_enter_unsafe_region();
-    funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,th),arg0,arg1,arg2);
-    gc_leave_region();
-  } else {
-    /* It is a foreign thread */
-    pthread_np_notice_thread();
-    /* Now we have a pthread_self(), even if we didn't */
-    companion_fiber = pthread_getspecific(lisp_fiber_key);
-    if (!companion_fiber) {
-      /* Create a new companion fiber */
-      pthread_mutex_lock(&fiber_factory_lock);
-      while (!fiber_factory_fiber) {
-        /* No fiber factory (yet/already). Wait for something to
-           happen.
-
-           When dumping core, all ftc companion fibers will be
-           detached from their threads, and the condition will never
-           be signalled: reentered callbacks will hang forever.
-
-           Upon restart, when lisp fiber factory is not initialized,
-           foreign callbacks will wait for initialization.
-        */
-        pthread_cond_wait(&fiber_factory_condition,
-                          &fiber_factory_lock);
-      }
-      pthread_np_run_in_fiber(fiber_factory_fiber,
-                              fiber_factory_callback,
-                              &companion_fiber);
-      pthread_mutex_unlock(&fiber_factory_lock);
-
-      /* Save it for future callbacks */
-      pthread_setspecific(lisp_fiber_key, companion_fiber);
+void fff_generic_callback(lispobj arg0,lispobj arg1, lispobj arg2)
+{
+    struct thread* th = arch_os_get_current_thread();
+    pthread_t companion_fiber;
+    if (th) {
+        gc_enter_unsafe_region();
+        funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,th),arg0,arg1,arg2);
+        gc_leave_region();
     } else {
-      if (!fiber_factory_fiber) {
-        /* Though we have a companion fiber, foreign callback support
-           is deinitialized, and this fiber is unusable. */
+        /* It is a foreign thread */
+        pthread_np_notice_thread();
+        /* Now we have a pthread_self(), even if we didn't */
+        companion_fiber = pthread_getspecific(lisp_fiber_key);
+        if (!companion_fiber) {
+            /* Create a new companion fiber */
+            pthread_mutex_lock(&fiber_factory_lock);
+            while (!fiber_factory_fiber) {
+                /* No fiber factory (yet/already). Wait for something to
+                   happen.
 
-        pthread_setspecific(lisp_fiber_key, NULL);
-        /* Do something harmless: when SBCL is dumping or exiting,
-           foreign threads entering callbacks will sleep forever. */
-        Sleep(INFINITE);
-      }
-    }
-    /* Run this callback in foreign fiber */
-    if (companion_fiber) {
-      fff_call_info info = {{arg0, arg1, arg2}, 0};
-      if (pthread_np_run_in_fiber(companion_fiber, fff_foreign_callback, &info)) {
-        /* Failure to reenter -> shutdown */
-        pthread_setspecific(lisp_fiber_key, NULL);
-        /* Do something harmless: when SBCL is dumping or exiting,
-           foreign threads entering callbacks will sleep forever. */
-        Sleep(INFINITE);
-      }
-      if (!info.done) {
-        /* Stack unwind in a callback, or a failure to reenter. No
-           need to clean up when this thread exits any more. */
-        pthread_setspecific(lisp_fiber_key, NULL);
-        ExitThread(1);
-      }
-      /* Normal return */
-      if (!fiber_factory_fiber) {
-        /* Subsystem is deinitialized. In this case, foreign thread
-           itself destroys its companion fibers.
+                   When dumping core, all ftc companion fibers will be
+                   detached from their threads, and the condition will never
+                   be signalled: reentered callbacks will hang forever.
 
-           Lisp-level thread-join should be used to wait for active
-           callbacks. */
-        pthread_setspecific(lisp_fiber_key, NULL);
-        fiber_is_dead(companion_fiber);
-      }
-    } else {
-      /* Companion fiber creation failure */
-      ExitThread(1);
-      /* RWSO callback in pthreads_win32 takes care on pthread-created
-         fiber etc. */
+                   Upon restart, when lisp fiber factory is not initialized,
+                   foreign callbacks will wait for initialization.
+                */
+                pthread_cond_wait(&fiber_factory_condition,
+                                  &fiber_factory_lock);
+            }
+            pthread_np_run_in_fiber(fiber_factory_fiber,
+                                    fiber_factory_callback,
+                                    &companion_fiber);
+            pthread_mutex_unlock(&fiber_factory_lock);
+
+            /* Save it for future callbacks */
+            pthread_setspecific(lisp_fiber_key, companion_fiber);
+        } else {
+            if (!fiber_factory_fiber) {
+                /* Though we have a companion fiber, foreign callback support
+                   is deinitialized, and this fiber is unusable. */
+
+                pthread_setspecific(lisp_fiber_key, NULL);
+                /* Do something harmless: when SBCL is dumping or exiting,
+                   foreign threads entering callbacks will sleep forever. */
+                Sleep(INFINITE);
+            }
+        }
+        /* Run this callback in foreign fiber */
+        if (companion_fiber) {
+            fff_call_info info = {{arg0, arg1, arg2}, 0};
+            if (pthread_np_run_in_fiber(companion_fiber, fff_foreign_callback, &info)) {
+                /* Failure to reenter -> shutdown */
+                pthread_setspecific(lisp_fiber_key, NULL);
+                /* Do something harmless: when SBCL is dumping or exiting,
+                   foreign threads entering callbacks will sleep forever. */
+                Sleep(INFINITE);
+            }
+            if (!info.done) {
+                /* Stack unwind in a callback, or a failure to reenter. No
+                   need to clean up when this thread exits any more. */
+                pthread_setspecific(lisp_fiber_key, NULL);
+                ExitThread(1);
+            }
+            /* Normal return */
+            if (!fiber_factory_fiber) {
+                /* Subsystem is deinitialized. In this case, foreign thread
+                   itself destroys its companion fibers.
+
+                   Lisp-level thread-join should be used to wait for active
+                   callbacks. */
+                pthread_setspecific(lisp_fiber_key, NULL);
+                fiber_is_dead(companion_fiber);
+            }
+        } else {
+            /* Companion fiber creation failure */
+            ExitThread(1);
+            /* RWSO callback in pthreads_win32 takes care on pthread-created
+               fiber etc. */
+        }
     }
-  }
 }
 
 
 static pthread_key_t save_lisp_tls_key;
 
-static void save_lisp_tls() {
-  pthread_setspecific(save_lisp_tls_key,TlsGetValue(OUR_TLS_INDEX));
+static void save_lisp_tls()
+{
+    pthread_setspecific(save_lisp_tls_key,TlsGetValue(OUR_TLS_INDEX));
 }
 
-static void restore_lisp_tls() {
-  TlsSetValue(OUR_TLS_INDEX, pthread_getspecific(save_lisp_tls_key));
+static void restore_lisp_tls()
+{
+    TlsSetValue(OUR_TLS_INDEX, pthread_getspecific(save_lisp_tls_key));
 }
+
 
 #endif  /* LISP_FEATURE_SB_THREAD */
 
 void os_init(char *argv[], char *envp[])
 {
     SYSTEM_INFO system_info;
-
     GetSystemInfo(&system_info);
     os_vm_page_size = system_info.dwPageSize;
+    fast_bzero_pointer = fast_bzero_detect;
+    dyndebug_init();
 
     base_seh_frame = get_seh_frame();
+    accept_post_mortem_startup();
 #if defined(LISP_FEATURE_SB_THREAD)
     pthread_key_create(&save_lisp_tls_key,NULL);
     /* lisp_fiber_key with destructor.  After foreign thread
        exits, its companion Lisp fiber is enqueued for destruction
        too. */
     pthread_key_create(&lisp_fiber_key,fiber_is_dead);
+    /* Now INVALID fpu trap should be enabled from the very start */
+    _controlfp(~_EM_INVALID,_MCW_EM);
     pthread_save_context_hook = save_lisp_tls;
     pthread_restore_context_hook = restore_lisp_tls;
     pthread_cond_init(&fiber_factory_condition,NULL);
@@ -561,6 +856,92 @@ void os_init(char *argv[], char *envp[])
 #endif
 }
 
+
+static DWORD os_protect_modes[8] = {
+    PAGE_NOACCESS,
+    PAGE_READONLY,
+    PAGE_READWRITE,
+    PAGE_READWRITE,
+    PAGE_EXECUTE,
+    PAGE_EXECUTE_READ,
+    PAGE_EXECUTE_READWRITE,
+    PAGE_EXECUTE_READWRITE,
+};
+
+
+static DWORD os_mmap_noexec_modes[8] = {
+    PAGE_NOACCESS,
+    PAGE_READONLY,
+    PAGE_WRITECOPY,
+    PAGE_WRITECOPY,
+    PAGE_NOACCESS,
+    PAGE_READONLY,
+    PAGE_WRITECOPY,
+    PAGE_WRITECOPY,
+};
+
+static DWORD os_mmap_exec_modes[8] = {
+    PAGE_NOACCESS,
+    PAGE_READONLY,
+    PAGE_WRITECOPY,
+    PAGE_WRITECOPY,
+    PAGE_EXECUTE,
+    PAGE_EXECUTE_READ,
+    PAGE_EXECUTE_WRITECOPY,
+    PAGE_EXECUTE_WRITECOPY,
+};
+
+static DWORD* os_mmap_protect_modes = os_protect_modes;
+
+static inline boolean addr_in_mmapped_core(os_vm_address_t addr)
+{
+    return
+        (core_mmap_end != NULL) &&
+        (((u64)addr) >= (u64)DYNAMIC_SPACE_START) &&
+        (((u64)addr) < (u64)core_mmap_end);
+}
+
+#define RECURSIVE_REDUCE_TO_ONE_SPACE_VOID(function,addr,len,...)       \
+    do {                                                                \
+        if (core_mmap_end) {                                            \
+            if (((u64)core_mmap_end<(u64)(addr+len))&&                  \
+                ((u64)core_mmap_end>(u64)(addr))) {                     \
+                function(core_mmap_end,                                 \
+                         addr+len-core_mmap_end                         \
+                         __VA_ARGS__);                                  \
+                len -= (addr+len-core_mmap_end);                        \
+            };                                                          \
+            if (addr_in_mmapped_core(addr+len)&&                        \
+                !(addr_in_mmapped_core(addr))) {                        \
+                function((os_vm_address_t)DYNAMIC_SPACE_START,          \
+                         addr+len-((os_vm_address_t)DYNAMIC_SPACE_START \
+                             ) __VA_ARGS__);                            \
+                len = (os_vm_address_t)DYNAMIC_SPACE_START - addr;      \
+            };                                                          \
+        };                                                              \
+    } while(0)                                                          \
+
+#define RECURSIVE_REDUCE_TO_ONE_SPACE_ADDR(function,addr,len,...)       \
+    do {                                                                \
+        if (core_mmap_end) {                                            \
+            if (((u64)core_mmap_end<(u64)(addr+len))&&                  \
+                ((u64)core_mmap_end>(u64)(addr))) {                     \
+                if(!function(core_mmap_end,addr+len-core_mmap_end       \
+                             __VA_ARGS__))                              \
+                    return NULL;                                        \
+                len -= (addr+len-core_mmap_end);                        \
+            };                                                          \
+            if (addr_in_mmapped_core(addr+len)&&                        \
+                !(addr_in_mmapped_core(addr))) {                        \
+                if (!function((os_vm_address_t)DYNAMIC_SPACE_START,     \
+                              addr+len-                                 \
+                              ((os_vm_address_t)DYNAMIC_SPACE_START)    \
+                              __VA_ARGS__))                             \
+                    return NULL;                                        \
+                len = (os_vm_address_t)DYNAMIC_SPACE_START - addr;      \
+            };                                                          \
+        }                                                               \
+    } while(0)                                                          \
 
 /*
  * So we have three fun scenarios here.
@@ -591,35 +972,33 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
 
     if (!addr) {
         /* the simple case first */
-        os_vm_address_t real_addr;
-        if (!(real_addr = VirtualAlloc(addr, len, MEM_COMMIT, PAGE_EXECUTE_READWRITE))) {
-            fprintf(stderr, "VirtualAlloc: 0x%lx.\n", GetLastError());
-            return 0;
-        }
-
-        return real_addr;
+        return
+            AVERLAX(VirtualAlloc(addr, len, MEM_COMMIT, PAGE_EXECUTE_READWRITE));
     }
 
-    if (!VirtualQuery(addr, &mem_info, sizeof mem_info)) {
-        fprintf(stderr, "VirtualQuery: 0x%lx.\n", GetLastError());
+    RECURSIVE_REDUCE_TO_ONE_SPACE_ADDR(os_validate,addr,len);
+
+    if (addr_in_mmapped_core(addr))
+        return addr;
+
+    if (!AVERLAX(VirtualQuery(addr, &mem_info, sizeof mem_info)))
         return 0;
-    }
 
     if ((mem_info.State == MEM_RESERVE) && (mem_info.RegionSize >=len)) {
-      /* It would be correct to return here. However, support for Wine
-         would be beneficial, and Wine has a strange behavior in this
-         department. It reports all memory below KERNEL32.DLL as
-         reserved, but disallows MEM_COMMIT.
+        /* It would be correct to return here. However, support for Wine
+           would be beneficial, and Wine has a strange behavior in this
+           department. It reports all memory below KERNEL32.DLL as
+           reserved, but disallows MEM_COMMIT.
 
-         Let's work around it: reserve the region we need for a second
-         time. Second reservation is documented to fail on normal NT
-         family, but it will succeed on Wine if this region is
-         actually free.
-         */
-      VirtualAlloc(addr, len, MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-      /* If it is wine, second call succeeds, and now the region is
-         really reserved. */
-      return addr;
+           Let's work around it: reserve the region we need for a second
+           time. Second reservation is documented to fail on normal NT
+           family, but it will succeed on Wine if this region is
+           actually free.
+        */
+        VirtualAlloc(addr, len, MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        /* If it is wine, second call succeeds, and now the region is
+           really reserved. */
+        return addr;
     }
 
     if (mem_info.State == MEM_RESERVE) {
@@ -627,11 +1006,9 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
         fflush(stderr);
     }
 
-    if (!VirtualAlloc(addr, len, (mem_info.State == MEM_RESERVE)?
-                      MEM_COMMIT: MEM_RESERVE, PAGE_EXECUTE_READWRITE)) {
-        fprintf(stderr, "VirtualAlloc: 0x%lx.\n", GetLastError());
+    if(!AVERLAX(VirtualAlloc(addr, len, (mem_info.State == MEM_RESERVE)?
+                             MEM_COMMIT: MEM_RESERVE, PAGE_EXECUTE_READWRITE)))
         return 0;
-    }
 
     return addr;
 }
@@ -639,13 +1016,15 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
 os_vm_address_t
 os_validate_recommit(os_vm_address_t addr, os_vm_size_t len)
 {
-    MEMORY_BASIC_INFORMATION mem_info;
+    return
+        AVERLAX(VirtualAlloc(addr, len, MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+}
 
-    if (!VirtualAlloc(addr, len, MEM_COMMIT, PAGE_EXECUTE_READWRITE)) {
-        fprintf(stderr, "VirtualAlloc: 0x%lx.\n", GetLastError());
-        return 0;
-    }
-    return addr;
+os_vm_address_t
+os_allocate_lazily(os_vm_size_t len)
+{
+    return
+        AVERLAX(VirtualAlloc(NULL, len, MEM_RESERVE, PAGE_EXECUTE_READWRITE));
 }
 
 /*
@@ -666,19 +1045,35 @@ os_validate_recommit(os_vm_address_t addr, os_vm_size_t len)
 void
 os_invalidate(os_vm_address_t addr, os_vm_size_t len)
 {
-    if (!VirtualFree(addr, len, MEM_DECOMMIT)) {
-        fprintf(stderr, "VirtualFree: 0x%lx.\n", GetLastError());
+    RECURSIVE_REDUCE_TO_ONE_SPACE_VOID(os_invalidate,addr,len);
+
+    if (addr_in_mmapped_core(addr)) {
+        fast_bzero_pointer(addr, len);
+    } else {
+        AVERLAX(VirtualFree(addr, len, MEM_DECOMMIT));
     }
 }
 
 void
 os_invalidate_free(os_vm_address_t addr, os_vm_size_t len)
 {
-    if (!VirtualFree(addr, 0, MEM_RELEASE)) {
-        fprintf(stderr, "VirtualFree: 0x%lx.\n", GetLastError());
-    }
+    AVERLAX(VirtualFree(addr, 0, MEM_RELEASE));
 }
 
+static int os_supports_executable_mapping = 0;
+#ifndef FILE_MAP_EXECUTE
+#define FILE_MAP_EXECUTE 0x20
+#endif
+
+int win32_open_for_mmap(const char* fileName)
+{
+    HANDLE handle =
+        CreateFileA(fileName,GENERIC_READ|GENERIC_EXECUTE,
+                    FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,NULL,
+                    OPEN_EXISTING,0,NULL);
+    AVER(handle && (handle!=INVALID_HANDLE_VALUE));
+    return _open_osfhandle(handle,O_BINARY);
+}
 /*
  * os_map() is called to map a chunk of the core file into memory.
  *
@@ -695,66 +1090,82 @@ os_map(int fd, int offset, os_vm_address_t addr, os_vm_size_t len)
 {
     os_vm_size_t count;
 
-#if 0
-    fprintf(stderr, "os_map: %d, 0x%x, %p, 0x%x.\n", fd, offset, addr, len);
-    fflush(stderr);
-#endif
+    if (addr == DYNAMIC_SPACE_START)
+    {
+        if (!(offset & (OS_VM_MMAP_UNIT_SIZE-1))) {
+            len = (len + OS_VM_MMAP_UNIT_SIZE-1)&~(OS_VM_MMAP_UNIT_SIZE-1);
 
-    if (!VirtualAlloc(addr, len, MEM_COMMIT, PAGE_EXECUTE_READWRITE)&&
-        !VirtualAlloc(addr, len, MEM_RESERVE, PAGE_EXECUTE_READWRITE)) {
-        fprintf(stderr, "VirtualAlloc: 0x%lx.\n", GetLastError());
-        lose("os_map: VirtualAlloc failure");
-    }
+            HANDLE mapping =
+                CreateFileMapping(_get_osfhandle(fd),NULL,
+                                  PAGE_EXECUTE_WRITECOPY, 0, offset+len,
+                                  NULL);
+            if (!mapping) {
+                mapping =
+                    CreateFileMapping(_get_osfhandle(fd),NULL,
+                                      PAGE_READONLY, 0, offset+len,
+                                      NULL);
+                if (mapping)
+                    os_supports_executable_mapping = 0;
+            } else {
+                os_supports_executable_mapping = 1;
+            }
+            if (mapping) {
+                /* Was validate()d, that's why we can't mmap with copy-on-write.
+                   Well, let's turn it back... */
+                AVERLAX(VirtualFree(addr, 0, MEM_RELEASE));
+                AVER(MapViewOfFileEx(mapping, FILE_MAP_COPY
+                                     |(os_supports_executable_mapping?
+                                       FILE_MAP_EXECUTE: 0), 0,
+                                     offset, len, addr));
 
-    if (lseek(fd, offset, SEEK_SET) == -1) {
-        lose("os_map: Seek failure.");
+                /* Reserve the rest of dynamic space... */
+                os_validate(addr+len, dynamic_space_size-len);
+                core_mmap_end = addr + len;
+                os_mmap_protect_modes = os_supports_executable_mapping ?
+                    os_mmap_exec_modes : os_mmap_noexec_modes;
+                return addr;
+            }
+        }
     }
+    AVER(VirtualAlloc(addr, len, MEM_COMMIT, PAGE_EXECUTE_READWRITE)||
+         VirtualAlloc(addr, len, MEM_RESERVE|MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+
+    CRT_AVER_NONNEGATIVE(lseek(fd, offset, SEEK_SET));
 
     count = read(fd, addr, len);
-    if (count != len) {
-        fprintf(stderr, "expected 0x%x, read 0x%x.\n", len, count);
-        lose("os_map: Failed to read enough bytes.");
-    }
+    CRT_AVER( count == len );
 
     return addr;
 }
 
-static DWORD os_protect_modes[8] = {
-    PAGE_NOACCESS,
-    PAGE_READONLY,
-    PAGE_READWRITE,
-    PAGE_READWRITE,
-    PAGE_EXECUTE,
-    PAGE_EXECUTE_READ,
-    PAGE_EXECUTE_READWRITE,
-    PAGE_EXECUTE_READWRITE,
-};
 
 void
 os_protect(os_vm_address_t address, os_vm_size_t length, os_vm_prot_t prot)
 {
     DWORD old_prot;
 
-    if (!VirtualProtect(address, length, os_protect_modes[prot], &old_prot)
-        && !(VirtualAlloc(address, length, MEM_COMMIT,os_protect_modes[prot]) &&
-             VirtualProtect(address, length, os_protect_modes[prot], &old_prot))) {
-        fprintf(stderr,
-                "VirtualProtect failed, code 0x%lx (0x%lx + 0x%lx into %d).\n",
-                GetLastError(), address, length, prot);
-        fflush(stderr);
+    RECURSIVE_REDUCE_TO_ONE_SPACE_VOID(os_protect,address,length,,prot);
+
+    if (addr_in_mmapped_core(address)) {
+        AVER(VirtualProtect(address, length, os_mmap_protect_modes[prot],
+                            &old_prot));
+    } else {
+        AVER(VirtualProtect(address, length, os_protect_modes[prot], &old_prot)||
+             (VirtualAlloc(address, length, MEM_COMMIT,os_protect_modes[prot]) &&
+              VirtualProtect(address, length, os_protect_modes[prot], &old_prot)));
     }
 }
 
 os_vm_prot_t os_current_protection(os_vm_address_t address)
 {
-  MEMORY_BASIC_INFORMATION minfo;
-  DWORD result = VirtualQuery(address, &minfo, sizeof minfo);
-  int prot;
-  for (prot = 0; prot<(sizeof(os_protect_modes)/sizeof(os_protect_modes[0])); ++prot) {
-    if (os_protect_modes[prot] == minfo.Protect)
-      return prot;
-  }
-  return OS_VM_PROT_NONE;
+    MEMORY_BASIC_INFORMATION minfo;
+    int prot;
+    AVERLAX(VirtualQuery(address, &minfo, sizeof minfo));
+    for (prot = 0; prot<(sizeof(os_protect_modes)/sizeof(os_protect_modes[0])); ++prot) {
+        if (os_protect_modes[prot] == minfo.Protect)
+            return prot;
+    }
+    return OS_VM_PROT_NONE;
 }
 
 
@@ -798,18 +1209,329 @@ is_valid_lisp_addr(os_vm_address_t addr)
 extern boolean internal_errors_enabled;
 
 #ifdef LISP_FEATURE_UD2_BREAKPOINTS
-#define IS_TRAP_EXCEPTION(exception_record, context) \
+#define IS_TRAP_EXCEPTION(exception_record, context)                    \
     (((exception_record)->ExceptionCode == EXCEPTION_ILLEGAL_INSTRUCTION) && \
      (((unsigned short *)((context.win32_context)->Eip))[0] == 0x0b0f))
 #define TRAP_CODE_WIDTH 2
 #else
-#define IS_TRAP_EXCEPTION(exception_record, context) \
+#define IS_TRAP_EXCEPTION(exception_record, context)            \
     ((exception_record)->ExceptionCode == EXCEPTION_BREAKPOINT)
 #define TRAP_CODE_WIDTH 1
 #endif
 extern void exception_handler_wrapper();
 
+extern inline
+int fpu_world_cruel_p()
+{
+    struct thread* th = arch_os_get_current_thread();
+    return th && ((th->in_lisp_fpu_mode)&0xFF00);
+}
 
+extern inline
+int fpu_world_lispy_p()
+{
+    struct thread* th = arch_os_get_current_thread();
+    return th && (th->in_lisp_fpu_mode&0xFF);
+}
+
+/* In SBCL code, Lisp may fldenv or something, so he will own FPU
+ * but never enter our SEH handler... */
+extern inline
+int fpu_world_unknown_p()
+{
+    struct thread* th = arch_os_get_current_thread();
+    return th && dyndebug_lazy_fpu_careful && (th->in_lisp_fpu_mode&0xFF0000);
+}
+
+extern inline
+void establish_c_fpu_world()
+{
+    struct thread* th = arch_os_get_current_thread();
+    if (fpu_world_unknown_p()) {
+        asm("fldcw %0" : : "m"(th->saved_c_fpu_mode));
+        asm("ffree %st(7);");
+        asm("ffree %st(6);");
+        asm("ffree %st(5);");
+        asm("ffree %st(4);");
+        asm("ffree %st(3);");
+        asm("ffree %st(2);");
+        asm("ffree %st(1);");
+        asm("ffree %st(0);");
+        asm("fwait");
+        th->in_lisp_fpu_mode = 0;
+    }
+    if (fpu_world_lispy_p()) {
+        asm("fnstcw %0": "=m"(th->saved_lisp_fpu_mode));
+        asm("fldcw %0" : : "m"(th->saved_c_fpu_mode));
+        asm("fstp %st(0); fstp %st(0)");
+        asm("fstp %st(0); fstp %st(0)");
+        asm("fstp %st(0); fstp %st(0)");
+        asm("fstp %st(0); fstp %st(0)");
+        th->in_lisp_fpu_mode = 0;
+    }
+    AVERLAX(!fpu_world_unknown_p());
+    AVERLAX(!fpu_world_lispy_p());
+}
+
+void c_level_backtrace(const char* header, int depth)
+{
+    void* frame;
+    int n = 0;
+    void** lastseh;
+
+    for (lastseh = get_seh_frame(); lastseh && (lastseh!=(void*)0xFFFFFFFF);
+         lastseh = *lastseh);
+
+    fprintf(dyndebug_output, "Backtrace: %s\n", header);
+    for (frame = __builtin_frame_address(0); frame; frame=*(void**)frame)
+    {
+        if ((n++)>depth)
+            return;
+        fprintf(dyndebug_output, "[#%02d]: ebp = 0x%p, ret = 0x%p\n",n,
+                frame, ((void**)frame)[1]);
+    }
+}
+
+/* Called when FPU world is in indefinite state (in exception handler,
+   for instance), to establish safely one of the definite ones.
+
+   While a lot of C code is neutral to FPU, Lisp definitely shouldn't
+   run with half-full stack.
+
+   To recover lazily (when we enter Lisp) we introduce a special bit
+   in in_lisp_fpu_mode.
+
+   Target FPU world of recover is always the world that was current
+   before it was broken. */
+
+extern inline
+void recover_fpu_world()
+{
+    if (fpu_world_cruel_p()) {
+        int lispyp = fpu_world_lispy_p();
+        struct {int data[7]; }
+        recovery = {
+            (lispyp?
+             this_thread->saved_lisp_fpu_mode:
+             this_thread->saved_c_fpu_mode), /* control */
+            0,                               /* status */
+            lispyp ? 0x5555 : 0xFFFF,        /* tags */
+            0,0,0,0                          /* insn/operand */
+        };
+        if (dyndebug_lazy_fpu) {
+            fprintf(dyndebug_output,
+                    "Recovering indeterminate FPU state to lispyp=%d\n",
+                    lispyp);
+            c_level_backtrace("Recovering FPU state..",15);
+        }
+        asm("fnclex;fldenv %0;fwait" : :"m"(recovery));
+        (arch_os_get_current_thread())->in_lisp_fpu_mode &= 0xFF;
+    }
+}
+
+void enter_c_function(void* which, void* wherefrom)
+{
+    int fpu_before_gcenter = (this_thread)->in_lisp_fpu_mode;
+    gc_enter_safe_region();
+    int fpu_after_gcenter = (this_thread)->in_lisp_fpu_mode;
+    establish_c_fpu_world();
+    int fpu_after_establish = (this_thread)->in_lisp_fpu_mode;
+    AVERLAX(!fpu_world_lispy_p());
+    if (dyndebug_lazy_fpu) {
+        struct { int data[7]; } fenv;
+        asm("fnstenv %0; fwait": "=m"(fenv));
+        asm("fldenv %0" : : "m"(fenv));
+        if ((fenv.data[2] & 0xFFFF )!=0xFFFF) {
+            fprintf(dyndebug_output,
+                    "For strange NPX [0x%p <- 0x%p]: expected state was:\n"
+                    "....%p [-safe-rgn>-] %p [-establish-] %p\n"
+                    "....with tags %p, status %p, control %p\n",
+                    which, wherefrom,
+                    fpu_before_gcenter,
+                    fpu_after_gcenter,
+                    fpu_after_establish,
+                    fenv.data[2], fenv.data[1], fenv.data[0]);
+            c_level_backtrace("Entering C function, strange NPX",15);
+            fenv.data[2]=0xffff;
+            asm("fldenv %0" : : "m"(fenv));
+        }
+    }
+}
+
+void leave_c_function()
+{
+    if (!fpu_world_lispy_p()) {
+        unsigned short register flags asm("%ax");
+        struct {unsigned short words[5];} keep;
+        asm("fxam; fnstsw %0" : "=r"(flags));
+        if ((flags & 0x4500) != 0x4100) {
+            /* Save returned FP value: if safepoint will GC, it can
+             * be clobbered, especially on POST-GC */
+            asm("fstpt %0": "=m"(keep));
+            gc_leave_region();
+            /* In case of normal function return, we have 0 floats,
+             * i.e. normal situation for C ABI */
+            if (dyndebug_lazy_fpu) {
+                c_level_backtrace("FP registers present. Lisp leftover?",5);
+            }
+            asm("fldcw %0" : :"m" (this_thread->saved_lisp_fpu_mode));
+            asm("fldz;fldz;fldz;fldz;");
+            asm("fldz;fldz;fldz;");
+            (this_thread)->in_lisp_fpu_mode = 1;
+
+            /* When C returns floats (here), thread switches to
+             * Lisp FPU mode */
+
+            asm("fldt %0" : : "m"(keep));
+            return;
+        }
+    }
+    gc_leave_region();
+}
+
+
+void enter_lisp_function()
+{
+    /* It's called at funcalls done from C. In handle_exception,
+     * traps, gc safepoint etc., where no call_into_c has happened,
+     * C may run unwittingly with full FPU bag. */
+    recover_fpu_world();
+    if (dyndebug_lazy_fpu) {
+        struct { int data[7]; } fenv;
+        asm("fnstenv %0; fwait": "=m"(fenv));
+        asm("fldenv %0" : : "m"(fenv));
+        if (!fpu_world_lispy_p() && ((fenv.data[2]&0xFFFF)!=0xFFFF)) {
+            fprintf(dyndebug_output,
+                    "Enter Lisp/ strange NPX for C world\n"
+                    "....with tags %p, status %p, control %p\n",
+                    fenv.data[2], fenv.data[1], fenv.data[0]);
+            c_level_backtrace("Enter Lisp: strange NPX state",10);
+        }
+        if (fpu_world_lispy_p() && ((fenv.data[2]&0x5555) & ((fenv.data[2]&0xAAAA)>>1)))
+        {
+            fprintf(dyndebug_output,
+                    "Enter Lisp/ strange NPX for Lisp world.\n"
+                    "....with tags %p, status %p, control %p\n",
+                    fenv.data[2], fenv.data[1], fenv.data[0]);
+            c_level_backtrace("Enter Lisp: strange NPX state",10);
+        }
+    }
+    gc_enter_unsafe_region();
+}
+
+void leave_lisp_function()
+{
+    gc_leave_region();
+    establish_c_fpu_world();
+
+    if (dyndebug_lazy_fpu) {
+        struct { int data[7]; } fenv;
+        asm("fnstenv %0; fwait": "=m"(fenv));
+        asm("fldenv %0" : : "m"(fenv));
+        if (!fpu_world_lispy_p() && ((fenv.data[2]&0xFFFF)!=0xFFFF)) {
+            fprintf(dyndebug_output,
+                    "Leave Lisp/ strange NPX for C world\n"
+                    "....with tags %p, status %p, control %p\n",
+                    fenv.data[2], fenv.data[1], fenv.data[0]);
+            c_level_backtrace("Enter Lisp: strange NPX state",10);
+        }
+        if (fpu_world_lispy_p() && ((fenv.data[2]&0x5555) & ((fenv.data[2]&0xAAAA)>>1)))
+        {
+            fprintf(dyndebug_output,
+                    "Leave Lisp/ strange NPX for Lisp world.\n"
+                    "....with tags %p, status %p, control %p\n",
+                    fenv.data[2], fenv.data[1], fenv.data[0]);
+            c_level_backtrace("Enter Lisp: strange NPX state",10);
+        }
+    }
+}
+
+
+#define WCTX_PUSH(wctx,value)                                           \
+    do { wctx->Esp-=4;                                                  \
+        *((intptr_t*)(intptr_t) wctx->Esp)=value; } while(0)
+
+#define WCTX_PUSHA(wctx)                        \
+    do {                                        \
+    intptr_t orig_esp = wctx->Esp;              \
+    WCTX_PUSH(wctx,wctx->Eax);                  \
+    WCTX_PUSH(wctx,wctx->Ecx);                  \
+    WCTX_PUSH(wctx,wctx->Edx);                  \
+    WCTX_PUSH(wctx,wctx->Ebx);                  \
+    WCTX_PUSH(wctx,orig_esp);                   \
+    WCTX_PUSH(wctx,wctx->Ebp);                  \
+    WCTX_PUSH(wctx,wctx->Esi);                  \
+    WCTX_PUSH(wctx,wctx->Edi);                  \
+    } while(0)
+
+
+
+typedef void (*callback_pointer)();
+
+/**
+ * Modify context in order to make it run run_function after the
+ * signal or exception handler returns. After run_function is
+ * complete, it returns to original code.
+ *
+ * @param context CONTEXT of a thread where the call should be
+ * injected
+ *
+ * @param run_function function whose call should be injected
+ *
+ * @param frame_data_size size of a data block allocated for the
+ * duration of function call (dynamic extent).
+ *
+ * @param arg1
+ * @param arg2
+ *
+ * `run-function' can receive up to 3 parameters. The first one is
+ * (automagically) a pointer to frame_data_size-sized memory block.
+ * The rest two parameters are arbitrary; `run_function' can be
+ * declared without them and work flawlessly, but the caller of
+ * inject_function_call should better give some values for arg1 and
+ * arg2 anyway.
+ *
+ * Temporary memory block is allocated below inject_function_call
+ * frame on the same stack, which is a very dangerous technique: not
+ * only the frame data may become trash if somebody uses the stack up
+ * to this size, but an execution sequence of the function could be
+ * broken as well.
+ *
+ * @return pointer to a memory block of size `frame_data_size', that
+ * will be deallocated after `run_function' returns.
+ */
+static inline
+void* inject_function_call(CONTEXT *context,
+                           callback_pointer run_function,
+                           size_t frame_data_size,
+                           void* arg1, void* arg2)
+{
+    void* frame_data = ((void*)&context) -
+        (0x2000 + frame_data_size);
+
+    WCTX_PUSH(context, context->Eip); /* call ZZZZZ */
+    WCTX_PUSH(context, context->Ebp); /* push %ebp */
+    context->Ebp = context->Esp;      /* mov %esp, %ebp */
+    context->Esp = (DWORD)frame_data;
+    WCTX_PUSH(context, context->EFlags);
+    WCTX_PUSHA(context);
+    WCTX_PUSH(context,arg2);
+    WCTX_PUSH(context,arg1);
+    WCTX_PUSH(context,frame_data); /* FloatSave copy */
+    extern void post_signal_tramp();
+    WCTX_PUSH(context,post_signal_tramp); /* "return" address */
+    context->Eip = (intptr_t)run_function;
+    return frame_data;
+}
+
+static inline
+void inject_npx_recovery(CONTEXT* context)
+{
+    const size_t data_size = sizeof(context->FloatSave);
+
+    memcpy(inject_function_call(context, fpu_restore, data_size, 0, 0),
+           &context->FloatSave, data_size);
+}
 
 /*
  * A good explanation of the exception handling semantics is
@@ -822,34 +1544,142 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                  CONTEXT *context,
                  void *dispatcher_context)
 {
-    DWORD lasterror = GetLastError();
+    DWORD lastError = GetLastError();
+    DWORD code = exception_record->ExceptionCode;
+    EXCEPTION_DISPOSITION disposition = ExceptionContinueExecution;
+    void* fault_address = (void*)exception_record->ExceptionInformation[1];
     os_context_t ctx;
     struct thread* self = arch_os_get_current_thread();
+    int contextual_fpu_state = self ? self->in_lisp_fpu_mode : 0;
+
+    if (dyndebug_lazy_fpu) {
+        DWORD tags = context->FloatSave.TagWord;
+        if (!fpu_world_lispy_p() && ((tags&0xFFFF)!=0xFFFF)) {
+            fprintf(dyndebug_output,
+                    "Exception handler/ strange NPX for C world\n"
+                    "....with tags %p, status %p, control %p\n",
+                    context->FloatSave.TagWord,
+                    context->FloatSave.StatusWord,
+                    context->FloatSave.ControlWord);
+            c_level_backtrace("Exception handler: strange NPX state",10);
+        }
+        if (fpu_world_lispy_p() && ((tags&0x5555) & ((tags&0xAAAA)>>1)))
+        {
+            fprintf(dyndebug_output,
+                    "Exception handler/ strange NPX for Lisp world\n"
+                    "....with tags %p, status %p, control %p\n",
+                    context->FloatSave.TagWord,
+                    context->FloatSave.StatusWord,
+                    context->FloatSave.ControlWord);
+            c_level_backtrace("Exception handler: strange NPX state",10);
+        }
+    }
+    if (code == EXCEPTION_FLT_STACK_CHECK) {
+        /* We expect such exceptions in non-lispy and "ambigious" variants. */
+
+        AVERLAX(!fpu_world_cruel_p()); /* Let's complain if a Lisp
+                                        * code was exposed to
+                                        * interrupt at ambigious
+                                        * time */
+        if ((!fpu_world_lispy_p())) {
+            /* Allow lazy FPU switching.
+
+               When entering C, always ensure that regs are empty and
+               fp control word set up appropriately.
+
+               C_FPU_CONTEXT_P -> when non-nil, current thread's FPU is
+               set up for C.
+
+               But when leaving C / entering Lisp, FPU isn't reinitialized
+               instantly. We do it on stack check exception instead.
+
+               i387-style FPU exceptions aren't easy to handle, because
+               FPU is out of sync with main CPU, having its own
+               instruction pointer. Failed command can't be restarted
+               without analyzing its instruction code and somehow
+               imitating it.
+
+               However, SBCL expects floating stack to be filled, but
+               doesn't expect to find any particular values in it (though
+               FLDZ is used all over the place, zeroes themselves aren't
+               part of the ABI). Thus when it starts working with FPU, it
+               has to begin with a pop operation; and there is no need to
+               analyze/recover _that_ operation, because we know its
+               nature a priori. */
+
+            int stack_empty =
+                (!(context->FloatSave.StatusWord &(1<<9)));
+
+            if (stack_empty) {
+                if (dyndebug_lazy_fpu) {
+                    c_level_backtrace("FPU Stack underflow", 5);
+                    fprintf(dyndebug_output,
+                            "..Offending opcode: %08x\n"
+                            "..Tag word: %08x\n",
+                            *(DWORD*)context->FloatSave.ErrorOffset,
+                            context->FloatSave.TagWord);
+                }
+                ++dyndebug_charge_count;
+
+                /* Remember, Lisp tried to remove one value from FPU
+                 * stack, and we aren't going to recover this
+                 * operation. */
+                //self->saved_c_fpu_mode = context->FloatSave.ControlWord;
+                context->FloatSave.ControlWord = self->saved_lisp_fpu_mode;
+                context->FloatSave.StatusWord &= ~(0x3941);
+                context->FloatSave.TagWord = 0xD555;
+
+                context->ExtendedRegisters[4] = 0x7F;
+                (*(WORD*)(context->ExtendedRegisters+0)) = self->saved_lisp_fpu_mode;
+                (*(WORD*)(context->ExtendedRegisters+2)) &= ~(0x3941);
+                memset(context->ExtendedRegisters+32,0,8*8);
+
+                memset(context->FloatSave.RegisterArea,0,
+                       sizeof(context->FloatSave.RegisterArea));
+
+                contextual_fpu_state = 1; /* lispy one */
+
+                /* inject_npx_recovery(context); */
+                goto finish;
+            }
+            /* If it's not a stack-empty complain by SBCL, let it fall
+             * through. */
+        }
+    }
+
+    /* If FPU world is not marked as cruel, we mark it (we don't
+     * really know where we interrupted). */
+
+    if (self&&((self->in_lisp_fpu_mode &&
+                ((context->FloatSave.TagWord & 0x5555)&
+                 ((context->FloatSave.TagWord & 0xAAAA)>>1)))
+               ||(!self->in_lisp_fpu_mode &&
+                  ((context->FloatSave.TagWord & 0xFFFF)!=0xFFFF)))) {
+        self->in_lisp_fpu_mode |= 0xFF00; /* Hello cruel world */
+    }
+
+
     ctx.win32_context = context;
 
     /* For EXCEPTION_ACCESS_VIOLATION only. */
-    void *fault_address = (void *)exception_record->ExceptionInformation[1];
-    odprintf("handle exception, EIP = 0x%p, code = 0x%p (addr = 0x%p)", context->Eip, exception_record->ExceptionCode, fault_address);
+    odprintf("handle exception, EIP = 0x%p, code = 0x%p (addr = 0x%p)",
+             context->Eip, exception_record->ExceptionCode, fault_address);
     if (exception_record->ExceptionFlags & (EH_UNWINDING | EH_EXIT_UNWIND)) {
         /* If we're being unwound, be graceful about it. */
         /* Undo any dynamic bindings, including *gc-safe*. */
-      unbind_to_here(exception_frame->bindstack_pointer,
-                     arch_os_get_current_thread());
-      gc_safepoint();
-      return ExceptionContinueSearch;
+        unbind_to_here(exception_frame->bindstack_pointer,
+                       arch_os_get_current_thread());
+        gc_safepoint();
+        disposition = ExceptionContinueSearch;
+        goto finish;
     }
-    ctx.sigmask = 0;
-    block_blockable_signals(NULL,&ctx.sigmask);
 
     if (single_stepping &&
         exception_record->ExceptionCode == EXCEPTION_SINGLE_STEP) {
         /* We are doing a displaced instruction. At least function
          * end breakpoints uses this. */
         restore_breakpoint_from_single_step(&ctx);
-        thread_sigmask(SIG_SETMASK,&ctx.sigmask,NULL);
-        gc_safepoint();
-        SetLastError(lasterror);
-        return ExceptionContinueExecution;
+        goto finish;
     }
     if (IS_TRAP_EXCEPTION(exception_record, ctx)) {
         unsigned trap;
@@ -863,86 +1693,91 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         /* Now EIP points just after the INT3 byte and aims at the
          * 'kind' value (eg trap_Cerror). */
         trap = *(unsigned char *)(*os_context_pc_addr(&ctx));
-        handle_trap(&ctx, trap);
-        thread_sigmask(SIG_SETMASK,&ctx.sigmask,NULL);
+        /* Before any other trap handler: gc_safepoint ensures that
+           inner alloc_sap for passing the context won't trap on
+           pseudo-atomic. */
         gc_safepoint();
-        SetLastError(lasterror);
-        return ExceptionContinueExecution;
+        if (trap == trap_PendingInterrupt) {
+            /* Done everything needed for this trap, except EIP
+               adjustment */
+            arch_skip_instruction(&ctx);
+        } else {
+            block_blockable_signals(0,&ctx.sigmask);
+            handle_trap(&ctx, trap);
+            thread_sigmask(SIG_SETMASK,&ctx.sigmask,NULL);
+        }
+        goto finish;
     }
-    #if defined(LISP_FEATURE_SB_THREAD)
     else if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION
              && fault_address == GC_SAFEPOINT_PAGE_ADDR) {
-      /* Pick off GC-related memory fault next. */
-      MEMORY_BASIC_INFORMATION mem_info;
-      pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
-      gc_safepoint();
-      SetLastError(lasterror);
-      return ExceptionContinueExecution;
+        /* Pick off GC-related memory fault next. */
+        gc_safepoint();
+        goto finish;
     }
-    #endif
     else if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
              (is_valid_lisp_addr(fault_address) ||
               is_linkage_table_addr(fault_address))) {
         /* Pick off GC-related memory fault next. */
         MEMORY_BASIC_INFORMATION mem_info;
-
-        if (!VirtualQuery(fault_address, &mem_info, sizeof mem_info)) {
-            fprintf(stderr, "VirtualQuery: 0x%lx.\n", GetLastError());
-            lose("handle_exception: VirtualQuery failure");
+        int index = find_page_index(fault_address);
+        if ((index != -1) && (page_table[index].write_protected)) {
+            gencgc_handle_wp_violation(fault_address);
+            goto finish;
         }
+        AVER(VirtualQuery(fault_address, &mem_info, sizeof mem_info));
 
         if (mem_info.State == MEM_RESERVE) {
             /* First use new page, lets get some memory for it. */
-            if (!VirtualAlloc(mem_info.BaseAddress, os_vm_page_size,
-                              MEM_COMMIT, PAGE_EXECUTE_READWRITE)) {
-                fprintf(stderr, "VirtualAlloc: 0x%lx.\n", GetLastError());
-                lose("handle_exception: VirtualAlloc failure");
-
-            } else {
-              /*
-               * Now, if the page is supposedly write-protected and this
-               * is a write, tell the gc that it's been hit.
-               *
-               * FIXME: Are we supposed to fall-through to the Lisp
-               * exception handler if the gc doesn't take the wp violation?
-               */
-                if (exception_record->ExceptionInformation[0]) {
-                    int index = find_page_index(fault_address);
-                    if ((index != -1) && (page_table[index].write_protected))
-                         gencgc_handle_wp_violation(fault_address);
-                }
-                pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
-                SetLastError(lasterror);
-                return ExceptionContinueExecution;
-            }
+            AVER(VirtualAlloc(mem_info.BaseAddress, os_vm_page_size,
+                              MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+            /*
+             * Now, if the page is supposedly write-protected and this
+             * is a write, tell the gc that it's been hit.
+             *
+             * FIXME: Are we supposed to fall-through to the Lisp
+             * exception handler if the gc doesn't take the wp violation?
+             */
+            if ((index != -1) && (page_table[index].write_protected))
+                gencgc_handle_wp_violation(fault_address);
+            goto finish;
         } else {
-              /* It's `almost certainly' a WP fault for GC's
-               * attention. However, there is another possibility:
-               * this page could be decommitted when we hit it, but
-               * committed between that moment and our
-               * VirtualQuery. Let's check what VirtualQuery said
-               * about its protection: if it's not WP, there is no
-               * point in calling GC, we just continue execution.
-               */
+            /* It's `almost certainly' a WP fault for GC's
+             * attention. However, there is another possibility:
+             * this page could be decommitted when we hit it, but
+             * committed between that moment and our
+             * VirtualQuery. Let's check what VirtualQuery said
+             * about its protection: if it's not WP, there is no
+             * point in calling GC, we just continue execution.
+             */
             if (mem_info.Protect == PAGE_EXECUTE_READWRITE) {
-#if defined(LISP_FEATURE_SB_THREAD)
-              pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
-#endif
-              SetLastError(lasterror);
-              return ExceptionContinueExecution;
+                goto finish;
             }
-
             if (gencgc_handle_wp_violation(fault_address)) {
-              #if defined(LISP_FEATURE_SB_THREAD)
-              pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
-              #endif
-              SetLastError(lasterror);
-              /* gc accepts the wp violation, so resume where we left off. */
-              return ExceptionContinueExecution;
-          }
+                goto finish;
+            }
         }
-        /* All else failed, drop through to the lisp-side exception handler. */
-    }
+    } else
+        if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
+            (fault_address) &&
+            (fault_address < undefined_alien_address ||
+             fault_address >= undefined_alien_address + os_vm_page_size)) {
+            /* For pages outside GC range, try to commit space allocated by
+               lazy os_validate with zero address. Recommit is possible, so
+               concurrency is not a problem. */
+            LPVOID done;
+            AVERLAX((done = VirtualAlloc(((intptr_t)fault_address) &~(os_vm_page_size-1),
+                                         os_vm_page_size,
+                                         MEM_COMMIT, PAGE_EXECUTE_READWRITE))
+                    || internal_errors_enabled);
+            if (done) {
+                goto finish;
+            }
+        }
+
+    /* All else failed, drop through to the lisp-side exception handler. */
+    gc_safepoint();             /* don't want to trap on pa_alloc */
+    block_blockable_signals(0,&ctx.sigmask);
+
     /*
      * If we fall through to here then we need to either forward
      * the exception to the lisp-side exception handler if it's
@@ -953,40 +1788,33 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         lispobj context_sap;
         lispobj exception_record_sap;
 
+        asm("fnclex");
         /* We're making the somewhat arbitrary decision that having
          * internal errors enabled means that lisp has sufficient
          * marbles to be able to handle exceptions, but exceptions
          * aren't supposed to happen during cold init or reinit
          * anyway. */
 
-        /* fake_foreign_function_call(&ctx); */
-
-        #if defined(LISP_FEATURE_SB_THREAD)
-        pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
-        #endif
+        fake_foreign_function_call(&ctx);
 
         /* Allocate the SAP objects while the "interrupts" are still
          * disabled. */
         context_sap = alloc_sap(&ctx);
         exception_record_sap = alloc_sap(exception_record);
+        thread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
 
         /* The exception system doesn't automatically clear pending
          * exceptions, so we lose as soon as we execute any FP
          * instruction unless we do this first. */
-        _clearfp();
         /* Call into lisp to handle things. */
         funcall2(StaticSymbolFunction(HANDLE_WIN32_EXCEPTION), context_sap,
                  exception_record_sap);
         /* If Lisp doesn't nlx, we need to put things back. */
-        /* undo_fake_foreign_function_call(&ctx); */
-        #if defined(LISP_FEATURE_SB_THREAD)
-        pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
+        undo_fake_foreign_function_call(&ctx);
+        thread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
         gc_safepoint();
-        #endif
-        SetLastError(lasterror);
-
         /* FIXME: HANDLE-WIN32-EXCEPTION should be allowed to decline */
-        return ExceptionContinueExecution;
+        goto finish;
     }
 
     fprintf(stderr, "Exception Code: 0x%lx.\n", exception_record->ExceptionCode);
@@ -1009,12 +1837,99 @@ handle_exception(EXCEPTION_RECORD *exception_record,
     lose("Exception too early in cold init, cannot continue.");
 
     /* FIXME: WTF? How are we supposed to end up here? */
-    #if defined(LISP_FEATURE_SB_THREAD)
+#if defined(LISP_FEATURE_SB_THREAD)
     pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
     gc_safepoint();
-    SetLastError(lasterror);
-    #endif
-    return ExceptionContinueSearch;
+#endif
+
+    /* Common return point. */
+finish:
+    if (self)
+        self->in_lisp_fpu_mode = contextual_fpu_state;
+    SetLastError(lastError);
+    return disposition;
+}
+
+/* When Lisp dumps core, it's sometimes useful to make it
+   CreateProcess instead of dying. */
+struct at_exit_instructions {
+    void* start_application;
+    void* command_line;
+    HANDLE std_handles[3];
+} do_at_exit;
+
+void post_mortem_function()
+{
+    PROCESS_INFORMATION pinfo;
+    STARTUPINFO si = {sizeof (STARTUPINFO)};
+    HANDLE myHandle;
+    char myHandleStr[32];
+
+    DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(),
+                    GetCurrentProcess(), &myHandle,
+                    0,
+                    TRUE,
+                    DUPLICATE_SAME_ACCESS);
+    snprintf(myHandleStr,32,"%u",(unsigned)myHandle);
+    si.hStdInput = do_at_exit.std_handles[0];
+    si.hStdOutput = do_at_exit.std_handles[1];
+    si.hStdError = do_at_exit.std_handles[2];
+
+    SetStdHandle(STD_INPUT_HANDLE,INVALID_HANDLE_VALUE);
+    SetStdHandle(STD_OUTPUT_HANDLE,INVALID_HANDLE_VALUE);
+    SetStdHandle(STD_ERROR_HANDLE,INVALID_HANDLE_VALUE);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    if (!do_at_exit.start_application)
+        return;
+    SetEnvironmentVariable("SBCL_STARTING_ITS_HEIR",myHandleStr);
+
+    CreateProcess(do_at_exit.start_application,
+                  do_at_exit.command_line,
+                  NULL,                 /* lpProcessAttributes */
+                  NULL,                 /* lpThreadAttributes */
+                  TRUE,                 /* bInheritHandles */
+                  0,                    /* dwCreationFlags */
+                  NULL,                 /* lpEnvironment */
+                  NULL,                 /* lpCurrentDirectory */
+                  &si,                  /* startupinfo */
+                  &pinfo);              /* lpProcessInformation */
+    CloseHandle(&si.hStdInput);
+    CloseHandle(&si.hStdOutput);
+    CloseHandle(&si.hStdError);
+}
+
+void start_before_dying(void* app, void* cmdline) {
+    char* copy_app = malloc(strlen(app)+1);
+    char* copy_cmdline = malloc(strlen(cmdline)+1);
+    DWORD handle_kinds[] =
+        {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
+    int i;
+
+    strcpy(copy_app,app);
+    strcpy(copy_cmdline,cmdline);
+    if (do_at_exit.command_line) {
+        free(do_at_exit.start_application);
+        free(do_at_exit.command_line);
+    } else {
+        atexit(post_mortem_function);
+    }
+    for (i=0; i<=2; ++i)
+        DuplicateHandle(GetCurrentProcess(),GetStdHandle(handle_kinds[i]),
+                        GetCurrentProcess(),&do_at_exit.std_handles[i],
+                        0, TRUE, DUPLICATE_SAME_ACCESS);
+    do_at_exit.start_application = copy_app;
+    do_at_exit.command_line = copy_cmdline;
+}
+
+void accept_post_mortem_startup()
+{
+    char parentHandleStr[32];
+    HANDLE parentHandle;
+    if (!GetEnvironmentVariable("SBCL_STARTING_ITS_HEIR",parentHandleStr,32))
+        return;
+    SetEnvironmentVariable("SBCL_STARTING_ITS_HEIR",NULL);
+    parentHandle = (HANDLE)strtoul(parentHandleStr, NULL, 0);
+    WaitForSingleObject(parentHandle,INFINITE);
 }
 
 void
@@ -1025,11 +1940,8 @@ wos_install_interrupt_handlers(struct lisp_exception_frame *handler)
     set_seh_frame(handler);
 }
 
-void bcopy(const void *src, void *dest, size_t n)
-{
-    MoveMemory(dest, src, n);
-}
 
+#if 0
 /*
  * The stubs below are replacements for the windows versions,
  * which can -fail- when used in our memory spaces because they
@@ -1048,11 +1960,13 @@ void *memmove(void *dest, const void *src, size_t n)
     return dest;
 }
 
+
 void *memcpy(void *dest, const void *src, size_t n)
 {
     while (n--) *(((char *)dest)+n) = *(((char *)src)+n);
     return dest;
 }
+#endif
 
 char *dirname(char *path)
 {
@@ -1074,6 +1988,11 @@ char *dirname(char *path)
     }
 
     return buf;
+}
+void bcopy(const void *src, void *dest, size_t n)
+{
+    /* memmove(dest,src,n); */
+    MoveMemory(dest, src, n);
 }
 
 /* This is a manually-maintained version of ldso_stubs.S. */
@@ -1097,19 +2016,19 @@ os_get_runtime_executable_path(int external)
 int
 socket_input_available(HANDLE socket)
 {
-  unsigned long count = 0, count_size = 0;
-  int wsaErrno = WSAGetLastError();
-  int err = WSAIoctl((SOCKET)socket, FIONREAD, NULL, 0,
-                     &count, sizeof(count), &count_size, NULL, NULL);
+    unsigned long count = 0, count_size = 0;
+    int wsaErrno = WSAGetLastError();
+    int err = WSAIoctl((SOCKET)socket, FIONREAD, NULL, 0,
+                       &count, sizeof(count), &count_size, NULL, NULL);
 
-  int ret;
+    int ret;
 
-  if (err == 0) {
-    ret = (count > 0) ? 1 : 2;
-  } else
-    ret = 0;
-  WSASetLastError(wsaErrno);
-  return ret;
+    if (err == 0) {
+        ret = (count > 0) ? 1 : 2;
+    } else
+        ret = 0;
+    WSASetLastError(wsaErrno);
+    return ret;
 }
 
 /* Unofficial but widely used property of console handles: they have
@@ -1124,168 +2043,278 @@ socket_input_available(HANDLE socket)
    one; console isn't), etc. */
 int console_handle_p(HANDLE handle)
 {
-  return ((((int)(intptr_t)handle)&3)==3);
+    return ((((int)(intptr_t)handle)&3)==3);
+}
+
+struct console_input_data {
+    pthread_mutex_t lock;
+    HANDLE handle;
+    int readers;
+} console_input_data = {PTHREAD_MUTEX_INITIALIZER, INVALID_HANDLE_VALUE, 0};
+
+void win32_interrupt_console_input()
+{
+    HANDLE newInstance;
+    AVER(0==pthread_mutex_lock(&console_input_data.lock));
+    AVER(DuplicateHandle(GetCurrentProcess(),console_input_data.handle,
+                         GetCurrentProcess(),&newInstance,
+                         0, FALSE, DUPLICATE_CLOSE_SOURCE|DUPLICATE_SAME_ACCESS));
+    console_input_data.handle = newInstance;
+    AVER(0==pthread_mutex_unlock(&console_input_data.lock));
+}
+
+void win32_start_console_input(HANDLE original, HANDLE *target)
+{
+    AVER(0==pthread_mutex_lock(&console_input_data.lock));
+    if (!console_input_data.readers) {
+        AVER(DuplicateHandle(GetCurrentProcess(),original,
+                             GetCurrentProcess(),&console_input_data.handle,
+                             0, FALSE, DUPLICATE_SAME_ACCESS));
+    }
+    *target = console_input_data.handle;
+    (this_thread)->waiting_console_handle = console_input_data.handle;
+    ++ console_input_data.readers;
+    AVER(0==pthread_mutex_unlock(&console_input_data.lock));
+
+}
+
+void win32_end_console_input()
+{
+    AVER(0==pthread_mutex_lock(&console_input_data.lock));
+    if (!(-- console_input_data.readers)) {
+        CloseHandle(console_input_data.handle);
+    };
+    (this_thread)->waiting_console_handle = INVALID_HANDLE_VALUE;
+    AVER(0==pthread_mutex_unlock(&console_input_data.lock));
+}
+
+
+int win32_write_unicode_console(HANDLE handle, void * buf, int count)
+{
+    DWORD written = 0;
+    count &= ~1;
+    if (WriteConsoleW(handle,buf,count>>1,&written,NULL)) {
+        if (!written) {
+            errno = EINTR;
+            return -1;
+        } else {
+            return 2*written;
+        }
+    } else {
+        errno = EIO;
+        return -1;
+    }
+}
+
+int win32_read_unicode_console(HANDLE handle, void* buf, int count)
+{
+    DWORD nread = 0;
+    BOOL ok;
+    HANDLE ownhandle;
+    count &= ~1;
+
+again:
+    win32_start_console_input(handle,&ownhandle);
+    ok = ReadConsoleW(ownhandle,buf,count>>1,&nread,NULL);
+    win32_end_console_input();
+    if (ok) {
+        if (!nread) {
+            errno = EINTR;
+            return -1;
+        } else {
+            int nch,offset = 0;
+            LPWSTR ubuf = buf;
+            for (nch=0;nch<nread;++nch) {
+                if (ubuf[nch]==13) {
+                    ++offset;
+                } else {
+                    if (offset)
+                        ubuf[nch-offset]=ubuf[nch];
+                }
+            }
+            nread-=offset;
+            if(!nread)
+                goto again;
+            return 2*nread;
+        }
+    } else {
+        errno = EIO;
+        return -1;
+    }
 }
 
 int win32_unix_write(int fd, void * buf, int count)
 {
-  HANDLE handle;
-  DWORD written_bytes;
-  OVERLAPPED overlapped;
-  struct thread * self = arch_os_get_current_thread();
-  BOOL waitInGOR;
-  LARGE_INTEGER file_position, nooffset = {{0}};
+    HANDLE handle;
+    DWORD written_bytes;
+    OVERLAPPED overlapped;
+    struct thread * self = arch_os_get_current_thread();
+    BOOL waitInGOR;
+    LARGE_INTEGER file_position, nooffset = {{0}};
 
-  odprintf("write(%d, 0x%p, %d)", fd, buf, count);
-  handle =(HANDLE)_get_osfhandle(fd);
-  odprintf("handle = 0x%p", handle);
-  overlapped.hEvent = self->private_events.events[0];
-  if (SetFilePointerEx(handle,nooffset,&file_position, FILE_CURRENT)) {
-    overlapped.Offset = file_position.LowPart;
-    overlapped.OffsetHigh = file_position.HighPart;
-  } else {
-    overlapped.Offset = 0;
-    overlapped.OffsetHigh = 0;
-  }
-  if (WriteFile(handle, buf, count, &written_bytes,
-                &overlapped)) {
-    odprintf("write(%d, 0x%p, %d) immeditately wrote %d bytes",
-             fd, buf, count, written_bytes);
-    goto done_something;
-  } else {
-    if (GetLastError()!=ERROR_IO_PENDING) {
-      errno = EIO;
-      return -1;
+    odprintf("write(%d, 0x%p, %d)", fd, buf, count);
+    handle =(HANDLE)_get_osfhandle(fd);
+    if (console_handle_p(handle))
+        return win32_write_unicode_console(handle,buf,count);
+
+    odprintf("handle = 0x%p", handle);
+    overlapped.hEvent = self->private_events.events[0];
+    if (SetFilePointerEx(handle,nooffset,&file_position, FILE_CURRENT)) {
+        overlapped.Offset = file_position.LowPart;
+        overlapped.OffsetHigh = file_position.HighPart;
     } else {
-    wait_again:
-      if(WaitForMultipleObjects(2,self->private_events.events,
-                                   FALSE,INFINITE) != WAIT_OBJECT_0) {
-        /* Something happened. Interrupt? */
-        if (!pthread_self()->signal_is_pending[SIGHUP])
-          goto wait_again;      /* Nope */
-        odprintf("write(%d, 0x%p, %d) EINTR",fd,buf,count);
-        CancelIo(handle);
-        waitInGOR = TRUE;
-      } else {
-        waitInGOR = FALSE;
-      }
-      if (!GetOverlappedResult(handle,&overlapped,&written_bytes,waitInGOR)) {
-        if (GetLastError()==ERROR_OPERATION_ABORTED) {
-          errno = EINTR;
-        } else {
-          errno = EIO;
-        }
-        return -1;
-      } else {
-        goto done_something;
-      }
+        overlapped.Offset = 0;
+        overlapped.OffsetHigh = 0;
     }
-  }
- done_something:
-  file_position.QuadPart += written_bytes;
-  SetFilePointerEx(handle,file_position,NULL,FILE_BEGIN);
-  return written_bytes;
+    if (WriteFile(handle, buf, count, &written_bytes,
+                  &overlapped)) {
+        odprintf("write(%d, 0x%p, %d) immeditately wrote %d bytes",
+                 fd, buf, count, written_bytes);
+        goto done_something;
+    } else {
+        if (GetLastError()!=ERROR_IO_PENDING) {
+            errno = EIO;
+            return -1;
+        } else {
+          wait_again:
+            if(WaitForMultipleObjects(2,self->private_events.events,
+                                      FALSE,INFINITE) != WAIT_OBJECT_0) {
+                /* Something happened. Interrupt? */
+                if (!pthread_self()->signal_is_pending[SIGHUP])
+                    goto wait_again;      /* Nope */
+                odprintf("write(%d, 0x%p, %d) EINTR",fd,buf,count);
+                CancelIo(handle);
+                waitInGOR = TRUE;
+            } else {
+                waitInGOR = FALSE;
+            }
+            if (!GetOverlappedResult(handle,&overlapped,&written_bytes,waitInGOR)) {
+                if (GetLastError()==ERROR_OPERATION_ABORTED) {
+                    errno = EINTR;
+                } else {
+                    errno = EIO;
+                }
+                return -1;
+            } else {
+                goto done_something;
+            }
+        }
+    }
+  done_something:
+    file_position.QuadPart += written_bytes;
+    SetFilePointerEx(handle,file_position,NULL,FILE_BEGIN);
+    return written_bytes;
 }
 
 int win32_unix_read(int fd, void * buf, int count)
 {
-  HANDLE handle;
-  OVERLAPPED overlapped = {0};
-  DWORD read_bytes = 0;
-  struct thread * self = arch_os_get_current_thread();
-  DWORD errorCode = 0;
-  BOOL waitInGOR = FALSE;
-  BOOL ok = FALSE;
-  LARGE_INTEGER file_position, nooffset={{0}};
+    HANDLE handle;
+    OVERLAPPED overlapped = {0};
+    DWORD read_bytes = 0;
+    struct thread * self = arch_os_get_current_thread();
+    DWORD errorCode = 0;
+    BOOL waitInGOR = FALSE;
+    BOOL ok = FALSE;
+    LARGE_INTEGER file_position, nooffset={{0}};
 
-  odprintf("read(%d, 0x%p, %d)", fd, buf, count);
-  handle = (HANDLE)_get_osfhandle(fd);
-  odprintf("handle = 0x%p", handle);
-  overlapped.hEvent = self->private_events.events[0];
-  /* If it has a position, we won't try overlapped */
-  if (SetFilePointerEx(handle,nooffset,&file_position, FILE_CURRENT)) {
-    overlapped.Offset = file_position.LowPart;
-    overlapped.OffsetHigh = file_position.HighPart;
-  } else {
-    overlapped.Offset = 0;
-    overlapped.OffsetHigh = 0;
-  }
-  ok = ReadFile(handle,buf,count,&read_bytes, &overlapped);
-  if (ok) {
-    /* immediately */
-    goto done_something;
-  } else {
-    errorCode = GetLastError();
-    if (errorCode == ERROR_HANDLE_EOF || errorCode == ERROR_BROKEN_PIPE) {
-      /* it is an `error' for positioned reads! oh wtf */
-      goto done_something;
+    odprintf("read(%d, 0x%p, %d)", fd, buf, count);
+    handle = (HANDLE)_get_osfhandle(fd);
+    if (console_handle_p(handle)) {
+        /* 1. Console is a singleton.
+           2. The only way to cancel console handle I/O is to close it.
+        */
+        return win32_read_unicode_console(handle,buf,count);
     }
-    if (errorCode!=ERROR_IO_PENDING) {
-      /* is it some _real_ error? */
-      errno = EIO;
-      return -1;
+    odprintf("handle = 0x%p", handle);
+    overlapped.hEvent = self->private_events.events[0];
+    /* If it has a position, we won't try overlapped */
+    if (SetFilePointerEx(handle,nooffset,&file_position, FILE_CURRENT)) {
+        overlapped.Offset = file_position.LowPart;
+        overlapped.OffsetHigh = file_position.HighPart;
     } else {
-    wait_again:
-      if(WaitForMultipleObjects(2,self->private_events.events,
-                                FALSE,INFINITE) != WAIT_OBJECT_0) {
-        /* Something happened. Interrupt? */
-        if (!pthread_self()->signal_is_pending[SIGHUP])
-          goto wait_again;      /* Nope */
-        odprintf("read(%d, 0x%p, %d) EINTR",fd,buf,count);
-        CancelIo(handle);
-        waitInGOR = TRUE;
-        /* Waiting for IO only */
-      } else {
-        waitInGOR = FALSE;
-      }
-      ok = GetOverlappedResult(handle,&overlapped,&read_bytes,waitInGOR);
-      if (!ok) {
-        errorCode = GetLastError();
-        if (errorCode == ERROR_HANDLE_EOF) {
-          goto done_something;
-        } else {
-          if (errorCode == ERROR_OPERATION_ABORTED) {
-            errno = EINTR;      /* that's it. */
-          } else {
-            errno = EIO;        /* something unspecific */
-          }
-          return -1;
-        }
-      } else {
-        goto done_something;
-      }
+        overlapped.Offset = 0;
+        overlapped.OffsetHigh = 0;
     }
-  }
- done_something:
-  if ((read_bytes == 0) && ok &&
-      console_handle_p(handle)) {
-    /* Console and pipes may return 0 bytes _successfully_ read, that
-       is not EOF.  Currently we turn it into EINTR for console
-       handles only. TODO pipes (or not).
+    ok = ReadFile(handle,buf,count,&read_bytes, &overlapped);
+    if (ok) {
+        /* immediately */
+        goto done_something;
+    } else {
+        errorCode = GetLastError();
+        if (errorCode == ERROR_HANDLE_EOF || errorCode == ERROR_BROKEN_PIPE) {
+            /* it is an `error' for positioned reads! oh wtf */
+            goto done_something;
+        }
+        if (errorCode!=ERROR_IO_PENDING) {
+            /* is it some _real_ error? */
+            errno = EIO;
+            return -1;
+        } else {
+          wait_again:
+            if(WaitForMultipleObjects(2,self->private_events.events,
+                                      FALSE,INFINITE) != WAIT_OBJECT_0) {
+                /* Something happened. Interrupt? */
+                if (!pthread_self()->signal_is_pending[SIGHUP])
+                    goto wait_again;      /* Nope */
+                odprintf("read(%d, 0x%p, %d) EINTR",fd,buf,count);
+                CancelIo(handle);
+                waitInGOR = TRUE;
+                /* Waiting for IO only */
+            } else {
+                waitInGOR = FALSE;
+            }
+            ok = GetOverlappedResult(handle,&overlapped,&read_bytes,waitInGOR);
+            if (!ok) {
+                errorCode = GetLastError();
+                if (errorCode == ERROR_HANDLE_EOF) {
+                    goto done_something;
+                } else {
+                    if (errorCode == ERROR_OPERATION_ABORTED) {
+                        errno = EINTR;      /* that's it. */
+                    } else {
+                        errno = EIO;        /* something unspecific */
+                    }
+                    return -1;
+                }
+            } else {
+                goto done_something;
+            }
+        }
+    }
+  done_something:
+    if ((read_bytes == 0) && ok &&
+        console_handle_p(handle)) {
+        /* Console and pipes may return 0 bytes _successfully_ read, that
+           is not EOF.  Currently we turn it into EINTR for console
+           handles only. TODO pipes (or not).
 
-       NB. [1] Console has no natural EOF at all (DOS Ctrl-Z is not).
-       [2] Console handles are easily recognizable.
-       [3] Pipe receives 0 bytes only with deliberate attempt of the sender;
-       console does it on every Ctrl-C, for example.
-       [4] Many other prospective things, like fully interruptible IO or
-       thread-file ownership protocol, will be done differently for console
-       as well. */
-    errno = EINTR;
-    return -1;
-  }
-  file_position.QuadPart += read_bytes;
-  SetFilePointerEx(handle,file_position,NULL,FILE_BEGIN);
-  return read_bytes;
+           NB. [1] Console has no natural EOF at all (DOS Ctrl-Z is not).
+           [2] Console handles are easily recognizable.
+           [3] Pipe receives 0 bytes only with deliberate attempt of the sender;
+           console does it on every Ctrl-C, for example.
+           [4] Many other prospective things, like fully interruptible IO or
+           thread-file ownership protocol, will be done differently for console
+           as well. */
+        errno = EINTR;
+        return -1;
+    }
+    file_position.QuadPart += read_bytes;
+    SetFilePointerEx(handle,file_position,NULL,FILE_BEGIN);
+    return read_bytes;
 }
 
 int win32_wait_object_or_signal(HANDLE waitFor)
 {
-  struct thread * self = arch_os_get_current_thread();
-  HANDLE handles[2];
-  handles[0] = waitFor;
-  handles[1] = self->private_events.events[1];
-  return
-    WaitForMultipleObjects(2,handles, FALSE,INFINITE);
+    struct thread * self = arch_os_get_current_thread();
+    HANDLE handles[2];
+    handles[0] = waitFor;
+    handles[1] = self->private_events.events[1];
+    return
+        WaitForMultipleObjects(2,handles, FALSE,INFINITE);
 }
 
 /* EOF */
+
+/* Local Variables: */
+/* c-file-style: "stroustrup" */
+/* End: */

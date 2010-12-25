@@ -71,6 +71,14 @@
 #define SIZE(name)
 #endif
 
+#if defined(LISP_FEATURE_WIN32)
+	
+#define	MoveTlSymbol(symbol,reg) ; \
+	movl	%fs:0xE10+(4*63), reg ; \
+	addl	(symbol+SYMBOL_TLS_INDEX_OFFSET), reg ; \
+	
+#endif	
+	
 /*
  * x86/darwin (as of MacOS X 10.4.5) doesn't reliably file signal
  * handlers (SIGTRAP or Mach exception handlers) for 0xCC, wo we have
@@ -113,6 +121,7 @@ GNAME(call_into_c):
 	popl	%ebx
 	cld
 /* Setup the NPX for C */
+#if !defined(LISP_FEATURE_WIN32)
 	fstp	%st(0)
 	fstp	%st(0)
 	fstp	%st(0)
@@ -121,30 +130,38 @@ GNAME(call_into_c):
 	fstp	%st(0)
 	fstp	%st(0)
 	fstp	%st(0)
+#endif
+	
 #if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
+	pushl %ebx		  # for debugging
 	pushl %eax
-	call GNAME(gc_enter_safe_region)
+	call GNAME(enter_c_function)
 	popl %eax
+	addl $4,%esp
 #endif
 	call	*%eax		  # normal callout using Lisp stack
 	movl	%eax,%ecx	  # remember integer return value
+	
+#if !defined(LISP_FEATURE_WIN32)	
 /* Check for a return FP value. */
 	fxam
 	fnstsw	%ax
 	andl	$0x4500,%eax
 	cmpl	$0x4100,%eax
 	jne	Lfp_rtn_value
+#endif
 
 #if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
 	push %edx
 	push %ecx
-	call GNAME(gc_leave_region)
+	call GNAME(leave_c_function)
 	pop %ecx
 	pop %edx
 #endif
 
 /* The return value is in eax, or eax,edx? */
 /* Set up the NPX stack for Lisp. */
+#if !defined(LISP_FEATURE_WIN32)
 	fldz			# Ensure no regs are empty.
 	fldz
 	fldz
@@ -153,21 +170,16 @@ GNAME(call_into_c):
 	fldz
 	fldz
 	fldz
+#endif	
 /* Restore the return value. */
 	movl	%ecx,%eax	# maybe return value
 
 /* Return. */
 	jmp	*%ebx
 
+#if !defined(LISP_FEATURE_WIN32)
 Lfp_rtn_value:
 /* The return result is in st(0). Only this?*/
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-	sub 	$10, %esp
-	fstpl	(%esp)
-	call GNAME(gc_leave_region)
-	fldl (%esp)
-	add	$10, %esp
-#endif
 	/* Set up the NPX stack for Lisp, placing the result in st(0). */
 	fldz			# Ensure no regs are empty.
 	fldz
@@ -177,12 +189,12 @@ Lfp_rtn_value:
 	fldz
 	fldz
 	fxch %st(7)
-
+	
 /* We don't need to restore eax, because the result is in st(0). */
 
 /* Return. FIXME: It would be nice to restructure this to use RET. */	
 	jmp	*%ebx
-
+#endif
 	SIZE(GNAME(call_into_c))
 
 
@@ -217,34 +229,10 @@ GNAME(call_into_lisp_first_time):
 	
 	.align	align_16byte,0x90
 GNAME(call_into_lisp):
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-	pusha
-	call GNAME(gc_enter_unsafe_region)
-	popa
-#endif
 	pushl	%ebp		# Save old frame pointer.
 	movl	%esp,%ebp	# Establish new frame.
 Lstack:
-/* Save the NPX state */
-	fwait			# Catch any pending NPX exceptions.
-	subl	$108,%esp	# Make room for the NPX state.
-	fnsave	(%esp)		# save and reset NPX
-	movl	(%esp),%eax	# Load NPX control word.
-	andl	$0xfffff2ff,%eax	# Set rounding mode to nearest.
-	orl	$0x00000200,%eax	# Set precision to 64 bits.  (53-bit mantissa)
-	pushl	%eax
-	fldcw	(%esp)		# Recover modes.
-	popl	%eax
-
-	fldz			# Ensure no FP regs are empty.
-	fldz
-	fldz
-	fldz
-	fldz
-	fldz
-	fldz
-	fldz
-	
+	call GNAME(enter_lisp_function)
 /* Save C regs: ebx esi edi. */
 	pushl	%ebx
 	pushl	%esi
@@ -262,7 +250,7 @@ Lstack:
 	movl	%esp,%ebx	# remember current stack
 	pushl	%ebx		# Save entry stack on (maybe) new stack.
 
-	/* Establish Lisp args. */
+/* Establish Lisp args. */
 	movl	 8(%ebp),%eax	# lexenv?
 	movl	12(%ebp),%ebx	# address of arg vec
 	movl	16(%ebp),%ecx	# num args
@@ -296,7 +284,6 @@ Ldone:
 	pushl	%fs:0
 	movl	%esp, %fs:0
 #endif
-
 	/* Alloc new frame. */
 	push	%ebp            # Dummy for return address
 	push	%ebp		# fp in save location S1
@@ -328,15 +315,14 @@ LsingleValue:
 	popl	%ebx
 
 /* Restore the NPX state. */
-	frstor  (%esp)
-	addl	$108, %esp
-	
 	popl	%ebp		# c-sp
 	movl	%edx,%eax	# c-val
 #if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-	pusha
-	call GNAME(gc_leave_region)
-	popa
+	push	%eax
+	push	%edx
+	call GNAME(leave_lisp_function)
+	pop	%edx
+	pop	%eax
 #endif
 	ret
 	SIZE(GNAME(call_into_lisp))
@@ -694,17 +680,6 @@ GNAME(alloc_overflow_edi):
 	.globl	GNAME(exception_handler_wrapper)
 	TYPE(GNAME(exception_handler_wrapper))
 GNAME(exception_handler_wrapper):
-/*
-	fnclex
-	ffree   %st(0)
-	ffree   %st(1)
-	ffree   %st(2)
-	ffree   %st(3)
-	ffree   %st(4)
-	ffree   %st(5)
-	ffree   %st(6)
-	ffree   %st(7)
-	*/
 	/* Context layout is: */
 	/* 7 dwords before FSA. (0x1c) */
 	/* 8 dwords and 0x50 bytes in the FSA. (0x70/0x8c) */
@@ -935,6 +910,33 @@ Lend_base:
         pop %eax
 	ret
 	SIZE(GNAME(fast_bzero_base))
-        
+
+#ifdef LISP_FEATURE_WIN32
+	.globl GNAME(uwp_seh_handler_gate)
+	TYPE(GNAME(uwp_seh_handler_gate))
+	
+GNAME(uwp_seh_handler_gate):
+	movl 	4(%esp), %eax
+	testb 	$6, 4(%eax)
+	jnz 	Lunwinding
+	movl	$1,%eax
+	ret
+Lunwinding:
+	pushal
+	movl	%esp,%ebp
+	movl	0x28(%ebp),%eax   /* seh frame */
+	lea	-12(%eax),%eax    /* uwp block */
+	movl	(%eax),%ebx	  /* prev uwp block */
+	MoveTlSymbol(CURRENT_UNWIND_PROTECT_BLOCK,%ecx)
+	movl	%ebx,(%ecx)
+	xor	%ecx,%ecx
+	movl	%ebp,%ebx
+	movl	4(%eax),%ebp
+	jmp	*8(%eax)
+	
+/*	jmp	*GNAME(real_uwp_seh_handler) */
+	SIZE(GNAME(uwp_seh_handler_gate))
+#endif	
+
 	
         END()
