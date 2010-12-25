@@ -1,6 +1,14 @@
 (setf *print-level* 5 *print-length* 5)
 (load "src/cold/shared.lisp")
 (in-package "SB-COLD")
+
+#!+sb-dynamic-core
+(progn
+  #+cmu (ext:quit)
+  #+clisp (ext:quit)
+  #+abcl (ext:quit))
+
+
 (setf *host-obj-prefix* "obj/from-host/"
       *target-obj-prefix* "obj/from-xc/")
 (load "src/cold/set-up-cold-packages.lisp")
