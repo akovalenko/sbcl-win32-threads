@@ -27,7 +27,7 @@
 
 (progn
   (define-alien-variable undefined-alien-address unsigned-long)
-  #!-win32 (defvar *runtime-dlhandle*))
+  (defvar *runtime-dlhandle*))
 
 (defvar *shared-objects*)
 
@@ -154,7 +154,6 @@ Experimental."
 ;;; initialization.
 (defun reopen-shared-objects ()
   ;; Ensure that the runtime is open
-  #!-win32
   (setf *runtime-dlhandle* (dlopen-or-lose))
   ;; Reopen stuff.
   (setf *shared-objects*
@@ -169,7 +168,7 @@ Experimental."
       (unless (shared-object-dont-save obj)
         (push obj saved)))
     (setf *shared-objects* saved))
-  #!-(or win32 hpux)
+  #!-hpux
   (dlclose-or-lose))
 
 (let ((symbols (make-hash-table :test #'equal))

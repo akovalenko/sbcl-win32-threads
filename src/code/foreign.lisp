@@ -54,27 +54,28 @@ Dynamic symbols are entered into the linkage-table if they aren't there already.
 
 On non-linkage-table ports signals an error if the symbol isn't found."
   (declare (ignorable datap))
-  (let ((static (find-foreign-symbol-in-table name *static-foreign-symbols*))
-        (static-import #!+win32
-          (find-foreign-symbol-in-table
-                        (concatenate 'base-string "_imp__" name)
-                        *static-foreign-symbols*)))
+  (when (char/= #\* (aref name 0))
+    (let* ((starred-name (concatenate 'base-string "*" name))
+           (starred-address (find-foreign-symbol-in-table starred-name
+                                                          *static-foreign-symbols*)))
+      (when starred-address
+        (return-from foreign-symbol-address
+          (values starred-address t)))))
+  (let ((static (find-foreign-symbol-in-table name *static-foreign-symbols*)))
     (if static
         (values static nil)
-        (if #!+win32 (and static-import (not (zerop static-import))) #!-win32 nil
-            (values static-import t)
-            #!+os-provides-dlopen
-            (progn
-              #-sb-xc-host
-              (values #!-linkage-table
-                      (ensure-dynamic-foreign-symbol-address name)
-                      #!+linkage-table
-                      (ensure-foreign-symbol-linkage name datap)
-                      t)
-              #+sb-xc-host
-              (error 'undefined-alien-error :name name))
-            #!-os-provides-dlopen
-            (error 'undefined-alien-error :name name)))))
+        #!+os-provides-dlopen
+        (progn
+          #-sb-xc-host
+          (values #!-linkage-table
+                  (ensure-dynamic-foreign-symbol-address name)
+                  #!+linkage-table
+                  (ensure-foreign-symbol-linkage name datap)
+                  t)
+          #+sb-xc-host
+          (error 'undefined-alien-error :name name))
+        #!-os-provides-dlopen
+        (error 'undefined-alien-error :name name))))
 
 (defun foreign-symbol-sap (symbol &optional datap)
   "Returns a SAP corresponding to the foreign symbol. DATAP must be true if the
@@ -137,6 +138,33 @@ if the symbol isn't found."
           (when (and (<= table-addr addr)
                      (< addr (+ table-addr sb!vm:linkage-table-entry-size)))
             (return-from sap-foreign-symbol (car name-and-datap))))))
+    #!+win32
+    (when
+        (and (boundp '*runtime-dlhandle*)
+             *runtime-dlhandle*
+             (< 0 (- addr *runtime-dlhandle*) 2000000))
+      (loop for (known-addr . name-addr)
+              in
+              (locally (declare (special
+                                 static-symbols-sorted-by-address
+                                 runtime-session))
+                (if (and (boundp 'static-symbols-sorted-by-address)
+                         (boundp 'runtime-session)
+                         (eq runtime-session
+                             (symbol-value 'sb!impl::*runtime-pathname*)))
+                    static-symbols-sorted-by-address
+                    (setf runtime-session (symbol-value 'sb!impl::*runtime-pathname*)
+                          static-symbols-sorted-by-address
+                          (sort (sb!alien::runtime-exported-symbols) #'< :key 'car))))
+            and last-name-addr = 0 then name-addr
+            and last-addr = 0 then known-addr
+            until (>= known-addr addr)
+            finally (return
+                      (format nil
+                              "~A +#x~X"
+                              (cast (sap-alien (int-sap last-name-addr) (* char))
+                                    c-string)
+                              (- addr last-addr)))))
     #!+os-provides-dladdr
     (with-alien ((info (struct dl-info
                                (filename c-string)
@@ -160,7 +188,7 @@ if the symbol isn't found."
 (defun !foreign-cold-init ()
   (dolist (symbol *!initial-foreign-symbols*)
     (setf (gethash (car symbol) *static-foreign-symbols*) (cdr symbol)))
-  #!+(and os-provides-dlopen (not win32))
+  #!+os-provides-dlopen  
   (setf *runtime-dlhandle* (dlopen-or-lose))
   #!+os-provides-dlopen
   (setf *shared-objects* nil))
