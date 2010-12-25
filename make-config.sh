@@ -158,6 +158,9 @@ case "$sbcl_os" in
         printf ' :sb-pthread-futex' >> $ltf
 	printf ' :sb-thread' >> $ltf
 	printf ' :sb-foreign-thread' >> $ltf
+	printf ' :sb-auto-fpu-switch' >> $ltf
+	printf ' :sb-gc-safepoint' >> $ltf
+	printf ' :sb-dynamic-core' >> $ltf
         link_or_copy Config.$sbcl_arch-win32 Config
         link_or_copy $sbcl_arch-win32-os.h target-arch-os.h
         link_or_copy win32-os.h target-os.h
