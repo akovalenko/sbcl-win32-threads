@@ -218,7 +218,11 @@ waiting."
                                  (sb!win32:get-osfhandle fd)))
                    do (return-from wait-until-fd-usable t)
                    else
-                     do (when to-sec (maybe-update-timeout))))))))
+                     do (when to-sec (maybe-update-timeout))
+                   #!+(and win32 sb-thread)
+		      (sb!thread:thread-yield)
+                   #!+(and win32 (not sb-thread))
+		      (sb-win32:microsleep 1)))))))
 
 ;;; Wait for up to timeout seconds for an event to happen. Make sure all
 ;;; pending events are processed before returning.
