@@ -1,9 +1,3 @@
-#include "sbcl.h"
-
-#if defined(LISP_FEATURE_SB_THREAD)
-#ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0500
-#endif
 #define PTHREAD_INTERNALS
 #include "pthreads_win32.h"
 #include <stdlib.h>
@@ -1272,4 +1266,3 @@ int sigpending(sigset_t *set)
   return 0;
 }
 
-#endif

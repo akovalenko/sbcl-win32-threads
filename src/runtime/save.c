@@ -77,21 +77,21 @@ write_lispobj(lispobj obj, FILE *file)
 static long
 write_bytes(FILE *file, char *addr, long bytes, os_vm_offset_t file_offset)
 {
-    long count, here, data;
+    long count, here, data, pad_bytes;
 
     bytes = (bytes+os_vm_page_size-1)&~(os_vm_page_size-1);
-
 #ifdef LISP_FEATURE_WIN32
     /* touch every single page in the space to force it to be mapped. */
     for (count = 0; count < bytes; count += 0x1000) {
         volatile int temp = addr[count];
     }
 #endif
+    pad_bytes = ((bytes+OS_VM_MMAP_UNIT_SIZE-1)&~(OS_VM_MMAP_UNIT_SIZE-1)) - bytes;
 
     fflush(file);
     here = ftell(file);
     fseek(file, 0, SEEK_END);
-    data = (ftell(file)+os_vm_page_size-1)&~(os_vm_page_size-1);
+    data = (ftell(file)+OS_VM_MMAP_UNIT_SIZE-1)&~(OS_VM_MMAP_UNIT_SIZE-1);
     fseek(file, data, SEEK_SET);
 
     while (bytes > 0) {
@@ -105,6 +105,8 @@ write_bytes(FILE *file, char *addr, long bytes, os_vm_offset_t file_offset)
             bytes = 0;
         }
     }
+    fseek(file, pad_bytes-1, SEEK_CUR);
+    fwrite("",1,1,file);
     fflush(file);
     fseek(file, here, SEEK_SET);
     return ((data - file_offset) / os_vm_page_size) - 1;
@@ -384,6 +386,7 @@ save_to_filehandle(FILE *file, char *filename, lispobj init_function,
 #endif
 
     printf("done]\n");
+
     exit(0);
 }
 
@@ -513,7 +516,6 @@ prepare_to_save(char *filename, boolean prepend_runtime, void **runtime_bytes,
         perror(filename);
         return NULL;
     }
-
     return file;
 }
 
