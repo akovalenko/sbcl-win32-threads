@@ -2513,8 +2513,7 @@
 
 (defun stdstream-external-format (outputp)
   (declare (ignorable outputp))
-  (let* ((keyword #!+win32 (if outputp (sb!win32::console-output-codepage) (sb!win32::console-input-codepage))
-                  #!-win32 (default-external-format))
+  (let* ((keyword (default-external-format))
          (ef (get-external-format keyword))
          (replacement (ef-default-replacement-character ef)))
     `(,keyword :replacement ,replacement)))
@@ -2526,29 +2525,40 @@
       (aver (not (boundp '*available-buffers*)))
       (setf *available-buffers* nil)))
   (with-output-to-string (*error-output*)
-    (setf *stdin*
-          (make-fd-stream 0 :name "standard input" :input t :buffering :line
-                          :element-type :default
-                          :serve-events t
-                          :external-format (stdstream-external-format nil)))
-    (setf *stdout*
-          (make-fd-stream 1 :name "standard output" :output t :buffering :line
-                          :element-type :default
-                          :external-format (stdstream-external-format t)))
-    (setf *stderr*
-          (make-fd-stream 2 :name "standard error" :output t :buffering :line
-                          :element-type :default
-                          :external-format (stdstream-external-format t)))
-    (let* ((ttyname #.(coerce "/dev/tty" 'simple-base-string))
-           (tty (sb!unix:unix-open ttyname sb!unix:o_rdwr #o666)))
-      (if tty
-          (setf *tty*
-                (make-fd-stream tty :name "the terminal"
-                                :input t :output t :buffering :line
-                                :external-format (stdstream-external-format t)
-                                :serve-events t
-                                :auto-close t))
-          (setf *tty* (make-two-way-stream *stdin* *stdout*))))
+    (let ((ttyname #.(coerce #!+win32 "CONOUT$" #!-win32 "/dev/tty"
+			     'simple-base-string))
+	  (stdstream-vars '(*stdin* *stdout* *stderr* *tty*)))
+      (loop for fd in
+	    `(0 1 2 ,(sb!unix:unix-open ttyname sb!unix:o_rdwr #o666))
+	    and auto-close-p in '(nil nil nil t)
+	    and stream-var in stdstream-vars
+	    and direction in '(:input :output :output :io)
+	    and name in '("standard input"
+			  "standard output"
+			  "standard error"
+			  "the terminal")
+	    do
+	 (let ((outputp (not (eq direction :input)))
+	       (inputp (not (eq direction :output))))
+	   (setf (symbol-value stream-var)
+		 (if fd
+		     (make-fd-stream fd
+				     :name name
+				     :input inputp
+				     :output outputp
+				     :buffering :line
+				     :element-type :default
+				     :serve-events inputp
+				     :auto-close auto-close-p
+				     :external-format
+				     (or
+				      #!+win32
+				      (let ((handle (sb!win32:get-osfhandle fd)))
+					(when (and (/= handle -1)
+						   (logbitp 0 handle)
+						   (logbitp 1 handle)) :ucs-2))
+				      (stdstream-external-format outputp)))
+		     (make-two-way-stream *stdin* *stdout*))))))
     (princ (get-output-stream-string *error-output*) *stderr*))
   (values))
 
