@@ -21,6 +21,9 @@
 ;;; but groveling HANDLE makes it unsigned, which currently breaks the
 ;;; build. --NS 2006-06-18
 (define-alien-type handle int-ptr)
+
+(define-alien-type lispbool (boolean 32))
+
 (define-alien-type system-string
                    #!-sb-unicode c-string
                    #!+sb-unicode (c-string :external-format :ucs-2))
@@ -61,7 +64,7 @@
 
 ;;; Read data from a file handle into a buffer.  This may be used
 ;;; synchronously or with "overlapped" (asynchronous) I/O.
-(define-alien-routine ("ReadFile" read-file) bool
+(define-alien-routine ("ReadFile" read-file) lispbool
   (file handle)
   (buffer (* t))
   (bytes-to-read dword)
@@ -70,7 +73,7 @@
 
 ;;; Write data from a buffer to a file handle.  This may be used
 ;;; synchronously  or with "overlapped" (asynchronous) I/O.
-(define-alien-routine ("WriteFile" write-file) bool
+(define-alien-routine ("WriteFile" write-file) lispbool
   (file handle)
   (buffer (* t))
   (bytes-to-write dword)
@@ -81,7 +84,7 @@
 ;;; removing it from the pipe.  BUFFER, BYTES-READ, BYTES-AVAIL, and
 ;;; BYTES-LEFT-THIS-MESSAGE may be NULL if no data is to be read.
 ;;; Return TRUE on success, FALSE on failure.
-(define-alien-routine ("PeekNamedPipe" peek-named-pipe) bool
+(define-alien-routine ("PeekNamedPipe" peek-named-pipe) lispbool
   (pipe handle)
   (buffer (* t))
   (buffer-size dword)
@@ -92,13 +95,13 @@
 ;;; Flush the console input buffer if HANDLE is a console handle.
 ;;; Returns true on success, false if the handle does not refer to a
 ;;; console.
-(define-alien-routine ("FlushConsoleInputBuffer" flush-console-input-buffer) bool
+(define-alien-routine ("FlushConsoleInputBuffer" flush-console-input-buffer) lispbool
   (handle handle))
 
 ;;; Read data from the console input buffer without removing it,
 ;;; without blocking.  Buffer should be large enough for LENGTH *
 ;;; INPUT-RECORD-SIZE bytes.
-(define-alien-routine ("PeekConsoleInputA" peek-console-input) bool
+(define-alien-routine ("PeekConsoleInputA" peek-console-input) lispbool
   (handle handle)
   (buffer (* t))
   (length dword)
@@ -111,17 +114,17 @@
 ;;; consoles and sockets: communication resources (serial ports).
 (define-alien-type comm-timeouts
     (struct comm-timeouts
-            (read-interval dword)
-            (read-total-multiplier dword)
-            (read-total-constant dword)
-            (write-total-multiplier dword)
-            (write-total-constant dword)))
+      (read-interval dword)
+      (read-total-multiplier dword)
+      (read-total-constant dword)
+      (write-total-multiplier dword)
+      (write-total-constant dword)))
 
 (define-alien-type comstat
     (struct comstat
-            (flags dword)
-            (in-queue dword)
-            (out-queue dword)))
+      (flags dword)
+      (in-queue dword)
+      (out-queue dword)))
 
 (define-alien-routine ("SetCommTimeouts" set-comm-timeouts)
     bool
@@ -179,14 +182,14 @@
 (defun handle-listen (handle)
   (with-alien ((avail dword)
                (buf (array char #.input-record-size)))
-    (unless (zerop (peek-named-pipe handle nil 0 nil (addr avail) nil))
+    (when (peek-named-pipe handle nil 0 nil (addr avail) nil)
       (return-from handle-listen (plusp avail)))
     (let ((res (comm-input-available handle)))
       (unless (zerop res)
         (return-from handle-listen (= res 1))))
-    (unless (zerop (peek-console-input handle
-                                       (cast buf (* t))
-                                       1 (addr avail)))
+    (when (peek-console-input handle
+                              (cast buf (* t))
+                              1 (addr avail))
       (return-from handle-listen (plusp avail)))
 
     (let ((res (socket-input-available handle)))
@@ -211,7 +214,7 @@
     (loop
      (unless (handle-listen handle)
        (return))
-     (when (zerop (read-file handle (cast buf (* t)) 1024 (addr count) nil))
+     (unless (read-file handle (cast buf (* t)) 1024 (addr count) nil)
        (return))
      (when (< count 1024)
        (return)))))
@@ -224,10 +227,12 @@
 
 ;;;; System Functions
 
-(define-alien-routine ("win32_wait_object_or_signal" wait-object-or-signal) int
+(define-alien-routine ("win32_wait_object_or_signal" wait-object-or-signal) (signed 16)
   (handle handle))
+
 (define-alien-type signed-filetime (signed 64))
-(define-alien-routine ("CloseHandle" close-handle) bool
+
+(define-alien-routine ("CloseHandle" close-handle) lispbool
   (handle handle))
 
 (define-alien-routine ("CreateWaitableTimerA" create-waitable-timer) handle
@@ -235,7 +240,7 @@
   (manual-reset bool)
   (name (* t)))
 
-(define-alien-routine ("SetWaitableTimer" set-waitable-timer) bool
+(define-alien-routine ("SetWaitableTimer" set-waitable-timer) lispbool
   (handle handle)
   (due-time signed-filetime :in-out)
   (period dword)
@@ -243,7 +248,7 @@
   (arg-to-completion-routine (* t))
   (resume bool))
 
-(define-alien-routine ("CancelWaitableTimer" cancel-waitable-timer) bool
+(define-alien-routine ("CancelWaitableTimer" cancel-waitable-timer) lispbool
   (handle handle))
 
 (defun microsleep (microseconds)
@@ -470,9 +475,9 @@
      ((,name (etypecase ,description
                (string ,description)
                (cons (destructuring-bind (s &optional (l 0) c) ,description
-                       (format nil "~A~A~A" s
-                               (if c #!-sb-unicode "A@" #!+sb-unicode "W@" "@")
-                               l))))))
+                       (declare (ignorable l))
+                       (format nil "~A~A" s
+                               (if c #!-sb-unicode "A" #!+sb-unicode "W" "")))))))
      ,@body)))
 
 (defmacro make-system-buffer (x)
@@ -501,8 +506,8 @@
     `(locally
        (declare (optimize (sb!c::float-accuracy 0)))
        (let ((result (alien-funcall
-                       (extern-alien ,sname (function bool ,@arg-types))
-                       ,@args)))
+                      (extern-alien ,sname (function bool ,@arg-types))
+                      ,@args)))
          (when (zerop result)
            (win32-error ,sname))
          ,success-form))))
@@ -542,8 +547,14 @@
             err-code
             (get-last-error-message err-code))))
 
+(declaim (notinline get-folder-namestring))
 (defun get-folder-namestring (csidl)
   "http://msdn.microsoft.com/library/en-us/shellcc/platform/shell/reference/functions/shgetfolderpath.asp"
+  #!+sb-dynamic-core
+  (declare (ignorable csidl))
+  #!+sb-dynamic-core
+  ""
+  #!-sb-dynamic-core
   (with-alien ((apath (* char) (make-system-buffer (1+ max_path))))
     (syscall (("SHGetFolderPath" 20 t) int handle int handle dword (* char))
              (concatenate 'string (cast-and-free apath) "\\")
@@ -694,8 +705,11 @@ UNIX epoch: January 1st 1970."
 ;; http://msdn.microsoft.com/library/en-us/dllproc/base/setenvironmentvariable.asp
 (defun setenv (name value)
   (declare (type simple-string name value))
-  (void-syscall* (("SetEnvironmentVariable" 8 t) system-string system-string)
-                 name value))
+  (if value
+      (void-syscall* (("SetEnvironmentVariable" 8 t) system-string system-string)
+                     name value)
+      (void-syscall* (("SetEnvironmentVariable" 8 t) system-string int-ptr)
+                     name 0)))
 
 ;; Let SETENV be an accessor for POSIX-GETENV. Just for fun.
 (defun (setf sb!unix::posix-getenv) (new-value name)
@@ -958,7 +972,7 @@ UNIX epoch: January 1st 1970."
                 ;; are closed by _any_ of closesocket/CloseHandle
                 ;; calls. On real Windows, named pipes and sockets are
                 ;; disctinct, and peek-named-pipe will fail.
-                (zerop (peek-named-pipe handle nil 0 nil nil nil))
+                (not (peek-named-pipe handle nil 0 nil nil nil))
                 (/= 5 (get-last-error))
                 (plusp (socket-input-available handle)))))
           (multiple-value-prog1 (sb!unix:unix-close fd)
