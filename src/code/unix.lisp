@@ -63,25 +63,31 @@
 ;;; should live in SB-SYS or even SB-EXT?
 
 (defmacro syscall ((name &rest arg-types) success-form &rest args)
+  (when (string= "[_]" (subseq name 0 3))
+    (setf name
+          (concatenate 'string #!+win32 "_" (subseq name 3))))
   `(locally
-    (declare (optimize (sb!c::float-accuracy 0)))
-    (let ((result (alien-funcall (extern-alien ,name (function int ,@arg-types))
-                                ,@args)))
-      (if (minusp result)
-          (values nil (get-errno))
-          ,success-form))))
+       (declare (optimize (sb!c::float-accuracy 0)))
+     (let ((result (alien-funcall (extern-alien ,name (function int ,@arg-types))
+                                  ,@args)))
+       (if (minusp result)
+           (values nil (get-errno))
+           ,success-form))))
 
 ;;; This is like SYSCALL, but if it fails, signal an error instead of
 ;;; returning error codes. Should only be used for syscalls that will
 ;;; never really get an error.
 (defmacro syscall* ((name &rest arg-types) success-form &rest args)
+  (when (string= "[_]" (subseq name 0 3))
+    (setf name
+          (concatenate 'string #!+win32 "_" (subseq name 3))))
   `(locally
-    (declare (optimize (sb!c::float-accuracy 0)))
-    (let ((result (alien-funcall (extern-alien ,name (function int ,@arg-types))
-                                 ,@args)))
-      (if (minusp result)
-          (error "Syscall ~A failed: ~A" ,name (strerror))
-          ,success-form))))
+       (declare (optimize (sb!c::float-accuracy 0)))
+     (let ((result (alien-funcall (extern-alien ,name (function int ,@arg-types))
+                                  ,@args)))
+       (if (minusp result)
+           (error "Syscall ~A failed: ~A" ,name (strerror))
+           ,success-form))))
 
 (defmacro int-syscall ((name &rest arg-types) &rest args)
   `(syscall (,name ,@arg-types) (values result 0) ,@args))
@@ -158,7 +164,7 @@ corresponds to NAME, or NIL if there is none."
            (type fixnum flags)
            (type unix-file-mode mode))
   (with-restarted-syscall (value errno)
-    (int-syscall ("open" c-string int int)
+    (int-syscall ("[_]open" c-string int int)
                  path
                  (logior #!+win32 o_binary
                          #!+largefile o_largefile
@@ -170,7 +176,7 @@ corresponds to NAME, or NIL if there is none."
 (/show0 "unix.lisp 391")
 (defun unix-close (fd)
   (declare (type unix-fd fd))
-  (void-syscall ("close" int) fd))
+  (void-syscall ("[_]close" int) fd))
 
 ;;;; stdlib.h
 
@@ -272,7 +278,7 @@ corresponds to NAME, or NIL if there is none."
 (defun unix-access (path mode)
   (declare (type unix-pathname path)
            (type (mod 8) mode))
-  (void-syscall ("access" c-string int) path mode))
+  (void-syscall ("[_]access" c-string int) path mode))
 
 ;;; values for the second argument to UNIX-LSEEK
 (defconstant l_set 0) ; to set the file pointer
@@ -285,7 +291,7 @@ corresponds to NAME, or NIL if there is none."
 ;;; Is a stream interactive?
 (defun unix-isatty (fd)
   (declare (type unix-fd fd))
-  (int-syscall ("isatty" int) fd))
+  (int-syscall ("[_]isatty" int) fd))
 
 (defun unix-lseek (fd offset whence)
   "Unix-lseek accepts a file descriptor and moves the file pointer by
@@ -353,6 +359,9 @@ corresponds to NAME, or NIL if there is none."
     (syscall ("pipe" (* int))
              (values (deref fds 0) (deref fds 1))
              (cast fds (* int)))))
+
+;;; Opening the pipe seems to be the only place where o_noinherit can
+;;; be set.
 #!+win32
 (defun msvcrt-raw-pipe (fds size mode)
   (syscall ("_pipe" (* int) int int)
@@ -426,7 +435,7 @@ corresponds to NAME, or NIL if there is none."
 ;;; number are returned.
 (defun unix-dup (fd)
   (declare (type unix-fd fd))
-  (int-syscall ("dup" int) fd))
+  (int-syscall ("[_]dup" int) fd))
 
 ;;; Terminate the current process with an optional error code. If
 ;;; successful, the call doesn't return. If unsuccessful, the call
@@ -436,7 +445,7 @@ corresponds to NAME, or NIL if there is none."
   (void-syscall ("exit" int) code))
 
 ;;; Return the process id of the current process.
-(define-alien-routine ("getpid" unix-getpid) int)
+(define-alien-routine (#!+win32 "_getpid" #!-win32 "getpid" unix-getpid) int)
 
 ;;; Return the real user id associated with the current process.
 #!-win32
@@ -508,7 +517,7 @@ corresponds to NAME, or NIL if there is none."
 ;;; name and the file if this is the last link.
 (defun unix-unlink (name)
   (declare (type unix-pathname name))
-  (void-syscall ("unlink" c-string) name))
+  (void-syscall ("[_]unlink" c-string) name))
 
 ;;; Return the name of the host machine as a string.
 #!-win32
