@@ -321,6 +321,7 @@
   ;; This section copied from VOP CALL-OUT.
   ;; Setup the NPX for C; all the FP registers need to be
   ;; empty; pop them all.
+  #!-sb-auto-fpu-switch
   (dotimes (i 8)
     (inst fstp fr0-tn))
 
@@ -356,6 +357,7 @@
 
   ;; This section based on VOP CALL-OUT.
   ;; Restore the NPX for lisp; ensure no regs are empty
+  #!-sb-auto-fpu-switch
   (dotimes (i 8)
     (inst fldz))
 
@@ -429,6 +431,7 @@
 
   ;; This section based on VOP CALL-OUT.
   ;; Restore the NPX for lisp; ensure no regs are empty
+  #!-sb-auto-fpu-switch
   (dotimes (i 8)
     (inst fldz))
 
@@ -478,6 +481,7 @@
   ;; This section copied from VOP CALL-OUT.
   ;; Setup the NPX for C; all the FP registers need to be
   ;; empty; pop them all.
+  #!-sb-auto-fpu-switch
   (dotimes (i 8)
     (inst fstp fr0-tn))
 
