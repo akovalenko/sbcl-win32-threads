@@ -298,6 +298,7 @@ altstack_pointer_p (void *p) {
     return (p > stack_start && p <= stack_end);
 #else
     /* Win32 doesn't do altstack */
+    (void)p;
     return 0;
 #endif
 }

@@ -61,7 +61,7 @@ $(TARGET): $(OBJS) $(OS_LATE_OBJS)
 	$(CC) ${LINKFLAGS} -o $@ $^ $(LIBS)
 
 sbcl-own.nm: $(OBJS)
-	$(NM) $(OBJS) | $(GREP) -v " [FUw] " > ,$@
+	$(NM) $(OBJS) | $(GREP) -v " [FUw] \|^$$\|.o:$$" > ,$@
 	mv -f ,$@ $@
 
 sbcl.nm: $(TARGET)

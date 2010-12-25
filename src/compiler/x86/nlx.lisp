@@ -119,8 +119,14 @@
     (inst lea new-uwp (catch-block-ea tn))
     #!+win32
     (progn
-      (storew (make-fixup 'uwp-seh-handler :assembly-routine)
+      #!-sb-dynamic-core
+      (storew (make-fixup "uwp_seh_handler_gate" :foreign)
               new-uwp unwind-block-seh-frame-handler-slot)
+      #!+sb-dynamic-core
+      (progn
+        (inst mov seh-frame (make-fixup "*uwp_seh_handler_gate" :foreign-dataref))
+        (storew seh-frame
+                new-uwp unwind-block-seh-frame-handler-slot))
       (inst lea seh-frame
             (make-ea-for-object-slot new-uwp
                                      unwind-block-next-seh-frame-slot 0))

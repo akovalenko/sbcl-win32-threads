@@ -91,6 +91,9 @@
     #!+sb-thread *free-tls-index*
     #!+sb-thread *tls-index-lock*
 
+    ;; dynamic runtime linking support
+    #!+sb-dynamic-core
+    *required-runtime-c-symbols*
     ;; Dispatch tables for generic array access
     sb!impl::%%data-vector-reffers%%
     sb!impl::%%data-vector-reffers/check-bounds%%

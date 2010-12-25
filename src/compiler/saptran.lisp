@@ -14,45 +14,30 @@
 ;;;; DEFKNOWNs
 
 #!+linkage-table
-(deftransform foreign-symbol-address ((symbol &optional datap) (simple-string boolean))
+(deftransform foreign-symbol-address
+    ((symbol &optional datap) (simple-string boolean) *
+     :important t :policy :fast-safe)
   (if (and (constant-lvar-p symbol) (constant-lvar-p datap))
       `(sap-int (foreign-symbol-sap symbol datap))
       (give-up-ir1-transform)))
 
 (deftransform foreign-symbol-sap ((symbol &optional datap)
-                                      (simple-string &optional boolean))
-    #!-linkage-table
-    (if (null datap)
-        (give-up-ir1-transform)
-        `(foreign-symbol-sap symbol))
-    #!+linkage-table
-    (if (and (constant-lvar-p symbol) (constant-lvar-p datap))
-        (let ((name (lvar-value symbol))
-              (datap (lvar-value datap)))
-          (if (or #+sb-xc-host t ; only static symbols on host
-                  (not datap)
-                  (find-foreign-symbol-in-table name *static-foreign-symbols*))
-              #!-win32
-              `(foreign-symbol-sap ,name) ; VOP
-              #!+win32
-              ;; instead of compiling direct reference to a function
-              ;; defined in DLL, we may compile a dataref to import
-              ;; table entry [if _imp__`name' is defined] and save one
-              ;; level of indirection.
-              (let* ((import-table-entry-name
-                      (concatenate 'string "_imp__" name))
-                     (import-table-entry-addr
-                      (find-foreign-symbol-in-table import-table-entry-name
-                                                  *static-foreign-symbols*)))
-
-                (if (and import-table-entry-addr
-                         (not (zerop import-table-entry-addr)))
-                    ;; we have to check it even on sb-xc-host. No
-                    ;; import entries for SBCL's own statics.
-                    `(foreign-symbol-dataref-sap ,import-table-entry-name) ; VOP
-                    `(foreign-symbol-sap ,name))) ; VOP
-              `(foreign-symbol-dataref-sap ,name))) ; VOP
-        (give-up-ir1-transform)))
+                                  (simple-string &optional boolean) *
+                                  :important t)
+  #!-linkage-table
+  (if (null datap)
+      (give-up-ir1-transform)
+      `(foreign-symbol-sap ,symbol))
+  #!+linkage-table
+  (if (and (constant-lvar-p symbol) (constant-lvar-p datap))
+      (let ((name (lvar-value symbol))
+            (datap (lvar-value datap)))
+        (if (or #+sb-xc-host t ; only static symbols on host
+             (not datap)
+             (find-foreign-symbol-in-table name *static-foreign-symbols*))
+            `(foreign-symbol-sap ,name)
+            (give-up-ir1-transform)))
+      (give-up-ir1-transform)))
 
 (defknown (sap< sap<= sap= sap>= sap>)
           (system-area-pointer system-area-pointer) boolean

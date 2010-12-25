@@ -238,7 +238,15 @@
   (:results (res :scs (sap-reg)))
   (:result-types system-area-pointer)
   (:generator 2
-   (inst lea res (make-fixup foreign-symbol :foreign))))
+   #-sb-xc-host
+   (let ((starred-name (concatenate 'simple-string "*" foreign-symbol)))
+     (if (find-foreign-symbol-in-table starred-name *static-foreign-symbols*)
+         (inst mov res (make-fixup starred-name :foreign-dataref))
+         (inst lea res (make-fixup foreign-symbol :foreign))))
+   #+sb-xc-host
+   (inst mov res
+         (make-fixup (concatenate 'simple-string "*" foreign-symbol)
+                     :foreign-dataref))))
 
 #!+linkage-table
 (define-vop (foreign-symbol-dataref-sap)
@@ -309,7 +317,8 @@
 ;;; to 53-bit mode after coming back using the SET-FPU-WORD-FOR-LISP VOP.
 (define-vop (set-fpu-word-for-c)
   (:node-var node)
-  (:generator 0
+  (:generator 0 (policy node (= debug 0))
+    #!-sb-auto-fpu-switch
     (when (policy node (= sb!c::float-accuracy 3))
       (inst sub esp-tn 4)
       (inst fnstcw (make-ea :word :base esp-tn))
@@ -320,7 +329,8 @@
 
 (define-vop (set-fpu-word-for-lisp)
   (:node-var node)
-  (:generator 0
+  (:generator 0 (policy node (= debug 0))
+    #!-sb-auto-fpu-switch
     (when (policy node (= sb!c::float-accuracy 3))
       (inst fnstcw (make-ea :word :base esp-tn))
       (inst wait)

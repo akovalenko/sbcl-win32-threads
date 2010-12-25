@@ -13,7 +13,6 @@ ASSEM_SRC = x86-assem.S
 ARCH_SRC = x86-arch.c
 
 OS_SRC = win32-os.c x86-win32-os.c os-common.c pthreads_win32.c
-OS_LATE_OBJS = win32-stub.o
 
 # The "--Wl,--export-dynamic" flags are here to help people
 # experimenting with callbacks from C to SBCL, by allowing linkage to
@@ -27,12 +26,15 @@ OS_LATE_OBJS = win32-stub.o
 # (You *are* encouraged to design and implement a coherent stable
 # interface, though.:-| As far as I (WHN 2002-05-19) know, no one is
 # working on one and it would be a nice thing to have.)
-LINKFLAGS = -Wl,--export-dynamic,--enable-stdcall-fixup -mno-cygwin
-OS_LIBS = -mno-cygwin -l ws2_32
+LINKFLAGS = -Wl,-export-all-symbols -mno-cygwin
+OS_LIBS = -l ws2_32
 
 GC_SRC = gencgc.c
 
-CFLAGS =  -g -Wall -O3 -mno-cygwin -Wl,--enable-stdcall-fixup
+CFLAGS =  -g -W -Wall \
+       -Wno-unused-variable -Wno-unused-function -Wno-unused-parameter \
+       -O3 -mno-cygwin -DWINVER=0x0501
+
 ASFLAGS = $(CFLAGS)
 
 CPP = cpp
@@ -40,7 +42,7 @@ CC = gcc-3
 LD = ld
 NM = nm
 
-mangled-stuff.exe:
+mangled-stuff.exe: gen1a-undefs
 	$(CC) -nostdlib -Wl,-r -Wl,-whole-archive \
 			    -lkernel32 -luser32 -lgdi32 -lmsvcrt \
 			    -ladvapi32 -lws2_32 -o -Wl,-no-whole-archive \
@@ -54,5 +56,15 @@ OS_CLEAN_FILES = mangled-stuff.exe mangled-stuff.nm
 
 # Nothing to do for after-grovel-headers.
 .PHONY: after-grovel-headers
+
+ifndef LISP_FEATURE_SB_DYNAMIC_CORE
+
+OS_LATE_OBJS = win32-stub.o
 after-grovel-headers: mangled-stuff.nm
+
+else
+OS_LATE_OBJS = 
+endif
+
+
 

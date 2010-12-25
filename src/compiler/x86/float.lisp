@@ -2036,7 +2036,11 @@
   (:policy :fast-safe)
   (:temporary (:sc unsigned-reg :offset eax-offset :target res
                    :to :result) eax)
+  (:temporary (:sc double-reg :offset fr0-offset
+                   :from :argument :to :result) fr0)
   (:generator 8
+   (inst fstp fr0)
+   (inst fldz)
    (inst sub esp-tn npx-env-size)       ; Make space on stack.
    (inst wait)                          ; Catch any pending FPE exceptions
    (inst fstenv (make-ea :dword :base esp-tn)) ; masks all exceptions
@@ -2058,7 +2062,11 @@
   (:policy :fast-safe)
   (:temporary (:sc unsigned-reg :offset eax-offset
                    :from :eval :to :result) eax)
+  (:temporary (:sc double-reg :offset fr0-offset
+                   :from :argument :to :result) fr0)
   (:generator 3
+   (inst fstp fr0)
+   (inst fldz)
    (inst sub esp-tn npx-env-size)       ; Make space on stack.
    (inst wait)                          ; Catch any pending FPE exceptions.
    (inst fstenv (make-ea :dword :base esp-tn))

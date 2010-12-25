@@ -435,4 +435,12 @@
   ;; be handled by DEFINE-PRIMITIVE-OBJECT.
   #!+alpha
   (padding)
+  #!+sb-auto-fpu-switch
+  (in-lisp-fpu-mode :c-type "unsigned int" :length 1)
+  #!+sb-auto-fpu-switch
+  (saved-c-fpu-mode :c-type "unsigned int" :length 1)
+  #!+sb-auto-fpu-switch
+  (saved-lisp-fpu-mode :c-type "unsigned int" :length 1)
+  #!+win32
+  (waiting-console-handle :c-type "void*" :length 1)
   (interrupt-contexts :c-type "os_context_t *" :rest-p t))
