@@ -262,6 +262,9 @@ size_t void_diff(void *x, void *y)
     return (pointer_sized_uint_t)x - (pointer_sized_uint_t)y;
 }
 
+#define AGE_SCALE (1024ul*256ul)
+#define AGE_MAX (1024ul*4ul)
+
 /* a structure to hold the state of a generation
  *
  * CAUTION: If you modify this, make sure to touch up the alien
@@ -311,7 +314,7 @@ struct generation {
     /* a minimum average memory age before a GC will occur helps
      * prevent a GC when a large number of new live objects have been
      * added, in which case a GC could be a waste of time */
-    double minimum_age_before_gc;
+    unsigned long minimum_age_before_gc;
 
     /* A linked list of lutex structures in this generation, used for
      * implementing lutex finalization. */
@@ -425,16 +428,26 @@ count_generation_bytes_allocated (generation_index_t gen)
     return result;
 }
 
-/* Return the average age of the memory in a generation. */
-extern double
+/* Return the average age of the memory in a generation.  Unsigned
+   long scaled to 1000000 is preferred to double, because current
+   on-demand float stack support should benefit from the floatless GC.
+ */
+extern unsigned long
 generation_average_age(generation_index_t gen)
 {
-    if (generations[gen].bytes_allocated == 0)
-        return 0.0;
-
-    return
-        ((double)generations[gen].cum_sum_bytes_allocated)
-        / ((double)generations[gen].bytes_allocated);
+    unsigned long cum_sum = generations[gen].cum_sum_bytes_allocated,
+        allocated = generations[gen].bytes_allocated;
+    if (allocated == 0)
+        return 0ul;
+    else {
+        unsigned long agefloor = cum_sum/allocated,
+            remainder = cum_sum % allocated;
+        if (agefloor >= AGE_MAX)
+            return AGE_MAX*AGE_SCALE;
+        else
+            return agefloor*AGE_SCALE +
+                (((AGE_SCALE*AGE_MAX)/allocated)*remainder)/AGE_MAX;
+    }
 }
 
 /* The verbose argument controls how much to print: 0 for normal
@@ -510,7 +523,7 @@ print_generation_stats() /* FIXME: should take FILE argument, or construct a str
                 generations[i].gc_trigger,
                 count_write_protect_generation_pages(i),
                 generations[i].num_gc,
-                generation_average_age(i));
+                ((double)generation_average_age(i))/((double)AGE_SCALE));
     }
     fprintf(stderr,"   Total bytes allocated    = %lu\n", bytes_allocated);
     fprintf(stderr,"   Dynamic-space-size bytes = %u\n", dynamic_space_size);
@@ -3855,7 +3868,7 @@ preserve_context_registers (os_context_t *c)
     /* On Darwin the signal context isn't a contiguous block of memory,
      * so just preserve_pointering its contents won't be sufficient.
      */
-#if defined(LISP_FEATURE_DARWIN)
+#if defined(LISP_FEATURE_DARWIN)||defined(LISP_FEATURE_WIN32)
 #if defined LISP_FEATURE_X86
     preserve_pointer((void*)*os_context_register_addr(c,reg_EAX));
     preserve_pointer((void*)*os_context_register_addr(c,reg_ECX));
@@ -3884,9 +3897,11 @@ preserve_context_registers (os_context_t *c)
     #error "preserve_context_registers needs to be tweaked for non-x86 Darwin"
 #endif
 #endif
+#if !defined(LISP_FEATURE_WIN32)
     for(ptr = ((void **)(c+1))-1; ptr>=(void **)c; ptr--) {
         preserve_pointer(*ptr);
     }
+#endif
 }
 #endif
 
@@ -4557,7 +4572,7 @@ gc_init(void)
         /* the tune-able parameters */
         generations[i].bytes_consed_between_gc = 2000000;
         generations[i].number_of_gcs_before_promotion = 1;
-        generations[i].minimum_age_before_gc = 0.75;
+        generations[i].minimum_age_before_gc = (AGE_SCALE/4)*3;
         generations[i].lutexes = NULL;
     }
 
