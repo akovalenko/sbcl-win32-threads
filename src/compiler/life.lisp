@@ -878,7 +878,6 @@
                   (tn-local-conflicts tn)
                   t))
         (t
-         #-(and)
          (aver (and (null (tn-reads tn)) (null (tn-writes tn))))))
   (values))
 
