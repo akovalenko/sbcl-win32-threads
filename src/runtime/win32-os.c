@@ -1315,7 +1315,7 @@ void c_level_backtrace(const char* header, int depth)
     for (lastseh = get_seh_frame(); lastseh && (lastseh!=(void*)0xFFFFFFFF);
          lastseh = *lastseh);
 
-    fprintf(dyndebug_output, "Backtrace: %s\n", header);
+    fprintf(dyndebug_output, "Backtrace: %s (thread %p)\n", header, this_thread);
     for (frame = __builtin_frame_address(0); frame; frame=*(void**)frame)
     {
         if ((n++)>depth)

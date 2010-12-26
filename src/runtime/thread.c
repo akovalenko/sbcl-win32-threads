@@ -285,7 +285,7 @@ new_thread_trampoline(struct thread *th)
     struct lisp_exception_frame exception_frame;
 #endif
 #if defined(LISP_FEATURE_SB_AUTO_FPU_SWITCH)
-    th->saved_c_fpu_mode = x87_fnstcw();
+    x87_fldcw(th->saved_c_fpu_mode);
 #endif
     FSHOW((stderr,"/creating thread %lu\n", thread_self()));
     wos_install_interrupt_handlers(&exception_frame);
@@ -568,7 +568,7 @@ create_thread_struct(lispobj initial_function) {
       th->private_events.events[i] = CreateEvent(NULL,FALSE,FALSE,NULL);
     }
     th->in_lisp_fpu_mode = 0;
-    th->saved_c_fpu_mode = x87_fnstcw();
+    th->saved_c_fpu_mode = x87_fnstcw() & ~1;
     th->saved_lisp_fpu_mode =
         ((th->saved_c_fpu_mode & 0xfffff2ff) | 0x00000200) & ~1;
     th->saved_c_fpu_mode &= ~1;
