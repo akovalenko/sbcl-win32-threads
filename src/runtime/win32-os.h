@@ -78,6 +78,6 @@ void accept_post_mortem_startup();
 void win32_interrupt_console_input();
 void os_link_runtime();
 
-/* #define bcopy(src,dest,n) memmove(dest,src,n) */
+#define bcopy(src,dest,n) memmove(dest,src,n)
 
 #endif  /* SBCL_INCLUDED_WIN32_OS_H */
