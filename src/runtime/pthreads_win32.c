@@ -59,7 +59,7 @@ static pthread_t tls_impersonate(pthread_t other) {
 void pthread_np_get_my_context_subset(CONTEXT* ctx)
 {
   ctx->ContextFlags = CONTEXT_FULL;
-  ctx->Eip = pthread_np_get_my_context_subset;
+  ctx->Eip = (DWORD)(intptr_t)pthread_np_get_my_context_subset;
   asm volatile ("mov %%eax,%0": "=m"(ctx->Eax));
   asm volatile ("mov %%ebx,%0": "=m"(ctx->Ebx));
   asm volatile ("mov %%ecx,%0": "=m"(ctx->Ecx));
@@ -184,8 +184,8 @@ CONTEXT* pthread_np_publish_context(CONTEXT* maybe_save_old_one)
   if (maybe_save_old_one)
     *maybe_save_old_one = self->fiber_context;
   pthread_np_get_my_context_subset(&self->fiber_context);
-  self->fiber_context.Esp = __builtin_frame_address(0);
-  self->fiber_context.Eip = __builtin_return_address(0);
+  self->fiber_context.Esp = (DWORD)(intptr_t)__builtin_frame_address(0);
+  self->fiber_context.Eip = (DWORD)(intptr_t)__builtin_return_address(0);
   return &self->fiber_context;
 }
 
@@ -366,7 +366,7 @@ int sigaction(int signum, const struct sigaction* act, struct sigaction* oldact)
   if (oldact)
     *oldact = signal_handlers[signum];
   if (!(newact.sa_flags & SA_SIGINFO)) {
-    newact.sa_sigaction = newact.sa_handler;
+      newact.sa_sigaction = (typeof(newact.sa_sigaction))newact.sa_handler;
   }
   signal_handlers[signum] = newact;
   return 0;

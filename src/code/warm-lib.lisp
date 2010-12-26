@@ -18,12 +18,3 @@
   (load-shared-object "msvcrt.dll")
   (load-shared-object "ws2_32.dll")
   (load-shared-object "shell32.dll"))
-
-#+win32 #+win32
-(in-package "SB-WIN32")
-(defun get-folder-namestring (csidl)
-  "http://msdn.microsoft.com/library/en-us/shellcc/platform/shell/reference/functions/shgetfolderpath.asp"
-  (with-alien ((apath (* char) (make-system-buffer (1+ max_path))))
-    (syscall (("SHGetFolderPath" 20 t) int handle int handle dword (* char))
-             (concatenate 'string (cast-and-free apath) "\\")
-             0 csidl 0 0 apath)))

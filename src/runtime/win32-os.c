@@ -54,10 +54,10 @@
 #include <float.h>
 
 #include <excpt.h>
-#include <setjmp.h>
 
 #include "validate.h"
 #include "thread.h"
+#include "cpputil.h"
 
 size_t os_vm_page_size;
 
@@ -357,7 +357,7 @@ u32 os_get_build_time_shared_libraries(u32 excl_maximum,
             MEMORY_BASIC_INFORMATION moduleMapping;
             if (dyndebug_runtime_link) {
                 fprintf(dyndebug_output,"Now should know DLL: %s\n",
-                        (base + image_import_descriptor->Name));
+                        (char*)(base + image_import_descriptor->Name));
             }
             if (VirtualQuery
                 (*(LPCVOID**)
@@ -382,7 +382,7 @@ u32 os_get_build_time_shared_libraries(u32 excl_maximum,
                 if (dyndebug_runtime_link) {
                     fprintf(stderr,"DLL detection: %u, base %p: %s\n",
                             nlibrary, moduleMapping.AllocationBase,
-                            (base + image_import_descriptor->Name));
+                            (char*)(base + image_import_descriptor->Name));
                 }
                 ++ nlibrary;
             }
@@ -407,19 +407,24 @@ static inline lispobj cdr(lispobj conscell)
 {
     return FOLLOW(conscell,LIST_POINTER,cons).cdr;
 }
+
 extern void undefined_alien_function(); /* see interrupt.c */
 void os_link_runtime()
 {
     lispobj head;
-    void **link_table = 0x21010000;
+    void *link_target = (void*)(intptr_t)0x21010000;
     u32 nsymbol;
     lispobj symbol_name;
     char *namechars;
     char namecopy[256];
-    int namelength;
+    char *dlsymname;
+    u32 namelength;
     char *at;
     void *myself = GetModuleHandleW(NULL);
     HMODULE buildTimeImages[16] = {myself};
+    u32 entry_size;
+    u32 space_size;
+    boolean datap;
     u32 i;
     /* Somewhat arbitrary (and DLL topic itself is dirty on
        pre-WinXP).  What I want is to get module handles for the
@@ -428,7 +433,8 @@ void os_link_runtime()
        of libraries. */
     u32 nlibraries =
         1 + os_get_build_time_shared_libraries(15u, myself,
-                                               &buildTimeImages[1], NULL);
+                                               1+(void**)buildTimeImages,
+					       NULL);
 
     if (dyndebug_runtime_link) {
         for (i=0; i<nlibraries; ++i) {
@@ -436,16 +442,25 @@ void os_link_runtime()
                     i,nlibraries, buildTimeImages[i]);
         }
     }
-    os_validate((void*)0x21010000, 65536);
-    os_validate_recommit((void*)0x21010000, 65536);
 
-    for (head = SymbolValue(REQUIRED_RUNTIME_C_SYMBOLS,0), nsymbol = 0u;
-         head!=NIL; head = cdr(head), ++nsymbol)
+    /* How much space do we need? */
+    for (head = SymbolValue(REQUIRED_RUNTIME_C_SYMBOLS,0), space_size = 0u;
+         head!=NIL; space_size += fixnum_value(cdr(car(head))),head = cdr(head));
+
+    os_validate(link_target, space_size);
+    os_validate_recommit(link_target, space_size);
+
+    for (head = SymbolValue(REQUIRED_RUNTIME_C_SYMBOLS,0);
+         head!=NIL; head = cdr(head))
     {
         int linked = 0;
+	lispobj item = car(head);
 
-        symbol_name = car(car(head));
-        namechars = FOTHERPTR(symbol_name,vector).data;
+	entry_size = fixnum_value(cdr(item));
+        symbol_name = car(item);
+	datap = (entry_size == (sizeof (lispobj)));
+	
+        namechars = (void*)(intptr_t)FOTHERPTR(symbol_name,vector).data;
         namelength = fixnum_value(FOTHERPTR(symbol_name,vector).length);
         AVERLAX(namelength<(sizeof(namecopy))) ||
             (namelength = (sizeof(namecopy))-1);
@@ -455,28 +470,20 @@ void os_link_runtime()
         /* no stdcall mangling when ll/gpa */
         if ((at = strrchr(namecopy,'@'))) { (*at) = 0; }
 
-        /* special cases */
-        if (!memcmp(namecopy,"_$jump[",sizeof("_$jump[")))
-        {
-            link_table[nsymbol] = (void*)0x68909090; /* nop nop nop, pushl  $___ */
-            continue;
-        } else if (!memcmp(namecopy,"_].",sizeof("_].")))
-        {
-            link_table[nsymbol] = (void*)0x000000C3; /* ret, zeroes */
-            continue;
-        }
-
+	dlsymname = namecopy + (datap? 2 : 1);
+	
         for (i=0u; i<nlibraries; ++i) {
-            void* result = GetProcAddress(buildTimeImages[i],
-                                          namecopy + 2);
-            if (result)
-            {
-                link_table[nsymbol] = result;
+            void* result = GetProcAddress(buildTimeImages[i], dlsymname);
+            if (result) {
                 if (dyndebug_runtime_link) {
                     fprintf(dyndebug_output,
                             "Core requests linking [0x%p] <= [%s]: => [0x%p]\n",
-                            link_table+nsymbol, namecopy, result);
+                            link_target, namecopy, result);
                 }
+		if (datap) 
+		    *(void**)link_target = result;
+		else
+		    arch_write_linkage_table_jmp(link_target,result);
                 break;
             }
         }
@@ -484,10 +491,15 @@ void os_link_runtime()
         {
             if (dyndebug_runtime_link) {
                 fprintf(stderr,"Core requests linking [0x%p] <= [%s]: failed\n",
-                        link_table+nsymbol, namecopy);
+			link_target, namecopy);
             }
-            link_table[nsymbol] = undefined_alien_function;
+	    if (datap)
+		*(void**)link_target = undefined_alien_address;
+	    else
+		arch_write_linkage_table_jmp(link_target,undefined_alien_function);
+		
         }
+	link_target += entry_size;
     }
     /* exit(111); */
 }
@@ -1072,7 +1084,7 @@ int win32_open_for_mmap(const char* fileName)
                     FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,NULL,
                     OPEN_EXISTING,0,NULL);
     AVER(handle && (handle!=INVALID_HANDLE_VALUE));
-    return _open_osfhandle(handle,O_BINARY);
+    return _open_osfhandle((intptr_t)handle,O_BINARY);
 }
 /*
  * os_map() is called to map a chunk of the core file into memory.
@@ -1090,18 +1102,17 @@ os_map(int fd, int offset, os_vm_address_t addr, os_vm_size_t len)
 {
     os_vm_size_t count;
 
-    if (addr == DYNAMIC_SPACE_START)
+    if (addr == (os_vm_address_t)DYNAMIC_SPACE_START)
     {
-        if (!(offset & (OS_VM_MMAP_UNIT_SIZE-1))) {
-            len = (len + OS_VM_MMAP_UNIT_SIZE-1)&~(OS_VM_MMAP_UNIT_SIZE-1);
-
+        if (IS_ALIGNED(offset,os_vm_mmap_unit_size)) {
+            len = ALIGN_UP(len,os_vm_mmap_unit_size);
             HANDLE mapping =
-                CreateFileMapping(_get_osfhandle(fd),NULL,
+                CreateFileMapping((HANDLE)_get_osfhandle(fd),NULL,
                                   PAGE_EXECUTE_WRITECOPY, 0, offset+len,
                                   NULL);
             if (!mapping) {
                 mapping =
-                    CreateFileMapping(_get_osfhandle(fd),NULL,
+                    CreateFileMapping((HANDLE)_get_osfhandle(fd),NULL,
                                       PAGE_READONLY, 0, offset+len,
                                       NULL);
                 if (mapping)
@@ -1159,7 +1170,7 @@ os_protect(os_vm_address_t address, os_vm_size_t length, os_vm_prot_t prot)
 os_vm_prot_t os_current_protection(os_vm_address_t address)
 {
     MEMORY_BASIC_INFORMATION minfo;
-    int prot;
+    size_t prot;
     AVERLAX(VirtualQuery(address, &minfo, sizeof minfo));
     for (prot = 0; prot<(sizeof(os_protect_modes)/sizeof(os_protect_modes[0])); ++prot) {
         if (os_protect_modes[prot] == minfo.Protect)
@@ -1220,14 +1231,14 @@ extern boolean internal_errors_enabled;
 #endif
 extern void exception_handler_wrapper();
 
-extern inline
+static inline
 int fpu_world_cruel_p()
 {
     struct thread* th = arch_os_get_current_thread();
     return th && ((th->in_lisp_fpu_mode)&0xFF00);
 }
 
-extern inline
+static inline
 int fpu_world_lispy_p()
 {
     struct thread* th = arch_os_get_current_thread();
@@ -1236,14 +1247,14 @@ int fpu_world_lispy_p()
 
 /* In SBCL code, Lisp may fldenv or something, so he will own FPU
  * but never enter our SEH handler... */
-extern inline
+static inline
 int fpu_world_unknown_p()
 {
     struct thread* th = arch_os_get_current_thread();
     return th && dyndebug_lazy_fpu_careful && (th->in_lisp_fpu_mode&0xFF0000);
 }
 
-extern inline
+static inline
 void establish_c_fpu_world()
 {
     struct thread* th = arch_os_get_current_thread();
@@ -1272,6 +1283,8 @@ void establish_c_fpu_world()
     AVERLAX(!fpu_world_unknown_p());
     AVERLAX(!fpu_world_lispy_p());
 }
+
+
 
 void c_level_backtrace(const char* header, int depth)
 {
@@ -1304,65 +1317,74 @@ void c_level_backtrace(const char* header, int depth)
    Target FPU world of recover is always the world that was current
    before it was broken. */
 
-extern inline
+static inline
 void recover_fpu_world()
 {
     if (fpu_world_cruel_p()) {
         int lispyp = fpu_world_lispy_p();
-        struct {int data[7]; }
-        recovery = {
-            (lispyp?
-             this_thread->saved_lisp_fpu_mode:
-             this_thread->saved_c_fpu_mode), /* control */
-            0,                               /* status */
-            lispyp ? 0x5555 : 0xFFFF,        /* tags */
-            0,0,0,0                          /* insn/operand */
-        };
+	x87_env nice_fpu_environment = {
+	    .control = (lispyp ?
+			this_thread->saved_lisp_fpu_mode :
+			this_thread->saved_c_fpu_mode),
+	    .status = 0,
+	    .tags = (lispyp ? 0x5555 : 0xFFFF)
+	};
+
         if (dyndebug_lazy_fpu) {
             fprintf(dyndebug_output,
                     "Recovering indeterminate FPU state to lispyp=%d\n",
                     lispyp);
             c_level_backtrace("Recovering FPU state..",15);
         }
-        asm("fnclex;fldenv %0;fwait" : :"m"(recovery));
+        asm("fnclex;fldenv %0;fwait" : :"m"(nice_fpu_environment));
         (arch_os_get_current_thread())->in_lisp_fpu_mode &= 0xFF;
     }
 }
 
+static
+void check_fpu_state(const char* format,...)
+{
+    if (dyndebug_lazy_fpu && !fpu_world_cruel_p()) {
+	boolean lispyp = fpu_world_lispy_p();
+	x87_env fpu_environment = x87_fnstenv();
+	boolean have_valid_regs = (fpu_environment.tags!=0xFFFFu);
+	boolean have_empty_regs =
+	    (0!=((fpu_environment.tags & 0x5555u) &
+		 ((fpu_environment.tags & 0xAAAAu)>>1)));
+	if ((lispyp && have_empty_regs)||
+	    (!lispyp && have_valid_regs)) {
+	    if (format) {
+		va_list header;
+		va_start(header,format);
+		vfprintf(dyndebug_output,format,header);
+	    }
+	    fprintf(dyndebug_output,"\n"
+		    "Strange FPU state detected:\n"
+		    "Expected %s\n"
+		    "Actual tag word is %04x\n",
+		    lispyp? "Lisp mode (no empty regs)" : "C mode (all regs empty)",
+		    fpu_environment.tags);
+	    c_level_backtrace("Unexpected FPU state", 10);
+	}
+	x87_fldenv(fpu_environment);
+    }
+}
+
+
 void enter_c_function(void* which, void* wherefrom)
 {
-    int fpu_before_gcenter = (this_thread)->in_lisp_fpu_mode;
     gc_enter_safe_region();
-    int fpu_after_gcenter = (this_thread)->in_lisp_fpu_mode;
     establish_c_fpu_world();
-    int fpu_after_establish = (this_thread)->in_lisp_fpu_mode;
     AVERLAX(!fpu_world_lispy_p());
-    if (dyndebug_lazy_fpu) {
-        struct { int data[7]; } fenv;
-        asm("fnstenv %0; fwait": "=m"(fenv));
-        asm("fldenv %0" : : "m"(fenv));
-        if ((fenv.data[2] & 0xFFFF )!=0xFFFF) {
-            fprintf(dyndebug_output,
-                    "For strange NPX [0x%p <- 0x%p]: expected state was:\n"
-                    "....%p [-safe-rgn>-] %p [-establish-] %p\n"
-                    "....with tags %p, status %p, control %p\n",
-                    which, wherefrom,
-                    fpu_before_gcenter,
-                    fpu_after_gcenter,
-                    fpu_after_establish,
-                    fenv.data[2], fenv.data[1], fenv.data[0]);
-            c_level_backtrace("Entering C function, strange NPX",15);
-            fenv.data[2]=0xffff;
-            asm("fldenv %0" : : "m"(fenv));
-        }
-    }
+    check_fpu_state("Entering C function [#X%p] from [#X%p]",
+		    which,wherefrom);
 }
 
 void leave_c_function()
 {
     if (!fpu_world_lispy_p()) {
-        unsigned short register flags asm("%ax");
-        struct {unsigned short words[5];} keep;
+        register unsigned short flags asm("%ax");
+	memfloat80 keep;
         asm("fxam; fnstsw %0" : "=r"(flags));
         if ((flags & 0x4500) != 0x4100) {
             /* Save returned FP value: if safepoint will GC, it can
@@ -1396,26 +1418,7 @@ void enter_lisp_function()
      * traps, gc safepoint etc., where no call_into_c has happened,
      * C may run unwittingly with full FPU bag. */
     recover_fpu_world();
-    if (dyndebug_lazy_fpu) {
-        struct { int data[7]; } fenv;
-        asm("fnstenv %0; fwait": "=m"(fenv));
-        asm("fldenv %0" : : "m"(fenv));
-        if (!fpu_world_lispy_p() && ((fenv.data[2]&0xFFFF)!=0xFFFF)) {
-            fprintf(dyndebug_output,
-                    "Enter Lisp/ strange NPX for C world\n"
-                    "....with tags %p, status %p, control %p\n",
-                    fenv.data[2], fenv.data[1], fenv.data[0]);
-            c_level_backtrace("Enter Lisp: strange NPX state",10);
-        }
-        if (fpu_world_lispy_p() && ((fenv.data[2]&0x5555) & ((fenv.data[2]&0xAAAA)>>1)))
-        {
-            fprintf(dyndebug_output,
-                    "Enter Lisp/ strange NPX for Lisp world.\n"
-                    "....with tags %p, status %p, control %p\n",
-                    fenv.data[2], fenv.data[1], fenv.data[0]);
-            c_level_backtrace("Enter Lisp: strange NPX state",10);
-        }
-    }
+    check_fpu_state("Entering Lisp function...");
     gc_enter_unsafe_region();
 }
 
@@ -1423,33 +1426,13 @@ void leave_lisp_function()
 {
     gc_leave_region();
     establish_c_fpu_world();
-
-    if (dyndebug_lazy_fpu) {
-        struct { int data[7]; } fenv;
-        asm("fnstenv %0; fwait": "=m"(fenv));
-        asm("fldenv %0" : : "m"(fenv));
-        if (!fpu_world_lispy_p() && ((fenv.data[2]&0xFFFF)!=0xFFFF)) {
-            fprintf(dyndebug_output,
-                    "Leave Lisp/ strange NPX for C world\n"
-                    "....with tags %p, status %p, control %p\n",
-                    fenv.data[2], fenv.data[1], fenv.data[0]);
-            c_level_backtrace("Enter Lisp: strange NPX state",10);
-        }
-        if (fpu_world_lispy_p() && ((fenv.data[2]&0x5555) & ((fenv.data[2]&0xAAAA)>>1)))
-        {
-            fprintf(dyndebug_output,
-                    "Leave Lisp/ strange NPX for Lisp world.\n"
-                    "....with tags %p, status %p, control %p\n",
-                    fenv.data[2], fenv.data[1], fenv.data[0]);
-            c_level_backtrace("Enter Lisp: strange NPX state",10);
-        }
-    }
+    check_fpu_state("Leaving Lisp function");
 }
 
 
 #define WCTX_PUSH(wctx,value)                                           \
     do { wctx->Esp-=4;                                                  \
-        *((intptr_t*)(intptr_t) wctx->Esp)=value; } while(0)
+	*((intptr_t*)(intptr_t) wctx->Esp)=(intptr_t)value; } while(0)
 
 #define WCTX_PUSHA(wctx)                        \
     do {                                        \
@@ -1533,6 +1516,24 @@ void inject_npx_recovery(CONTEXT* context)
            &context->FloatSave, data_size);
 }
 
+
+static inline
+void maybe_set_xmm_state_to_lisp(CONTEXT* context)
+{
+    unsigned short tags_x87 = context->FloatSave.TagWord & 0xFFFFu;
+    unsigned short control_x87 = context->FloatSave.ControlWord & 0xFFFFu;
+    unsigned short status_x87 = context->FloatSave.StatusWord & 0xFFFFu;
+    
+    if (context->ContextFlags & CONTEXT_EXTENDED_REGISTERS) {
+	memset(context->ExtendedRegisters+32,0,8*8);
+	context->ExtendedRegisters[4] = 0x7F;
+	context->ExtendedRegisters[0] = control_x87 & 0xFFu;
+	context->ExtendedRegisters[1] = control_x87>>8;
+	context->ExtendedRegisters[2] = status_x87 & 0xFFu;
+	context->ExtendedRegisters[3] = status_x87>>8;
+    }
+}
+
 /*
  * A good explanation of the exception handling semantics is
  * http://win32assembly.online.fr/Exceptionhandling.html .
@@ -1557,7 +1558,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         if (!fpu_world_lispy_p() && ((tags&0xFFFF)!=0xFFFF)) {
             fprintf(dyndebug_output,
                     "Exception handler/ strange NPX for C world\n"
-                    "....with tags %p, status %p, control %p\n",
+                    "....with tags 0x%04lx, status 0x%04lx, control 0x%04lx\n",
                     context->FloatSave.TagWord,
                     context->FloatSave.StatusWord,
                     context->FloatSave.ControlWord);
@@ -1567,7 +1568,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         {
             fprintf(dyndebug_output,
                     "Exception handler/ strange NPX for Lisp world\n"
-                    "....with tags %p, status %p, control %p\n",
+                    "....with tags 0x%04lx, status 0x%04lx, control 0x%04lx\n",
                     context->FloatSave.TagWord,
                     context->FloatSave.StatusWord,
                     context->FloatSave.ControlWord);
@@ -1614,8 +1615,8 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                 if (dyndebug_lazy_fpu) {
                     c_level_backtrace("FPU Stack underflow", 5);
                     fprintf(dyndebug_output,
-                            "..Offending opcode: %08x\n"
-                            "..Tag word: %08x\n",
+                            "..Offending opcode: 0x%08lx\n"
+                            "..Tag word: 0x%08lx\n",
                             *(DWORD*)context->FloatSave.ErrorOffset,
                             context->FloatSave.TagWord);
                 }
@@ -1628,15 +1629,9 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                 context->FloatSave.ControlWord = self->saved_lisp_fpu_mode;
                 context->FloatSave.StatusWord &= ~(0x3941);
                 context->FloatSave.TagWord = 0xD555;
-
-                context->ExtendedRegisters[4] = 0x7F;
-                (*(WORD*)(context->ExtendedRegisters+0)) = self->saved_lisp_fpu_mode;
-                (*(WORD*)(context->ExtendedRegisters+2)) &= ~(0x3941);
-                memset(context->ExtendedRegisters+32,0,8*8);
-
                 memset(context->FloatSave.RegisterArea,0,
                        sizeof(context->FloatSave.RegisterArea));
-
+		maybe_set_xmm_state_to_lisp(context);
                 contextual_fpu_state = 1; /* lispy one */
 
                 /* inject_npx_recovery(context); */
@@ -1765,7 +1760,8 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                lazy os_validate with zero address. Recommit is possible, so
                concurrency is not a problem. */
             LPVOID done;
-            AVERLAX((done = VirtualAlloc(((intptr_t)fault_address) &~(os_vm_page_size-1),
+            AVERLAX((done = VirtualAlloc((LPVOID)
+					 (((intptr_t)fault_address)&~(os_vm_page_size-1)),
                                          os_vm_page_size,
                                          MEM_COMMIT, PAGE_EXECUTE_READWRITE))
                     || internal_errors_enabled);
@@ -1861,7 +1857,7 @@ struct at_exit_instructions {
 void post_mortem_function()
 {
     PROCESS_INFORMATION pinfo;
-    STARTUPINFO si = {sizeof (STARTUPINFO)};
+    STARTUPINFO si = {.cb = sizeof (STARTUPINFO)};
     HANDLE myHandle;
     char myHandleStr[32];
 
@@ -1989,13 +1985,6 @@ char *dirname(char *path)
 
     return buf;
 }
-void bcopy(const void *src, void *dest, size_t n)
-{
-    /* memmove(dest,src,n); */
-    MoveMemory(dest, src, n);
-}
-
-/* This is a manually-maintained version of ldso_stubs.S. */
 
 char *
 os_get_runtime_executable_path(int external)
@@ -2122,7 +2111,7 @@ again:
             errno = EINTR;
             return -1;
         } else {
-            int nch,offset = 0;
+            DWORD nch,offset = 0;
             LPWSTR ubuf = buf;
             for (nch=0;nch<nread;++nch) {
                 if (ubuf[nch]==13) {
@@ -2143,6 +2132,8 @@ again:
     }
 }
 
+static const LARGE_INTEGER zero_large_offset = {.QuadPart = 0LL};
+
 int win32_unix_write(int fd, void * buf, int count)
 {
     HANDLE handle;
@@ -2150,7 +2141,7 @@ int win32_unix_write(int fd, void * buf, int count)
     OVERLAPPED overlapped;
     struct thread * self = arch_os_get_current_thread();
     BOOL waitInGOR;
-    LARGE_INTEGER file_position, nooffset = {{0}};
+    LARGE_INTEGER file_position;
 
     odprintf("write(%d, 0x%p, %d)", fd, buf, count);
     handle =(HANDLE)_get_osfhandle(fd);
@@ -2159,7 +2150,10 @@ int win32_unix_write(int fd, void * buf, int count)
 
     odprintf("handle = 0x%p", handle);
     overlapped.hEvent = self->private_events.events[0];
-    if (SetFilePointerEx(handle,nooffset,&file_position, FILE_CURRENT)) {
+    if (SetFilePointerEx(handle,
+			 zero_large_offset,
+			 &file_position,
+			 FILE_CURRENT)) {
         overlapped.Offset = file_position.LowPart;
         overlapped.OffsetHigh = file_position.HighPart;
     } else {
@@ -2209,13 +2203,13 @@ int win32_unix_write(int fd, void * buf, int count)
 int win32_unix_read(int fd, void * buf, int count)
 {
     HANDLE handle;
-    OVERLAPPED overlapped = {0};
+    OVERLAPPED overlapped = {.Internal=0};
     DWORD read_bytes = 0;
     struct thread * self = arch_os_get_current_thread();
     DWORD errorCode = 0;
     BOOL waitInGOR = FALSE;
     BOOL ok = FALSE;
-    LARGE_INTEGER file_position, nooffset={{0}};
+    LARGE_INTEGER file_position;
 
     odprintf("read(%d, 0x%p, %d)", fd, buf, count);
     handle = (HANDLE)_get_osfhandle(fd);
@@ -2228,7 +2222,11 @@ int win32_unix_read(int fd, void * buf, int count)
     odprintf("handle = 0x%p", handle);
     overlapped.hEvent = self->private_events.events[0];
     /* If it has a position, we won't try overlapped */
-    if (SetFilePointerEx(handle,nooffset,&file_position, FILE_CURRENT)) {
+    if (SetFilePointerEx(handle,
+			 zero_large_offset,
+			 &file_position,
+			 FILE_CURRENT))
+    {
         overlapped.Offset = file_position.LowPart;
         overlapped.OffsetHigh = file_position.HighPart;
     } else {

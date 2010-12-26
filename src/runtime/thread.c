@@ -332,7 +332,10 @@ new_thread_trampoline(struct thread *th)
     pthread_mutex_unlock(&all_threads_lock);
 
 
-    if(th->tls_cookie>=0) arch_os_thread_cleanup(th);
+    /* FIXME: Seen th->tls_cookie>=0 below.
+       Meaningless for unsigned (lispobj) tls_cookie.
+       What it's supposed to mean? */
+    if(th->tls_cookie!=0) arch_os_thread_cleanup(th);
     pthread_mutex_destroy(th->state_lock);
     pthread_cond_destroy(th->state_cond);
 
@@ -345,8 +348,9 @@ new_thread_trampoline(struct thread *th)
 #endif
 
 #if defined(LISP_FEATURE_WIN32)
-    for (i = 0; i<sizeof(th->private_events.events)/
-           sizeof(th->private_events.events[0]); ++i) {
+    for (i = 0; i<
+	     (int) (sizeof(th->private_events.events)/
+		    sizeof(th->private_events.events[0])); ++i) {
       CloseHandle(th->private_events.events[i]);
     }
 #endif
@@ -1173,7 +1177,7 @@ const char * fn_name(lispobj fn)
 
 const char * t_nil_s(lispobj symbol)
 {
-  struct tread * self = arch_os_get_current_thread();
+  struct thread * self = arch_os_get_current_thread();
   return t_nil_str(SymbolValue(symbol, self));
 }
 

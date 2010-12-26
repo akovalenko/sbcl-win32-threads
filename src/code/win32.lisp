@@ -550,11 +550,6 @@
 (declaim (notinline get-folder-namestring))
 (defun get-folder-namestring (csidl)
   "http://msdn.microsoft.com/library/en-us/shellcc/platform/shell/reference/functions/shgetfolderpath.asp"
-  #!+sb-dynamic-core
-  (declare (ignorable csidl))
-  #!+sb-dynamic-core
-  ""
-  #!-sb-dynamic-core
   (with-alien ((apath (* char) (make-system-buffer (1+ max_path))))
     (syscall (("SHGetFolderPath" 20 t) int handle int handle dword (* char))
              (concatenate 'string (cast-and-free apath) "\\")

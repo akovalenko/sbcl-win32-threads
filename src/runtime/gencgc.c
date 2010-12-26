@@ -3475,7 +3475,7 @@ verify_space(lispobj *start, size_t words)
                 }
                 */
             } else {
-                extern void funcallable_instance_tramp;
+                extern void funcallable_instance_tramp();
                 /* Verify that it points to another valid space. */
                 if (!to_readonly_space && !to_static_space
                     && (thing != (lispobj)&funcallable_instance_tramp)
@@ -4825,7 +4825,7 @@ gencgc_handle_wp_violation(void* fault_addr)
              * does this test after the first one has already set wp=0
              */
             if(page_table[page_index].write_protected_cleared != 1) {
-                lose(stderr,"fault in heap page %d not marked as write-protected\nboxed_region.first_page: %d, boxed_region.last_page %d\n",
+                lose("fault in heap page %d not marked as write-protected\nboxed_region.first_page: %d, boxed_region.last_page %d\n",
                      page_index, boxed_region.first_page,
                      boxed_region.last_page);
             }

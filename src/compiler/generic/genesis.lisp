@@ -1936,32 +1936,24 @@ core and return a descriptor to it."
 (progn
   (defparameter *dyncore-address* #x21010000)
   (defparameter *dyncore-symbols* nil)
-  (defparameter *dyncore-hash* (make-hash-table :test 'equal))
-  (defparameter *dyncore-forced-symbols*
-    nil #-(and) '("undefined_alien_function"))
+  (defparameter *dyncore-hashes* (vector (make-hash-table :test 'equal)
+					 (make-hash-table :test 'equal)))
 
-  (defun dyncore-note-symbol (symbol-name &key dont-reuse)
+  (defun dyncore-note-symbol (symbol-name datap)
     "Register a symbol and return its address in proto-linkage-table."
-    (let ((symbol-name (extern-alien-name symbol-name)))
-      (or (and (not dont-reuse) (gethash symbol-name *dyncore-hash*))
+    (let ((symbol-name (extern-alien-name symbol-name))
+	  (table (svref *dyncore-hashes* (if datap 0 1)))
+	  (entry-size (if datap
+			  sb!vm::n-word-bytes
+			  sb!vm::linkage-table-entry-size)))
+      (or (gethash symbol-name table)
           (let ((new-address *dyncore-address*))
-            (incf *dyncore-address* #.sb!vm::n-word-bytes)
-            (setf (gethash symbol-name *dyncore-hash*) new-address)
-            (push (cons symbol-name new-address) *dyncore-symbols*)
-            (return-from dyncore-note-symbol new-address)))))
-
-  (defun dyncore-note-thunk (target-function-name)
-    (let* ((jte-name (concatenate 'base-string "&"
-                                  target-function-name))
-           (known (gethash (extern-alien-name jte-name) *dyncore-hash*)))
-      (if known
-          (- known #.sb!vm::n-word-bytes)
-          (let ((addr (prog1
-                          (dyncore-note-symbol "$jump[" :dont-reuse t)
-                        (dyncore-note-symbol jte-name :dont-reuse t)
-                        (dyncore-note-symbol "]." :dont-reuse t))))
-            (setf (gethash (extern-alien-name target-function-name)
-                           *cold-foreign-symbol-table*) addr))))))
+            (incf *dyncore-address* entry-size)
+            (setf (gethash symbol-name table) new-address)
+            (push (cons symbol-name entry-size) *dyncore-symbols*)
+	    (setf (gethash symbol-name *cold-foreign-symbol-table*)
+		  new-address)
+            (return-from dyncore-note-symbol new-address))))))
 
 ;;; *COLD-FOREIGN-SYMBOL-TABLE* becomes *!INITIAL-FOREIGN-SYMBOLS* in
 ;;; the core. When the core is loaded, !LOADER-COLD-INIT uses this to
@@ -1970,8 +1962,6 @@ core and return a descriptor to it."
 (defun foreign-symbols-to-core ()
   (let ((symbols nil)
         (result *nil-descriptor*))
-    #!+sb-dynamic-core
-    (setq symbols (copy-list *dyncore-symbols*))
     (maphash (lambda (symbol value)
                (push (cons symbol value) symbols))
              *cold-foreign-symbol-table*)
@@ -2643,8 +2633,7 @@ core and return a descriptor to it."
     (read-string-as-bytes *fasl-input-stream* sym)
     #!+sb-dynamic-core
     (let ((offset (read-word-arg))
-          (value (dyncore-note-thunk sym)
-            #-(and) (cold-foreign-symbol-address sym)))
+          (value (dyncore-note-symbol sym nil)))
       (do-cold-fixup code-object offset value kind))
     #!- (and) (format t "Bad non-plt fixup: ~S~S~%" sym code-object)
     #!-sb-dynamic-core
@@ -2662,7 +2651,7 @@ core and return a descriptor to it."
       (read-string-as-bytes *fasl-input-stream* sym)
       #!+sb-dynamic-core
       (let ((offset (read-word-arg))
-            (value (dyncore-note-symbol sym)))
+            (value (dyncore-note-symbol sym t)))
         (do-cold-fixup code-object offset value kind)
         code-object)
       #!-sb-dynamic-core
@@ -3334,7 +3323,7 @@ initially undefined function references:~2%")
     #!+sb-dynamic-core
     (setf (gethash (extern-alien-name "undefined_tramp")
                    *cold-foreign-symbol-table*)
-          (dyncore-note-thunk "undefined_tramp"))
+          (dyncore-note-symbol "undefined_tramp" nil))
 
     ;; Now that we've successfully read our only input file (by
     ;; loading the symbol table, if any), it's a good time to ensure
@@ -3453,12 +3442,6 @@ initially undefined function references:~2%")
             #-(and)
             (write-line (namestring file-name)))
           (cold-load file-name)))
-
-      #!+sb-dynamic-core
-      (mapc #'dyncore-note-symbol
-            (mapcar (lambda (name)
-                      (concatenate 'base-string "*" name))
-                    *dyncore-forced-symbols*))
 
       ;; Tidy up loose ends left by cold loading. ("Postpare from cold load?")
       (resolve-assembler-fixups)

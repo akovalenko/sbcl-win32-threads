@@ -34,7 +34,7 @@
 #include "validate.h"
 #include "gc-internal.h"
 #include "thread.h"
-
+#include "cpputil.h"
 #include "genesis/static-symbols.h"
 #include "genesis/symbol.h"
 
@@ -79,19 +79,19 @@ write_bytes(FILE *file, char *addr, long bytes, os_vm_offset_t file_offset)
 {
     long count, here, data, pad_bytes;
 
-    bytes = (bytes+os_vm_page_size-1)&~(os_vm_page_size-1);
+    bytes = ALIGN_UP(bytes,os_vm_page_size);
 #ifdef LISP_FEATURE_WIN32
     /* touch every single page in the space to force it to be mapped. */
     for (count = 0; count < bytes; count += 0x1000) {
         volatile int temp = addr[count];
     }
 #endif
-    pad_bytes = ((bytes+OS_VM_MMAP_UNIT_SIZE-1)&~(OS_VM_MMAP_UNIT_SIZE-1)) - bytes;
+    pad_bytes = ALIGN_UP(bytes,os_vm_mmap_unit_size) - bytes;
 
     fflush(file);
     here = ftell(file);
     fseek(file, 0, SEEK_END);
-    data = (ftell(file)+OS_VM_MMAP_UNIT_SIZE-1)&~(OS_VM_MMAP_UNIT_SIZE-1);
+    data = ALIGN_UP(ftell(file),os_vm_mmap_unit_size);
     fseek(file, data, SEEK_SET);
 
     while (bytes > 0) {
@@ -398,7 +398,7 @@ check_runtime_build_id(void *buf, size_t size)
     size_t idlen;
     char *pos;
 
-    idlen = strlen(build_id) - 1;
+    idlen = strlen((char*)build_id) - 1;
     while ((pos = memchr(buf, build_id[0], size)) != NULL) {
         size -= (pos + 1) - (char *)buf;
         buf = (pos + 1);
@@ -431,7 +431,8 @@ load_runtime(char *runtime_path, size_t *size_out)
     size = (size_t) ftell(input);
     fseek(input, 0, SEEK_SET);
 
-    if (core_offset != -1 && size > core_offset)
+    if (core_offset >= 0 &&
+	size > (size_t)core_offset)
         size = core_offset;
 
     buf = successful_malloc(size);

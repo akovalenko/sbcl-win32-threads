@@ -38,7 +38,7 @@ CFLAGS =  -g -W -Wall \
 ASFLAGS = $(CFLAGS)
 
 CPP = cpp
-CC = gcc-3
+CC = gcc
 LD = ld
 NM = nm
 

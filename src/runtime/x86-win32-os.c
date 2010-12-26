@@ -108,35 +108,37 @@ sigset_t *os_context_sigmask_addr(os_context_t *context)
 os_context_register_t *
 os_context_register_addr(os_context_t *context, int offset)
 {
-    switch(offset) {
-    case reg_EAX: return &context->win32_context->Eax;
-    case reg_ECX: return &context->win32_context->Ecx;
-    case reg_EDX: return &context->win32_context->Edx;
-    case reg_EBX: return &context->win32_context->Ebx;
-    case reg_ESP: return &context->win32_context->Esp;
-    case reg_EBP: return &context->win32_context->Ebp;
-    case reg_ESI: return &context->win32_context->Esi;
-    case reg_EDI: return &context->win32_context->Edi;
-    default: return 0;
-    }
+    static const size_t offsets[8] = {
+	offsetof(CONTEXT,Eax),
+	offsetof(CONTEXT,Ecx),
+	offsetof(CONTEXT,Edx),
+	offsetof(CONTEXT,Ebx),
+	offsetof(CONTEXT,Esp),
+	offsetof(CONTEXT,Ebp),
+	offsetof(CONTEXT,Esi),
+	offsetof(CONTEXT,Edi),
+    };
+    return
+	(offset >= 0 && offset < 16) ?
+	((void*)(&context->win32_context)) + offsets[offset>>1]	: 0;
 }
 
 os_context_register_t *
 os_context_pc_addr(os_context_t *context)
 {
-    return &context->win32_context->Eip; /*  REG_EIP */
+    return (void*)&context->win32_context->Eip; /*  REG_EIP */
 }
 
 os_context_register_t *
 os_context_sp_addr(os_context_t *context)
 {
-    return &context->win32_context->Esp; /* REG_UESP */
+    return (void*)&context->win32_context->Esp; /* REG_UESP */
 }
 
 os_context_register_t *
 os_context_fp_addr(os_context_t *context)
 {
-    return &context->win32_context->Ebp; /* REG_EBP */
+    return (void*)&context->win32_context->Ebp; /* REG_EBP */
 }
 
 unsigned long

@@ -98,9 +98,28 @@ if the symbol isn't found."
         (int-sap addr))))
 
 #-sb-xc-host
+(defun raise-undefined-runtime-symbols ()
+  (let ((undefined-sap (extern-alien "undefined_alien_address"
+				     system-area-pointer))
+	(name-prefix-length (length (extern-alien-name ""))))
+    (flet ((maybe-raise-undefined (name address)
+	     (when (char= #\* (aref name name-prefix-length))
+	       (let* ((runtime-linkage-sap (int-sap address))
+		      (provided-sap (sap-ref-sap runtime-linkage-sap 0)))
+		 (when (sap= provided-sap undefined-sap)
+		   (setf (gethash
+			  (cons (subseq name
+					(1+ name-prefix-length)) t)
+			  *linkage-info*)
+			 (make-linkage-info :address address :datap t)))))))
+      (maphash #'maybe-raise-undefined *static-foreign-symbols*))))
+
+#-sb-xc-host
 (defun foreign-reinit ()
   #!+os-provides-dlopen
   (reopen-shared-objects)
+  #!+sb-dynamic-core
+  (raise-undefined-runtime-symbols)
   #!+linkage-table
   ;; Don't warn about undefined aliens on startup. The same core can
   ;; reasonably be expected to work with different versions of the

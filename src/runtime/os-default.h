@@ -5,7 +5,7 @@
 #define OS_VM_MMAP_GRANULARITY_SHIFT 1
 #endif
 
-#define OS_VM_MMAP_UNIT_SIZE (os_vm_page_size<<(OS_VM_MMAP_GRANULARITY_SHIFT))
+#define os_vm_mmap_unit_size (os_vm_page_size<<(OS_VM_MMAP_GRANULARITY_SHIFT))
 
 #ifndef HAVE_os_open_core
 #define os_open_core(filename,mode) open(filename,mode)
