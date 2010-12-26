@@ -203,7 +203,7 @@
                                         (loop repeat (random 128)
                                               do (setf ** *)))))))
     (write-string "; ")
-    (dotimes (i 15000)
+    (dotimes (i 4000)
       (when (zerop (mod i 200))
         (write-char #\.)
         (force-output))

@@ -881,7 +881,10 @@ void gc_enter_safe_region()
   int errorCode = GetLastError();
   int may_suspend = thread_may_suspend_for_gc();
   if (may_suspend) {
-    bind_variable(GC_SAFE, T, self);
+      /* Context has to be published before GC_SAFE set: after that,
+	 GC may start and get wrong context... */
+      pthread_np_publish_context(NULL);
+      bind_variable(GC_SAFE, T, self);
   } else {
     /* !NIL !T trick: thread is in foreign code and should be skipped
         at phase 1, but waited upon at phase 2 */
@@ -890,9 +893,6 @@ void gc_enter_safe_region()
   gc_safepoint();
   /* Within gc-safe code, thread context is published, so real
      suspend/resume should never be attempted */
-  if (may_suspend) {
-      pthread_np_publish_context(NULL);
-  }
   SetLastError(errorCode);
 }
 
@@ -909,6 +909,9 @@ void gc_leave_region()
 {
   struct thread * self = arch_os_get_current_thread();
   int errorCode = GetLastError();
+  /* As GC_SAFE may become T when unbound, republishing context is
+     necessary. */
+  pthread_np_publish_context(NULL);
   unbind_variable(GC_SAFE, self);
   gc_safepoint();
   SetLastError(errorCode);
@@ -932,10 +935,7 @@ void suspend()
   CONTEXT* ctx = pthread_np_publish_context(NULL);
 
   safepoint_cycle_state(STATE_SUSPENDED);
-  if ((SymbolTlValue(GC_PENDING, self) == T)&&
-      (SymbolTlValue(STOP_FOR_GC_PENDING, self) == T)) {
-      SetSymbolValue(GC_PENDING, NIL, self);
-  }
+  SetSymbolValue(GC_PENDING, NIL, self);
   SetSymbolValue(STOP_FOR_GC_PENDING, NIL, self);
 }
 
@@ -1046,8 +1046,17 @@ int maybe_ack_gc_poll()
 	 any safepoint in gc_stop_the_world itself, we know for sure that
 	 it's some _other_ thread requesting suspend.*/
       if (thread_may_suspend_for_gc()) {
-	  /* Suspend until gc_start_the_world, if we can, even on phase 1. */
-	  suspend();
+	  /* Outside safe region, suspend until gc_start_the_world, if
+	     we can, even on phase 1. Inside safe region,
+	     suspend_briefly and continue: we'll do our GC-SAFE work
+	     while other thread gcs. */
+	  if (SymbolTlValue(GC_SAFE,self)==T) {
+	      suspend_briefly();
+	      SetSymbolValue(GC_PENDING, NIL, self);
+	      SetSymbolValue(STOP_FOR_GC_PENDING, NIL, self);
+	  } else {
+	      suspend();
+	  }
       } else {
 	  /* GCing disabled. In phase 1 we should acknowledge GC page
 	     access ASAP. */
@@ -1072,6 +1081,15 @@ int maybe_ack_gc_poll()
       unlock_suspend_info(__FILE__, __LINE__);
       return 0;
     } else {
+	if (SymbolTlValue(GC_SAFE,self)==T) {
+	    /* We are entering safe region while other thread gcs.
+	       How can that be? Maybe it's a safepoint in safe region? */
+	    unlock_suspend_info(__FILE__, __LINE__);
+	    SetSymbolValue(GC_PENDING, NIL, self);
+	    SetSymbolValue(STOP_FOR_GC_PENDING, NIL, self);
+	    return 0;
+	}      
+	SetSymbolValue(STOP_FOR_GC_PENDING, T, self);
       /* Some other thread is GCing. We may come here only if GC_SAFE
          was set and gc_stop_the_world didn't touch us. */
       if (thread_may_suspend_for_gc()) {
