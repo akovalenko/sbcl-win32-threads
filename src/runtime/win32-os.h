@@ -15,6 +15,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <sys/types.h>
 #include <string.h>
 #include <sys/time.h>
@@ -45,7 +46,11 @@ typedef int os_vm_prot_t;
 #define os_open_core(file,mode) win32_open_for_mmap(file)
 #define HAVE_os_open_core
 
+#define os_fopen_runtime(file,mode) win32_fopen_runtime()
+#define HAVE_os_fopen_runtime
+
 extern int win32_open_for_mmap(const char* file);
+extern FILE* win32_fopen_runtime();
 
 #define OUR_TLS_INDEX 63
 #define SIG_MEMORY_FAULT SIGSEGV

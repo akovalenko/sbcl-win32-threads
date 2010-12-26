@@ -11,6 +11,10 @@
 #define os_open_core(filename,mode) open(filename,mode)
 #endif
 
+#ifndef HAVE_os_fopen_runtime
+#define os_fopen_runtime(filename,mode) fopen(filename,mode)
+#endif
+
 #ifndef HAVE_os_invalidate_free
 #define os_invalidate_free os_invalidate
 #endif

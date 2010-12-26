@@ -2525,7 +2525,7 @@
       (aver (not (boundp '*available-buffers*)))
       (setf *available-buffers* nil)))
   (with-output-to-string (*error-output*)
-    (let ((ttyname #.(coerce #!+win32 "CONOUT$" #!-win32 "/dev/tty"
+    (let ((ttyname #.(coerce #!+win32 "CON" #!-win32 "/dev/tty"
 			     'simple-base-string))
 	  (stdstream-vars '(*stdin* *stdout* *stderr* *tty*)))
       (loop for fd in

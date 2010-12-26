@@ -1077,14 +1077,34 @@ static int os_supports_executable_mapping = 0;
 #define FILE_MAP_EXECUTE 0x20
 #endif
 
+static char* non_external_self_name = "//////<SBCL executable>";
+
 int win32_open_for_mmap(const char* fileName)
 {
-    HANDLE handle =
-        CreateFileA(fileName,GENERIC_READ|GENERIC_EXECUTE,
-                    FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,NULL,
-                    OPEN_EXISTING,0,NULL);
+    HANDLE handle;
+    if (strcmp(fileName,non_external_self_name)) {
+	handle = CreateFileA(fileName,GENERIC_READ|GENERIC_EXECUTE,
+			     FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,NULL,
+			     OPEN_EXISTING,0,NULL);
+    } else {
+	WCHAR mywpath[MAX_PATH+1];
+	DWORD gmfnResult = GetModuleFileNameW(NULL,mywpath,MAX_PATH+1);
+	AVER(gmfnResult>0 && gmfnResult<(MAX_PATH+1));
+	handle = CreateFileW(mywpath,GENERIC_READ|GENERIC_EXECUTE,
+			     FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,NULL,
+			     OPEN_EXISTING,0,NULL);
+	
+    }
     AVER(handle && (handle!=INVALID_HANDLE_VALUE));
     return _open_osfhandle((intptr_t)handle,O_BINARY);
+}
+
+
+FILE* win32_fopen_runtime()
+{
+    int fd = win32_open_for_mmap(non_external_self_name);
+    CRT_AVER_NONNEGATIVE(fd);
+    return _fdopen(fd,"rb");
 }
 /*
  * os_map() is called to map a chunk of the core file into memory.
@@ -1961,16 +1981,20 @@ char *dirname(char *path)
 char *
 os_get_runtime_executable_path(int external)
 {
-    char path[MAX_PATH + 1];
-    DWORD bufsize = sizeof(path);
-    DWORD size;
+    if (external) {
+	char path[MAX_PATH + 1];
+	DWORD bufsize = sizeof(path);
+	DWORD size;
 
-    if ((size = GetModuleFileNameA(NULL, path, bufsize)) == 0)
-        return NULL;
-    else if (size == bufsize && GetLastError() == ERROR_INSUFFICIENT_BUFFER)
-        return NULL;
+	if ((size = GetModuleFileNameA(NULL, path, bufsize)) == 0)
+	    return NULL;
+	else if (size == bufsize && GetLastError() == ERROR_INSUFFICIENT_BUFFER)
+	    return NULL;
 
-    return copied_string(path);
+	return copied_string(path);
+    } else {
+	return copied_string(non_external_self_name);
+    }
 }
 
 // 0 - not a socket or other error, 1 - has input, 2 - has no input

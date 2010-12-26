@@ -422,7 +422,7 @@ load_runtime(char *runtime_path, size_t *size_out)
     os_vm_offset_t core_offset;
 
     core_offset = search_for_embedded_core (runtime_path);
-    if ((input = fopen(runtime_path, "rb")) == NULL) {
+    if ((input = os_fopen_runtime(runtime_path, "rb")) == NULL) {
         fprintf(stderr, "Unable to open runtime: %s\n", runtime_path);
         goto lose;
     }
