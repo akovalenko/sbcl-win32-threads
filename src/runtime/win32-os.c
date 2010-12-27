@@ -2028,9 +2028,7 @@ socket_input_available(HANDLE socket)
    one; console isn't), etc. */
 int console_handle_p(HANDLE handle)
 {
-    DWORD throwaway;
-    return GetConsoleMode(handle,&throwaway);
-    /* return ((((int)(intptr_t)handle)&3)==3); */
+    return ((((int)(intptr_t)handle)&3)==3);
 }
 
 struct console_input_data {
