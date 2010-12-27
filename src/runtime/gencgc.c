@@ -152,6 +152,7 @@ boolean gencgc_partial_pickup = 0;
 /* the total bytes allocated. These are seen by Lisp DYNAMIC-USAGE. */
 unsigned long bytes_allocated = 0;
 unsigned long auto_gc_trigger = 0;
+unsigned long auto_gc_trigger_fired = 0;
 
 /* the source and destination generations. These are set before a GC starts
  * scavenging. */
@@ -4422,6 +4423,7 @@ collect_garbage(generation_index_t last_gen)
 
     gc_active_p = 0;
 
+    auto_gc_trigger_fired = 0;
     SHOW("returning from collect_garbage");
 }
 
@@ -4687,7 +4689,9 @@ general_alloc_internal(long nbytes, int page_type_flag, struct alloc_region *reg
     /* we have to go the long way around, it seems. Check whether we
      * should GC in the near future
      */
-    if (auto_gc_trigger && bytes_allocated > auto_gc_trigger) {
+    if (auto_gc_trigger && bytes_allocated > auto_gc_trigger
+	&& !auto_gc_trigger_fired) {
+	auto_gc_trigger_fired = 1;
         /* Don't flood the system with interrupts if the need to gc is
          * already noted. This can happen for example when SUB-GC
          * allocates or after a gc triggered in a WITHOUT-GCING. */

@@ -909,9 +909,23 @@ void gc_leave_region()
 {
   struct thread * self = arch_os_get_current_thread();
   int errorCode = GetLastError();
-  /* As GC_SAFE may become T when unbound, republishing context is
-     necessary. */
-  pthread_np_publish_context(NULL);
+  /* 1. As GC_SAFE may become T when unbound, republishing context is
+     necessary.
+
+     2. Except the case when GC_SAFE is T _now_. It means that the old
+     published context remains valid (exotic T->T case), or that no
+     one will expect it to be valid (typical T->NIL case).
+
+     3. When GC_SAFE is !T !NIL now (phase1-safe) -- corresponding
+     gc_enter* call was gc_enter_safe_region, but GC was inhibited
+     around it. One of our invariants is that GC is never inhibited
+     during GC_SAFE==T. Ergo, GC_SAFE isn't going to become T, and ctx
+     publishing is not needed -- again.
+
+     1,2,3 => safe to republish when GC_SAFE is NIL before unbinding.
+  */
+  if (SymbolTlValue(GC_SAFE,self)==NIL)
+      pthread_np_publish_context(NULL);
   unbind_variable(GC_SAFE, self);
   gc_safepoint();
   SetLastError(errorCode);
@@ -932,7 +946,7 @@ void safepoint_cycle_state(lispobj state)
 void suspend()
 {
   struct thread * self = arch_os_get_current_thread();
-  CONTEXT* ctx = pthread_np_publish_context(NULL);
+  pthread_np_publish_context(NULL);
 
   safepoint_cycle_state(STATE_SUSPENDED);
   SetSymbolValue(GC_PENDING, NIL, self);
