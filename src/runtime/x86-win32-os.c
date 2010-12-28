@@ -120,7 +120,7 @@ os_context_register_addr(os_context_t *context, int offset)
     };
     return
 	(offset >= 0 && offset < 16) ?
-	((void*)(&context->win32_context)) + offsets[offset>>1]	: 0;
+	((void*)(context->win32_context)) + offsets[offset>>1]	: 0;
 }
 
 os_context_register_t *
