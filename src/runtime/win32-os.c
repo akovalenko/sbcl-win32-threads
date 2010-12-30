@@ -2286,9 +2286,6 @@ int win32_unix_write(int fd, void * buf, int count)
           wait_again:
             if(WaitForMultipleObjects(2,self->private_events.events,
                                       FALSE,INFINITE) != WAIT_OBJECT_0) {
-                /* Something happened. Interrupt? */
-                if (!pthread_self()->signal_is_pending[SIGHUP])
-                    goto wait_again;      /* Nope */
                 odprintf("write(%d, 0x%p, %d) EINTR",fd,buf,count);
                 CancelIo(handle);
                 waitInGOR = TRUE;
@@ -2364,10 +2361,6 @@ int win32_unix_read(int fd, void * buf, int count)
           wait_again:
             if(WaitForMultipleObjects(2,self->private_events.events,
                                       FALSE,INFINITE) != WAIT_OBJECT_0) {
-                /* Something happened. Interrupt? */
-                if (!pthread_self()->signal_is_pending[SIGHUP])
-                    goto wait_again;      /* Nope */
-                odprintf("read(%d, 0x%p, %d) EINTR",fd,buf,count);
                 CancelIo(handle);
                 waitInGOR = TRUE;
                 /* Waiting for IO only */
