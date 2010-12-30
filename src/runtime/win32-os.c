@@ -831,6 +831,7 @@ static pthread_key_t save_lisp_tls_key;
 static void save_lisp_tls()
 {
     pthread_setspecific(save_lisp_tls_key,TlsGetValue(OUR_TLS_INDEX));
+    establish_c_fpu_world();
 }
 
 static void restore_lisp_tls()
@@ -1274,7 +1275,6 @@ int fpu_world_unknown_p()
     return th && dyndebug_lazy_fpu_careful && (th->in_lisp_fpu_mode&0xFF0000);
 }
 
-static inline
 void establish_c_fpu_world()
 {
     struct thread* th = arch_os_get_current_thread();
@@ -1390,45 +1390,79 @@ void check_fpu_state(const char* format,...)
     }
 }
 
+boolean sb_control_fpu_normally_untouched_by_non_float_calls = 1;
+boolean sb_control_update_sb_stat_counters = 1;
+LONG sb_stat_fpu_modeswitch_cycling_counter = 0L;
 
 void enter_c_function(void* which, void* wherefrom)
 {
     gc_enter_safe_region();
-    establish_c_fpu_world();
-    AVERLAX(!fpu_world_lispy_p());
+    if (sb_control_fpu_normally_untouched_by_non_float_calls)
+	return;
+
     check_fpu_state("Entering C function [#X%p] from [#X%p]",
 		    which,wherefrom);
+    /* Experiment: try to regard all calls through runtime linkage
+     * area as floatless. */
+    if (((((u32)which)&0xFFFF0000u)!=0x21010000u)
+	&& ((((u32)which)&0xFFF00000u)!=0x0040000u)) {
+	establish_c_fpu_world();
+	AVERLAX(!fpu_world_lispy_p());
+	check_fpu_state("Entering C function [#X%p] from [#X%p]",
+			which,wherefrom);
+    }
 }
 
 void leave_c_function()
 {
-    if (!fpu_world_lispy_p()) {
-        register unsigned short flags asm("%ax");
-	memfloat80 keep;
-        asm("fxam; fnstsw %0" : "=r"(flags));
-        if ((flags & 0x4500) != 0x4100) {
-            /* Save returned FP value: if safepoint will GC, it can
-             * be clobbered, especially on POST-GC */
-            asm("fstpt %0": "=m"(keep));
-            gc_leave_region();
-            /* In case of normal function return, we have 0 floats,
-             * i.e. normal situation for C ABI */
-            if (dyndebug_lazy_fpu) {
-                c_level_backtrace("FP registers present. Lisp leftover?",5);
-            }
-            asm("fldcw %0" : :"m" (this_thread->saved_lisp_fpu_mode));
-            asm("fldz;fldz;fldz;fldz;");
-            asm("fldz;fldz;fldz;");
-            (this_thread)->in_lisp_fpu_mode = 1;
+    /* if (!fpu_world_lispy_p()) { */
+    /*     register unsigned short flags asm("%ax"); */
+    /* 	memfloat80 keep; */
+    /*     asm("fxam; fnstsw %0" : "=r"(flags)); */
+    /*     if ((flags & 0x4500) != 0x4100) { */
+    /*         /\* Save returned FP value: if safepoint will GC, it can */
+    /*          * be clobbered, especially on POST-GC *\/ */
+    /*         asm("fstpt %0": "=m"(keep)); */
+    /*         gc_leave_region(); */
+    /*         /\* In case of normal function return, we have 0 floats, */
+    /*          * i.e. normal situation for C ABI *\/ */
+    /*         if (dyndebug_lazy_fpu) { */
+    /*             c_level_backtrace("FP registers present. Lisp leftover?",5); */
+    /*         } */
+    /*         asm("fldcw %0" : :"m" (this_thread->saved_lisp_fpu_mode)); */
+    /*         asm("fldz;fldz;fldz;fldz;"); */
+    /*         asm("fldz;fldz;fldz;"); */
+    /*         (this_thread)->in_lisp_fpu_mode = 1; */
 
-            /* When C returns floats (here), thread switches to
-             * Lisp FPU mode */
+    /*         /\* When C returns floats (here), thread switches to */
+    /*          * Lisp FPU mode *\/ */
 
-            asm("fldt %0" : : "m"(keep));
-            return;
-        }
-    }
+    /*         asm("fldt %0" : : "m"(keep)); */
+    /*         return; */
+    /*     } */
+    /* } */
     gc_leave_region();
+}
+
+void leave_c_function_return_fp()
+{
+    AVER(!fpu_world_lispy_p());
+    memfloat80 keep;
+
+    /* Save returned FP value: if safepoint will GC, it can
+     * be clobbered, especially on POST-GC */
+    asm("fstpt %0": "=m"(keep));
+    gc_leave_region();
+    asm("fldcw %0" : :"m" (this_thread->saved_lisp_fpu_mode));
+    asm("fldz;fldz;fldz;fldz;");
+    asm("fldz;fldz;fldz;");
+    (this_thread)->in_lisp_fpu_mode = 1;
+
+    /* When C returns floats (here), thread switches to
+     * Lisp FPU mode */
+
+    asm("fldt %0" : : "m"(keep));
+    return;
 }
 
 
@@ -1445,7 +1479,9 @@ void enter_lisp_function()
 void leave_lisp_function()
 {
     gc_leave_region();
-    establish_c_fpu_world();
+    if (!sb_control_fpu_normally_untouched_by_non_float_calls) {
+	establish_c_fpu_world();
+    }
     check_fpu_state("Leaving Lisp function");
 }
 
@@ -1536,9 +1572,63 @@ void inject_npx_recovery(CONTEXT* context)
            &context->FloatSave, data_size);
 }
 
+extern void fpu_insns_modrm(), fpu_insns_high();
 
 static inline
-void maybe_set_xmm_state_to_lisp(CONTEXT* context)
+void maybe_inject_fpu_instruction_restart(CONTEXT* context)
+{
+    /* if (!(context->FloatSave.StatusWord & 0x4000)) */
+    /* 	return ; */
+    uint8_t* fpu_eip = (void*)(uintptr_t)context->FloatSave.ErrorOffset;
+
+    DWORD* temp_data = (((void*)&fpu_eip)-0x2000);
+
+    uint8_t fpu_prefix_D8toDF = (0xFFu & (context->FloatSave.ErrorSelector>>24))|0xD8;
+    uint8_t fpu_next_byte = 0xFFu & (context->FloatSave.ErrorSelector>>16);
+    uint8_t fpu_prefix_offset = fpu_prefix_D8toDF ^ 0xD8;
+    void* fpu_insn_base;
+    uint16_t fpu_insn_index;
+
+    if (!(context->FloatSave.ErrorSelector &0xFFFF0000)) {
+	if (context->ExtendedRegisters[7] ||
+	    context->ExtendedRegisters[6]) {
+	    fpu_prefix_D8toDF = context->ExtendedRegisters[7]^0xD8;
+	    fpu_next_byte = context->ExtendedRegisters[6];
+	} else {
+	    fpu_prefix_D8toDF = fpu_eip[0];
+	    fpu_next_byte = fpu_eip[1];
+	}
+	fpu_prefix_offset = fpu_prefix_D8toDF ^ 0xD8;
+    }
+
+
+    AVER(fpu_prefix_offset<8);
+    context->FloatSave.ErrorSelector = 0xFFFF0000;
+	
+    switch (fpu_next_byte & 0xC0) {
+    case 0xC0:
+	/* no memory operand; 64 instructions per prefix, 8 bytes
+	 * per instruction, starting at fpu_insns_high. */
+	fpu_insn_base = &fpu_insns_high;
+	fpu_insn_index = (fpu_prefix_offset * 64) + (fpu_next_byte ^ 0xC0);
+	break;
+    default:
+	fpu_insn_base = &fpu_insns_modrm;
+	fpu_insn_index = (fpu_prefix_offset * 8) + ((fpu_next_byte & 070)>>3);
+	break;
+    }
+    temp_data[0] = context->Ebp;
+    temp_data[1] = context->Eax;
+    temp_data[2] = context->Eip;
+	
+    context->Eax = context->FloatSave.DataOffset;
+    context->Eip = (DWORD)(uintptr_t)(fpu_insn_base + 8*fpu_insn_index);
+    context->Ebp = (DWORD)(uintptr_t)temp_data;
+
+}
+
+static inline
+void maybe_set_xmm_state(CONTEXT* context, boolean for_lisp_p)
 {
     unsigned short tags_x87 = context->FloatSave.TagWord & 0xFFFFu;
     unsigned short control_x87 = context->FloatSave.ControlWord & 0xFFFFu;
@@ -1546,7 +1636,7 @@ void maybe_set_xmm_state_to_lisp(CONTEXT* context)
     
     if (context->ContextFlags & CONTEXT_EXTENDED_REGISTERS) {
 	memset(context->ExtendedRegisters+32,0,8*8);
-	context->ExtendedRegisters[4] = 0x7F;
+	context->ExtendedRegisters[4] = for_lisp_p ? 0xFF : 0x00;
 	context->ExtendedRegisters[0] = control_x87 & 0xFFu;
 	context->ExtendedRegisters[1] = control_x87>>8;
 	context->ExtendedRegisters[2] = status_x87 & 0xFFu;
@@ -1573,7 +1663,9 @@ handle_exception(EXCEPTION_RECORD *exception_record,
     struct thread* self = arch_os_get_current_thread();
     int contextual_fpu_state = self ? self->in_lisp_fpu_mode : 0;
 
-    if (dyndebug_lazy_fpu) {
+    if (dyndebug_lazy_fpu && !(exception_record->ExceptionFlags &
+			       (EH_UNWINDING|EH_EXIT_UNWIND)))
+    {
         DWORD tags = context->FloatSave.TagWord;
         if (!fpu_world_lispy_p() && ((tags&0xFFFF)!=0xFFFF)) {
             fprintf(dyndebug_output,
@@ -1596,70 +1688,90 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         }
     }
     if (code == EXCEPTION_FLT_STACK_CHECK) {
-        /* We expect such exceptions in non-lispy and "ambigious" variants. */
+	int stack_empty = (!(context->FloatSave.StatusWord &(1<<9)));
+
+        /* We used to expect such exceptions in non-lispy and
+	 * ambigious states only. With FPU insn restart support,
+	 * exceptions originating in C may be handled too. */
 
         AVERLAX(!fpu_world_cruel_p()); /* Let's complain if a Lisp
                                         * code was exposed to
                                         * interrupt at ambigious
                                         * time */
-        if ((!fpu_world_lispy_p())) {
-            /* Allow lazy FPU switching.
+	if (stack_empty && fpu_world_lispy_p()) {
+            fprintf(dyndebug_output,
+                    "Exception handler: stack EMPTY while it should be FULL.\n"
+                    "....tags 0x%04lx, status 0x%04lx, control 0x%04lx\n",
+                    context->FloatSave.TagWord,
+                    context->FloatSave.StatusWord,
+                    context->FloatSave.ControlWord);
+            c_level_backtrace("Exception handler: strange NPX state",10);
 
-               When entering C, always ensure that regs are empty and
-               fp control word set up appropriately.
 
-               C_FPU_CONTEXT_P -> when non-nil, current thread's FPU is
-               set up for C.
 
-               But when leaving C / entering Lisp, FPU isn't reinitialized
-               instantly. We do it on stack check exception instead.
+	    /* FPU stack must be in SBCL-compliant state, having no
+	     * empty regs, but somehow it became empty! BAD thing. */
+	    goto complain;
+	}
 
-               i387-style FPU exceptions aren't easy to handle, because
-               FPU is out of sync with main CPU, having its own
-               instruction pointer. Failed command can't be restarted
-               without analyzing its instruction code and somehow
-               imitating it.
+	if (!stack_empty && !fpu_world_lispy_p()) {
+	    /* FPU stack must be in C-compliant state, having no
+	     * valid regs, but somehow it has overflown! BAD thing. */
 
-               However, SBCL expects floating stack to be filled, but
-               doesn't expect to find any particular values in it (though
-               FLDZ is used all over the place, zeroes themselves aren't
-               part of the ABI). Thus when it starts working with FPU, it
-               has to begin with a pop operation; and there is no need to
-               analyze/recover _that_ operation, because we know its
-               nature a priori. */
 
-            int stack_empty =
-                (!(context->FloatSave.StatusWord &(1<<9)));
+            fprintf(dyndebug_output,
+                    "Exception handler: stack FULL while it should be EMPTY.\n"
+                    "....tags 0x%04lx, status 0x%04lx, control 0x%04lx\n",
+                    context->FloatSave.TagWord,
+                    context->FloatSave.StatusWord,
+                    context->FloatSave.ControlWord);
+            c_level_backtrace("Exception handler: strange NPX state",10);
 
-            if (stack_empty) {
-                if (dyndebug_lazy_fpu) {
-                    c_level_backtrace("FPU Stack underflow", 5);
-                    fprintf(dyndebug_output,
-                            "..Offending opcode: 0x%08lx\n"
-                            "..Tag word: 0x%08lx\n",
-                            *(DWORD*)context->FloatSave.ErrorOffset,
-                            context->FloatSave.TagWord);
-                }
-                ++dyndebug_charge_count;
+	    goto complain;
+	}
 
-                /* Remember, Lisp tried to remove one value from FPU
-                 * stack, and we aren't going to recover this
-                 * operation. */
-                //self->saved_c_fpu_mode = context->FloatSave.ControlWord;
-                context->FloatSave.ControlWord = self->saved_lisp_fpu_mode;
-                context->FloatSave.StatusWord &= ~(0x3941);
-                context->FloatSave.TagWord = 0xD555;
-                memset(context->FloatSave.RegisterArea,0,
-                       sizeof(context->FloatSave.RegisterArea));
-		maybe_set_xmm_state_to_lisp(context);
-                contextual_fpu_state = 1; /* lispy one */
+        /* We have legitimate FPU stack exception that is to be
+	 * handled silently.  */
+	if (dyndebug_lazy_fpu) {
+	    fprintf(dyndebug_output,
+		    "Exception handler: FPU stack %s (%s compliance expected).\n"
+		    "....tags 0x%04lx, status 0x%04lx, control 0x%04lx\n"
+		    "....DataOffset %p, ErrorOffset %p\n"
+		    "....DataSelector %p, ErrorSelector %p\n"
+		    "....Cr0Npx %p, XMM opcode [6]=%02x, [7]=%02x\n"
+		    "....Main CPU EIP %p, ESP %p\n",
+		    stack_empty ? "EMPTY" : "FULL",
+		    fpu_world_lispy_p() ? "Lisp" : "C",
+		    context->FloatSave.TagWord,
+		    context->FloatSave.StatusWord,
+		    context->FloatSave.ControlWord,
+		    context->FloatSave.DataOffset,
+		    context->FloatSave.ErrorOffset,
+		    context->FloatSave.DataSelector,
+		    context->FloatSave.ErrorSelector,
+		    context->FloatSave.Cr0NpxState,
+		    context->ExtendedRegisters[6],
+		    context->ExtendedRegisters[7],
+		    context->Eip, context->Esp);
+	    c_level_backtrace("....see where it happened.",10);
+	}
+	if (sb_control_update_sb_stat_counters) {
+	    InterlockedIncrement(&sb_stat_fpu_modeswitch_cycling_counter);
+	}
+	contextual_fpu_state = !fpu_world_lispy_p();
+	context->FloatSave.ControlWord =
+	    contextual_fpu_state ?
+	    self->saved_lisp_fpu_mode :
+	    self->saved_c_fpu_mode;
+	
+	context->FloatSave.StatusWord &= ~(0x3941);
 
-                /* inject_npx_recovery(context); */
-                goto finish;
-            }
-            /* If it's not a stack-empty complain by SBCL, let it fall
-             * through. */
-        }
+	context->FloatSave.TagWord = contextual_fpu_state ? 0x5555 : 0xFFFF;
+	memset(context->FloatSave.RegisterArea,0,
+	       sizeof(context->FloatSave.RegisterArea));
+	maybe_set_xmm_state(context,contextual_fpu_state);
+	maybe_inject_fpu_instruction_restart(context);
+	goto finish;
     }
 
     /* If FPU world is not marked as cruel, we mark it (we don't
@@ -1789,7 +1901,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                 goto finish;
             }
         }
-
+complain:
     /* All else failed, drop through to the lisp-side exception handler. */
     gc_safepoint();             /* don't want to trap on pa_alloc */
     block_blockable_signals(0,&ctx.sigmask);
@@ -2050,27 +2162,28 @@ void win32_interrupt_console_input()
 
 void win32_start_console_input(HANDLE original, HANDLE *target)
 {
-    AVER(0==pthread_mutex_lock(&console_input_data.lock));
-    if (!console_input_data.readers) {
-        AVER(DuplicateHandle(GetCurrentProcess(),original,
-                             GetCurrentProcess(),&console_input_data.handle,
-                             0, FALSE, DUPLICATE_SAME_ACCESS));
-    }
-    *target = console_input_data.handle;
-    (this_thread)->waiting_console_handle = console_input_data.handle;
-    ++ console_input_data.readers;
-    AVER(0==pthread_mutex_unlock(&console_input_data.lock));
+    /* AVER(0==pthread_mutex_lock(&console_input_data.lock)); */
+    /* if (!console_input_data.readers) { */
+    /*     AVER(DuplicateHandle(GetCurrentProcess(),original, */
+    /*                          GetCurrentProcess(),&console_input_data.handle, */
+    /*                          0, FALSE, DUPLICATE_SAME_ACCESS)); */
+    /* } */
+    /* *target = console_input_data.handle; */
+    /* (this_thread)->waiting_console_handle = console_input_data.handle; */
+    /* ++ console_input_data.readers; */
+    /* AVER(0==pthread_mutex_unlock(&console_input_data.lock)); */
+    *target = original;
 
 }
 
 void win32_end_console_input()
 {
-    AVER(0==pthread_mutex_lock(&console_input_data.lock));
-    if (!(-- console_input_data.readers)) {
-        CloseHandle(console_input_data.handle);
-    };
-    (this_thread)->waiting_console_handle = INVALID_HANDLE_VALUE;
-    AVER(0==pthread_mutex_unlock(&console_input_data.lock));
+    /* AVER(0==pthread_mutex_lock(&console_input_data.lock)); */
+    /* if (!(-- console_input_data.readers)) { */
+    /*     CloseHandle(console_input_data.handle); */
+    /* }; */
+    /* (this_thread)->waiting_console_handle = INVALID_HANDLE_VALUE; */
+    /* AVER(0==pthread_mutex_unlock(&console_input_data.lock)); */
 }
 
 
@@ -2097,9 +2210,13 @@ int win32_read_unicode_console(HANDLE handle, void* buf, int count)
     BOOL ok;
     HANDLE ownhandle;
     count &= ~1;
-
 again:
     win32_start_console_input(handle,&ownhandle);
+    if (WaitForSingleObject(this_thread->private_events.events[1],
+			    0)!=WAIT_TIMEOUT) {
+	errno = EINTR;
+	return -1;
+    }
     ok = ReadConsoleW(ownhandle,buf,count>>1,&nread,NULL);
     win32_end_console_input();
     if (ok) {

@@ -572,7 +572,6 @@ create_thread_struct(lispobj initial_function) {
     th->saved_lisp_fpu_mode =
         ((th->saved_c_fpu_mode & 0xfffff2ff) | 0x00000200) & ~1;
     th->saved_c_fpu_mode &= ~1;
-    th->waiting_console_handle = INVALID_HANDLE_VALUE;
 #endif
     th->stepping = NIL;
     return th;
@@ -658,6 +657,13 @@ os_thread_t create_thread(lispobj initial_function) {
     struct thread *th, *thread = arch_os_get_current_thread();
     os_thread_t kid_tid = 0;
 
+    /* Experimental: going to test the interpretation of
+       runtime-targeted calls as `floatless'.
+
+       create_thread is the only place I know that is definitely NOT
+       floatless. */
+    
+    establish_c_fpu_world();
     /* Must defend against async unwinds. */
     if (SymbolValue(INTERRUPTS_ENABLED, thread) != NIL)
         lose("create_thread is not safe when interrupts are enabled.\n");
@@ -707,109 +713,126 @@ void unlock_suspend_info(const char * file, int line)
   pthread_mutex_unlock(&suspend_info.lock);
 }
 
+/* Factored out stuff used to interrupt blocking IO in the target
+   thread.
+
+   Our purpose in wake_thread (and friends) is to make a blocking
+   function running in target thread return EINTR or something
+   equivalent.
+
+   Win32 API (before Vista) doesn't provide means to cancel blocking
+   IO asynchronously, hence we reimplement cancellable blocking IO,
+   e.g. with OVERLAPPED operations. */
+
+void wake_thread_io(struct thread * thread)
+{
+    SetEvent(thread->private_events.events[1]);
+}
+
+boolean wake_needed(struct thread * thread)
+{
+  if ((!thread->os_thread->signal_is_pending[SIGHUP])||
+      (SymbolTlValue(GC_SAFE, thread) != NIL)||
+      (SymbolTlValue(STOP_FOR_GC_PENDING, thread) != NIL)||
+      (SymbolTlValue(INTERRUPT_PENDING, thread) == T)||
+      (thread->state != STATE_RUNNING)) {
+      return 0;
+  }
+  return 1;
+}
+
 void wake_thread(struct thread * thread)
 {
-  struct thread * p;
-  int io_resignal = 1;
-  odprintf("wake_thread(0x%p) begin", thread->os_thread);
-  /* Opportunistic optimizations:
+    struct thread * p;
+    struct thread * self = arch_os_get_current_thread();
+    boolean nonio_wake_required = wake_needed(thread);
 
-     - if thread has GC_PENDING, INTERRUPT_PENDING, or
-     STOP_FOR_GC_PENDING non-NIL, it's about to notice deferred signal
-     soon. However, for INTERRUPT_PENDING io resignalling is still
-     done.
-  */
-  if (SymbolTlValue(GC_PENDING, thread) != NIL)
-    return;
+    wake_thread_io(thread);
+    /* if there was no need to GC-page-based wake, there is still no
+       need to do it after IO wake */
+    if (!nonio_wake_required ||
+	!wake_needed(thread) ||
+	SymbolTlValue(STOP_FOR_GC_PENDING,self)!=NIL ||
+	SymbolTlValue(GC_PENDING,self)!=NIL)
+	return;
 
-  if (SymbolTlValue(STOP_FOR_GC_PENDING, thread) != NIL)
-    return;
+    if (pthread_mutex_trylock(&suspend_info.world_lock)) {
+	/* world_lock is busy when (1) other thread is gcing, or (2)
+	   other wake_thread call wants to deliver an interrupt.
+	   gc_stop_the_world is guaranteed to do everything we need,
+	   so we are done in case (1).
 
-  /* Danger: inverted lock ordering. GC may have taken world_lock and
-     may be waiting for all_thread_lock that we hold (caller responsible).
-     We'd wait forever.
-
-     Well, what if we trylock instead? If we fail, GC is holding the
-     world_lock. Asymmetric unlocking sequence in gc_start_the_world
-     makes sure that failing trylock (with taken all_threads_lock) is
-     a sign of GC phase 1, before unmap_gc_page. Hence we take a
-     shortcut: GC will stop each and every thread that is not GC_SAFE,
-     and our interruption signal will be received. We just have to
-     resignal io interruption event for GC_SAFE ones: no
-     suspend/resume required.
-  */
-  if (SymbolValue(INTERRUPT_PENDING, thread)!=NIL ||
-      pthread_mutex_trylock(&suspend_info.world_lock)) {
-    odprintf("world_lock contested. Relying on GC to deliver interrupt notification.");
-    if (SymbolTlValue(GC_SAFE, thread) != NIL) {
-      SetEvent(thread->private_events.events[1]);
+	   The code below tries to handle case (2) by ensuring that no
+	   thread has undelivered interruption, i.e. it really wakes
+	   those threads in the world that need it...  */
+	return;
     }
-    return;
-  }
-  odprintf("world_lock taken");
+    odprintf("world_lock taken");
 
-  lock_suspend_info(__FILE__, __LINE__);
-  suspend_info.reason = SUSPEND_REASON_INTERRUPT;
-  suspend_info.interrupted_thread = thread;
-  suspend_info.phase = 1;
-  suspend_info.suspend = 1;
-  unlock_suspend_info(__FILE__, __LINE__);
+    lock_suspend_info(__FILE__, __LINE__);
+    suspend_info.reason = SUSPEND_REASON_INTERRUPT;
+    suspend_info.interrupted_thread = thread;
+    suspend_info.phase = 1;
+    suspend_info.suspend = 1;
+    unlock_suspend_info(__FILE__, __LINE__);
 
-  odprintf("unmapping gc page");
+    odprintf("unmapping gc page");
 
-  unmap_gc_page();
+    unmap_gc_page();
 
-  odprintf("unmapped gc page, doing interrupt phase 1");
+    odprintf("unmapped gc page, doing interrupt phase 1");
 
-  // Phase 1: Make sure that th is in gc-safe code or noted the need to interrupt
+    // Phase 1: Make sure that th is in gc-safe code or noted the need to interrupt
 
-  if (SymbolValue(GC_SAFE, thread) == NIL) {
-    /* What if it's running GC now, stopping the world and about to
-       take a world-lock? It won't be GC-safe, definitely - and we'd
-       wait forever for thread state change here.
-
-       The answer is that it will have GC_PENDING :IN-PROGRESS.  Well,
-       what if some other thread does the same? Then it waits on
-       world-lock while we stop/restart a few other threads, including
-       our interrupt recipient; when we free the world-lock, it's free
-       to continue.
-
-       And how it depends on whether we are GC_SAFE now?
-
-    */
-    if (SymbolTlValue(GC_PENDING, thread) == NIL) {
-      /* If GC_PENDING is NIL _here_, safepoint will definitely happen
-         before next GC in thread, so thread will acknowledge the
-         interrupt. */
-      wait_for_thread_state_change(thread, STATE_RUNNING);
+    for(p=all_threads; p; p=p->next) {
+	gc_assert(p->os_thread != 0);
+	FSHOW_SIGNAL((stderr,"/gc_stop_the_world: thread=%lu, state=%x\n",
+		      p->os_thread, thread_state(p)));
+	if (thread_state(p)==STATE_RUNNING) {
+	    if(SymbolTlValue(GC_PENDING,p)!=NIL) {
+		/* One of the running threads is about to GC. Rely on
+		   the upcoming gc_stop_the_world to do the rest. */
+		break;
+	    }
+	    if((p!=self) && wake_needed(p)) {
+		odprintf("waiting for 0x%p to change state from RUNNING");
+		wait_for_thread_state_change(p, STATE_RUNNING);
+		/* safepoint in the target (p) could happen in the very
+		   moment where it enters foreign code, i.e. becomes
+		   phase1-safe; we keep other threads frozen until GC page
+		   is mapped back to prevent them from stumbling upon this
+		   page again and again -- but a phase1-safe thread won't
+		   have this problem, so let's allow it to continue
+		   instantly. */
+		if (SymbolValue(GC_SAFE, p) != NIL) {
+		    set_thread_state(p, STATE_RUNNING);
+		    /* if p returns into phase1-unsafe code, it may
+		       suspend briefly again. Then it will be released in
+		       phase 2, after map_gc_page. */
+		}
+	    }
+	}
     }
-    io_resignal = 0;
-  }
 
-  odprintf("mapping gc page");
+    odprintf("mapping gc page");
 
-  map_gc_page();
+    map_gc_page();
 
-  odprintf("mapped gc page");
+    odprintf("mapped gc page");
 
-  lock_suspend_info(__FILE__, __LINE__);
-  suspend_info.suspend = 0;
-  unlock_suspend_info(__FILE__, __LINE__);
+    lock_suspend_info(__FILE__, __LINE__);
+    suspend_info.suspend = 0;
+    unlock_suspend_info(__FILE__, __LINE__);
 
-  if (io_resignal) {
-    SetEvent(thread->private_events.events[1]);
-    if (thread->waiting_console_handle != (void*)INVALID_HANDLE_VALUE)
-        win32_interrupt_console_input();
-  }
-  odprintf("mapped gc page, iterating over threads and waking them");
+    odprintf("mapped gc page, iterating over threads and waking them");
 
-  for (p = all_threads; p; p = p->next) {
-    if (thread_state(p) != STATE_DEAD)
-      set_thread_state(p, STATE_RUNNING);
-  }
+    for (p = all_threads; p; p = p->next) {
+	if (thread_state(p) != STATE_DEAD)
+	    set_thread_state(p, STATE_RUNNING);
+    }
 
-  pthread_mutex_unlock(&suspend_info.world_lock);
-  odprintf("wake_thread(0x%p) end", thread->os_thread);
+    pthread_mutex_unlock(&suspend_info.world_lock);
+    odprintf("wake_thread(0x%p) end", thread->os_thread);
 }
 
 
@@ -949,8 +972,8 @@ void suspend()
   pthread_np_publish_context(NULL);
 
   safepoint_cycle_state(STATE_SUSPENDED);
-  SetSymbolValue(GC_PENDING, NIL, self);
   SetSymbolValue(STOP_FOR_GC_PENDING, NIL, self);
+  SetSymbolValue(GC_PENDING, NIL, self);
 }
 
 void suspend_briefly()
@@ -1081,7 +1104,7 @@ int maybe_ack_gc_poll()
 		 can't magically acquire thread_may_suspend_for_gc()
 		 property. */
 	  } else {
-	      /* Phase 2 disallows suspend_briefly */
+	      /* Phase 2 wouldn't wake us up after suspend_briefly. */
 	      unlock_suspend_info(__FILE__, __LINE__);
 	  }
 	  SetSymbolValue(STOP_FOR_GC_PENDING, T, self);
@@ -1091,9 +1114,9 @@ int maybe_ack_gc_poll()
   case SUSPEND_REASON_GCING:
     /* This one may happen in nested safepoints. */
     if (self == suspend_info.gc_thread) {
-      /* Recursively-entered safepoint in SUB_GC. */
-      unlock_suspend_info(__FILE__, __LINE__);
-      return 0;
+	/* Recursively-entered safepoint in SUB_GC. */
+	unlock_suspend_info(__FILE__, __LINE__);
+	return 0;
     } else {
 	if (SymbolTlValue(GC_SAFE,self)==T) {
 	    /* We are entering safe region while other thread gcs.
@@ -1104,20 +1127,23 @@ int maybe_ack_gc_poll()
 	    return 0;
 	}      
 	SetSymbolValue(STOP_FOR_GC_PENDING, T, self);
-      /* Some other thread is GCing. We may come here only if GC_SAFE
-         was set and gc_stop_the_world didn't touch us. */
-      if (thread_may_suspend_for_gc()) {
-        suspend();
-      } else {
-        unlock_suspend_info(__FILE__, __LINE__);
-        lose("suspend_info.reason = SUSPEND_REASON_GCING, !thread_may_suspend_for_gc()");
-      }
+	/* Some other thread is GCing. We may come here only if GC_SAFE
+	   was set and gc_stop_the_world didn't touch us. */
+	if (thread_may_suspend_for_gc()) {
+	    suspend();
+	} else {
+	    unlock_suspend_info(__FILE__, __LINE__);
+	    lose("suspend_info.reason = SUSPEND_REASON_GCING, !thread_may_suspend_for_gc()");
+	}
     }
     break;
   case SUSPEND_REASON_INTERRUPT:
-    /* Interrupt is enqueued. Target thread doesn't matter: suspend briefly. */
-    suspend_briefly();
-    break;
+      /* Interrupt is enqueued. Suspend briefly if we are going to
+	 touch GC page, continue if we are phase1-safe or gc-safe,
+	 except when we are the target thread (the interruptor waits
+	 for our state change in the latter case). */
+      suspend_briefly();
+      return 1;
   default:
     unlock_suspend_info(__FILE__, __LINE__);
     lose("Unknown suspend reason (%d)", suspend_info.reason);
@@ -1300,6 +1326,19 @@ void gc_stop_the_world()
             }
             odprintf("waiting for 0x%p to change state from RUNNING");
             wait_for_thread_state_change(p, STATE_RUNNING);
+	    /* safepoint in the target (p) could happen in the very
+	       moment where it enters foreign code, i.e. becomes
+	       phase1-safe; we keep other threads frozen until GC page
+	       is mapped back to prevent them from stumbling upon this
+	       page again and again -- but a phase1-safe thread won't
+	       have this problem, so let's allow it to continue
+	       instantly. */
+	    if (SymbolValue(GC_SAFE, p) != NIL) {
+		set_thread_state(p, STATE_RUNNING);
+		/* if p returns into phase1-unsafe code, it may
+		   suspend briefly again. Then it will be released in
+		   phase 2, after map_gc_page. */
+	    }
             odprintf("0x%p has changed state to %s", p->os_thread,
                      get_thread_state_as_string(p));
 #endif

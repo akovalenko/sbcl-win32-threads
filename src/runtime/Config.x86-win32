@@ -33,6 +33,7 @@ GC_SRC = gencgc.c
 
 CFLAGS =  -g -W -Wall \
        -Wno-unused-variable -Wno-unused-function -Wno-unused-parameter \
+       -fomit-frame-pointer \
        -O3 -mno-cygwin -DWINVER=0x0501
 
 ASFLAGS = $(CFLAGS)

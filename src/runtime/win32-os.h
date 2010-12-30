@@ -82,6 +82,7 @@ void accept_post_mortem_startup();
 
 void win32_interrupt_console_input();
 void os_link_runtime();
+void establish_c_fpu_world();
 
 #define bcopy(src,dest,n) memmove(dest,src,n)
 

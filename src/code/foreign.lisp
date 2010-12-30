@@ -101,7 +101,7 @@ if the symbol isn't found."
 (defun raise-undefined-runtime-symbols ()
   (let ((undefined-sap (extern-alien "undefined_alien_address"
 				     system-area-pointer))
-	(name-prefix-length (length (extern-alien-name ""))))
+	(name-prefix-length #!+win32 1 #!-win32 0))
     (flet ((maybe-raise-undefined (name address)
 	     (when (char= #\* (aref name name-prefix-length))
 	       (let* ((runtime-linkage-sap (int-sap address))

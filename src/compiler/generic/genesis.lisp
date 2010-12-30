@@ -3321,9 +3321,11 @@ initially undefined function references:~2%")
       (load-cold-foreign-symbol-table symbol-table-file-name))
 
     #!+sb-dynamic-core
-    (setf (gethash (extern-alien-name "undefined_tramp")
-                   *cold-foreign-symbol-table*)
-          (dyncore-note-symbol "undefined_tramp" nil))
+    (progn
+      (setf (gethash (extern-alien-name "undefined_tramp")
+		     *cold-foreign-symbol-table*)
+	    (dyncore-note-symbol "undefined_tramp" nil))
+      (dyncore-note-symbol "undefined_alien_function" nil))
 
     ;; Now that we've successfully read our only input file (by
     ;; loading the symbol table, if any), it's a good time to ensure

@@ -43,14 +43,17 @@
 (defconstant +stdio-handle+ -10)
 
 (defun loadlibrary-withouth-stdio (namestring)
-  (if *reset-stdio-on-dlopen*
-      (let ((stdio (get-std-handle +stdio-handle+)))
-        (unwind-protect
-          (progn
-            (set-std-handle +stdio-handle+ -1)
-            (loadlibrary namestring))
-          (set-std-handle +stdio-handle+ stdio)))
-      (loadlibrary namestring)))
+  (flet ((loadlibrary (namestring)
+	   (alien-funcall (extern-alien "establish_c_fpu_world" (function void)))
+	   (loadlibrary namestring)))
+   (if *reset-stdio-on-dlopen*
+       (let ((stdio (get-std-handle +stdio-handle+)))
+	 (unwind-protect
+	      (progn
+		(set-std-handle +stdio-handle+ -1)
+		(loadlibrary namestring))
+	   (set-std-handle +stdio-handle+ stdio)))
+       (loadlibrary namestring))))
 
 (defun dlopen-or-lose (&optional obj)
   (if obj

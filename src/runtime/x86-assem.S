@@ -196,7 +196,40 @@ Lfp_rtn_value:
 	jmp	*%ebx
 #endif
 	SIZE(GNAME(call_into_c))
+
 
+/*
+ * A call to call_into_c_fp_return preserves esi, edi, and ebp.	
+ * (The C function will preserve ebx, esi, edi, and ebp across its
+ * function call, but we trash ebx ourselves by using it to save the
+ * return Lisp address.)
+ *
+ * Return values are in eax and maybe edx for quads, or st(0) for
+ * floats.
+ *
+ * This should work for Lisp calls C calls Lisp calls C..
+ *
+ * FIXME & OAOOM: This duplicates call-out in src/compiler/x86/c-call.lisp,
+ * so if you tweak this, change that too!
+ */
+	.text
+	.align	align_16byte,0x90
+	.globl GNAME(call_into_c_fp_return)
+	TYPE(GNAME(call_into_c_fp_return))
+GNAME(call_into_c_fp_return):
+/* Save the return Lisp address in ebx. */
+	popl	%ebx
+	cld
+/* Setup the NPX for C */
+	push 	%eax
+	call GNAME(establish_c_fpu_world)
+	call GNAME(gc_enter_safe_region)
+	pop	%eax
+	call	*%eax		  # normal callout using Lisp stack
+	call GNAME(leave_c_function_return_fp)
+	jmp	*%ebx
+	SIZE(GNAME(call_into_c_fp_return))
+	
 
 	.text	
 	.globl GNAME(call_into_lisp_first_time)
@@ -938,5 +971,6 @@ Lunwinding:
 	SIZE(GNAME(uwp_seh_handler_gate))
 #endif	
 
+	#include "x86-fpu-insn.S"
 	
         END()

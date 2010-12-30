@@ -281,7 +281,11 @@
     (cond ((or #!+(and win32 sb-thread) t
                (policy node (> space speed)))
            (move eax function)
-           (inst call (make-fixup "call_into_c" :foreign)))
+	   (if (and results
+                    (location= (tn-ref-tn results) fr0-tn))
+               ;; The return result is in fr0.
+	       (inst call (make-fixup "call_into_c_fp_return" :foreign))
+	       (inst call (make-fixup "call_into_c" :foreign))))
           (t
            ;; Setup the NPX for C; all the FP registers need to be
            ;; empty; pop them all.
