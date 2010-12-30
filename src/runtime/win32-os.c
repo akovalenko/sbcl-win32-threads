@@ -1736,10 +1736,10 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 	    fprintf(dyndebug_output,
 		    "Exception handler: FPU stack %s (%s compliance expected).\n"
 		    "....tags 0x%04lx, status 0x%04lx, control 0x%04lx\n"
-		    "....DataOffset %p, ErrorOffset %p\n"
-		    "....DataSelector %p, ErrorSelector %p\n"
-		    "....Cr0Npx %p, XMM opcode [6]=%02x, [7]=%02x\n"
-		    "....Main CPU EIP %p, ESP %p\n",
+		    "....DataOffset %08lx, ErrorOffset %08lx\n"
+		    "....DataSelector %08lx, ErrorSelector %08lx\n"
+		    "....Cr0Npx %08lx, XMM opcode [6]=%02x, [7]=%02x\n"
+		    "....Main CPU EIP %08lx, ESP %08lx\n",
 		    stack_empty ? "EMPTY" : "FULL",
 		    fpu_world_lispy_p() ? "Lisp" : "C",
 		    context->FloatSave.TagWord,
@@ -2283,7 +2283,6 @@ int win32_unix_write(int fd, void * buf, int count)
             errno = EIO;
             return -1;
         } else {
-          wait_again:
             if(WaitForMultipleObjects(2,self->private_events.events,
                                       FALSE,INFINITE) != WAIT_OBJECT_0) {
                 odprintf("write(%d, 0x%p, %d) EINTR",fd,buf,count);
@@ -2358,7 +2357,6 @@ int win32_unix_read(int fd, void * buf, int count)
             errno = EIO;
             return -1;
         } else {
-          wait_again:
             if(WaitForMultipleObjects(2,self->private_events.events,
                                       FALSE,INFINITE) != WAIT_OBJECT_0) {
                 CancelIo(handle);
