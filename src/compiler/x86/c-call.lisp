@@ -238,15 +238,7 @@
   (:results (res :scs (sap-reg)))
   (:result-types system-area-pointer)
   (:generator 2
-   #-sb-xc-host
-   (let ((starred-name (concatenate 'simple-string "*" foreign-symbol)))
-     (if (find-foreign-symbol-in-table starred-name *static-foreign-symbols*)
-         (inst mov res (make-fixup starred-name :foreign-dataref))
-         (inst lea res (make-fixup foreign-symbol :foreign))))
-   #+sb-xc-host
-   (inst mov res
-         (make-fixup (concatenate 'simple-string "*" foreign-symbol)
-                     :foreign-dataref))))
+   (inst lea res (make-fixup foreign-symbol :foreign))))
 
 #!+linkage-table
 (define-vop (foreign-symbol-dataref-sap)
@@ -273,19 +265,15 @@
   (:node-var node)
   (:vop-var vop)
   (:save-p t)
-  (:ignore args ecx edx)
+  (:ignore args eax edx)
   (:generator 0
     ;; FIXME & OAOOM: This is brittle and error-prone to maintain two
     ;; instances of the same logic, on in arch-assem.S, and one in
     ;; c-call.lisp. If you modify this, modify that one too...
-    (cond ((or #!+(and win32 sb-thread) t
+    (cond ((or #!+sb-gc-safepoint t
                (policy node (> space speed)))
-           (move eax function)
-	   (if (and results
-                    (location= (tn-ref-tn results) fr0-tn))
-               ;; The return result is in fr0.
-	       (inst call (make-fixup "call_into_c_fp_return" :foreign))
-	       (inst call (make-fixup "call_into_c" :foreign))))
+           (move ecx function)
+	   (inst call (make-fixup "call_into_c" :foreign)))
           (t
            ;; Setup the NPX for C; all the FP registers need to be
            ;; empty; pop them all.
@@ -295,12 +283,7 @@
            ;; Clear out DF: Darwin, Windows, and Solaris at least require
            ;; this, and it should not hurt others either.
            (inst cld)
-
-           #!+(and win32 sb-thread)
-           (enter-safe-region-instructions)
            (inst call function)
-           #!+(and win32 sb-thread)
-           (leave-region-instructions)
            ;; To give the debugger a clue. FIXME: not really internal-error?
            (note-this-location vop :internal-error)
 
@@ -370,7 +353,8 @@
         #!+(and win32 sb-thread)
         (inst add temp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
         (inst sub (make-ea :dword :base temp) delta #!-(and win32 sb-thread) :fs)))
-    (load-tl-symbol-value result *alien-stack*))
+    (load-tl-symbol-value result *alien-stack*)
+    (inst test result (make-ea :dword :base result)))
   #!-sb-thread
   (:generator 0
     (aver (not (location= result esp-tn)))

@@ -54,13 +54,14 @@ Dynamic symbols are entered into the linkage-table if they aren't there already.
 
 On non-linkage-table ports signals an error if the symbol isn't found."
   (declare (ignorable datap))
-  (when (char/= #\* (aref name 0))
-    (let* ((starred-name (concatenate 'base-string "*" name))
-           (starred-address (find-foreign-symbol-in-table starred-name
-                                                          *static-foreign-symbols*)))
-      (when starred-address
-        (return-from foreign-symbol-address
-          (values starred-address t)))))
+  (when (and datap (char/= #\* (aref name 0)))
+    (let* ((star-name (concatenate 'base-string "*" name))
+	   (star-address
+	    (find-foreign-symbol-in-table
+	     star-name *static-foreign-symbols*)))
+      (when star-address
+	(return-from foreign-symbol-address
+	  (values star-address t)))))
   (let ((static (find-foreign-symbol-in-table name *static-foreign-symbols*)))
     (if static
         (values static nil)
@@ -88,8 +89,7 @@ if the symbol isn't found."
   #!+linkage-table
   (multiple-value-bind (addr sharedp)
       (foreign-symbol-address symbol datap)
-    #+sb-xc-host
-    (aver (not sharedp))
+    ;; (aver (not sharedp))
     ;; If the address is from linkage-table and refers to data
     ;; we need to do a bit of juggling. It is not the address of the
     ;; variable, but the address where the real address is stored.
@@ -99,20 +99,29 @@ if the symbol isn't found."
 
 #-sb-xc-host
 (defun raise-undefined-runtime-symbols ()
-  (let ((undefined-sap (extern-alien "undefined_alien_address"
-				     system-area-pointer))
-	(name-prefix-length #!+win32 1 #!-win32 0))
-    (flet ((maybe-raise-undefined (name address)
-	     (when (char= #\* (aref name name-prefix-length))
-	       (let* ((runtime-linkage-sap (int-sap address))
-		      (provided-sap (sap-ref-sap runtime-linkage-sap 0)))
-		 (when (sap= provided-sap undefined-sap)
-		   (setf (gethash
-			  (cons (subseq name
-					(1+ name-prefix-length)) t)
-			  *linkage-info*)
-			 (make-linkage-info :address address :datap t)))))))
-      (maphash #'maybe-raise-undefined *static-foreign-symbols*))))
+  (flet ((jump-target (sap)
+	   (sap+ sap  (+ (signed-sap-ref-word sap 1) 1 sb!vm::n-word-bytes))))
+    (let ((undefined-data-sap
+	   (sap-ref-sap (foreign-symbol-sap "undefined_alien_address" t) 0))
+	  (undefined-function-sap
+	   (jump-target (foreign-symbol-sap "undefined_alien_function")))
+	  (name-prefix-length (1- (length (extern-alien-name "t")))))
+      (flet ((maybe-raise-undefined (name address)
+	       (if (char= #\* (aref name name-prefix-length))
+		   (let* ((runtime-linkage-sap (int-sap address))
+			  (provided-sap (sap-ref-sap runtime-linkage-sap 0)))
+		     (when (sap= provided-sap undefined-data-sap)
+		       (setf (gethash
+			      (cons (subseq name
+					    (1+ name-prefix-length)) t)
+			      *linkage-info*)
+			     (make-linkage-info :address address :datap t))))
+		   (let ((bare-name (subseq name name-prefix-length)))
+		     (when (sap= (jump-target (foreign-symbol-sap bare-name))
+				 undefined-function-sap)
+		       (setf (gethash (cons bare-name nil) *linkage-info*)
+			     (make-linkage-info :address address :datap nil)))))))
+	(maphash #'maybe-raise-undefined *static-foreign-symbols*)))))
 
 #-sb-xc-host
 (defun foreign-reinit ()

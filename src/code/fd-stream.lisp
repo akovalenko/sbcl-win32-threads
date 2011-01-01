@@ -2548,7 +2548,7 @@
 				     :output outputp
 				     :buffering :line
 				     :element-type :default
-				     :serve-events inputp
+				     #!-win32 :serve-events #!-win32 inputp
 				     :auto-close auto-close-p
 				     :external-format
 				     (or

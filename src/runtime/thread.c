@@ -753,7 +753,8 @@ void wake_thread(struct thread * thread)
     if (!nonio_wake_required ||
 	!wake_needed(thread) ||
 	SymbolTlValue(STOP_FOR_GC_PENDING,self)!=NIL ||
-	SymbolTlValue(GC_PENDING,self)!=NIL)
+	SymbolTlValue(GC_PENDING,self)!=NIL ||
+	suspend_info.suspend)
 	return;
 
     if (pthread_mutex_trylock(&suspend_info.world_lock)) {
@@ -901,12 +902,13 @@ int check_pending_interrupts()
 void gc_enter_safe_region()
 {
   struct thread * self = arch_os_get_current_thread();
-  int errorCode = GetLastError();
   int may_suspend = thread_may_suspend_for_gc();
   if (may_suspend) {
       /* Context has to be published before GC_SAFE set: after that,
 	 GC may start and get wrong context... */
+      DWORD lastError = GetLastError();
       pthread_np_publish_context(NULL);
+      SetLastError(lastError);
       bind_variable(GC_SAFE, T, self);
   } else {
     /* !NIL !T trick: thread is in foreign code and should be skipped
@@ -914,24 +916,19 @@ void gc_enter_safe_region()
     bind_variable(GC_SAFE, GC_SAFE, self);
   }
   gc_safepoint();
-  /* Within gc-safe code, thread context is published, so real
-     suspend/resume should never be attempted */
-  SetLastError(errorCode);
 }
 
 void gc_enter_unsafe_region()
 {
-  int errorCode = GetLastError();
   struct thread * self = arch_os_get_current_thread();
   bind_variable(GC_SAFE, NIL, self);
   gc_safepoint();
-  SetLastError(errorCode);
 }
 
 void gc_leave_region()
 {
+  
   struct thread * self = arch_os_get_current_thread();
-  int errorCode = GetLastError();
   /* 1. As GC_SAFE may become T when unbound, republishing context is
      necessary.
 
@@ -951,7 +948,6 @@ void gc_leave_region()
       pthread_np_publish_context(NULL);
   unbind_variable(GC_SAFE, self);
   gc_safepoint();
-  SetLastError(errorCode);
 }
 
 void safepoint_cycle_state(lispobj state)
@@ -1004,14 +1000,10 @@ int thread_may_gc()
     return 0;
   }
 
-  if (get_pseudo_atomic_atomic(self)) {
-    return 0;
-  }
-  if (gc_signals_blocked_p(NULL)) {
-    return 0;
-  }
   return 1;
 }
+
+unsigned long pa_safepoints = 0;
 
 int thread_may_suspend_for_gc()
 {
@@ -1028,13 +1020,6 @@ int thread_may_suspend_for_gc()
     return 0;
   }
 
-  if (get_pseudo_atomic_atomic(self)) {
-    return 0;
-  }
-
-  if (gc_signals_blocked_p(NULL)) {
-    return 0;
-  }
   return 1;
 }
 
@@ -1159,6 +1144,8 @@ void gc_safepoint()
   again:
   odprintf("safepoint begins");
 
+  gc_assert(!get_pseudo_atomic_atomic(self));
+  
   if (!get_pseudo_atomic_atomic(self) && get_pseudo_atomic_interrupted(self))
     clear_pseudo_atomic_interrupted(self);
 
@@ -1183,8 +1170,7 @@ void gc_safepoint()
             !thread_may_interrupt());
   gc_assert(SymbolValue(STOP_FOR_GC_PENDING,self) == NIL ||
             !thread_may_suspend_for_gc());
-  gc_assert(get_pseudo_atomic_atomic(self) ||
-            !get_pseudo_atomic_interrupted(self));
+  gc_assert(!get_pseudo_atomic_interrupted(self));
 
   SetLastError(lasterror);
 }

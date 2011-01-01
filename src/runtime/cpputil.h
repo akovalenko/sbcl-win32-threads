@@ -11,7 +11,7 @@
     (typeof(pointer))ALIGN_UP((uintptr_t)value,granularity)
 
 #define PTR_ALIGN_DOWN(pointer,granularity)			\
-    (typeof(pointer))ALIGN_DOWN((uintptr_t)value,granularity)
+    (typeof(pointer))ALIGN_DOWN((uintptr_t)pointer,granularity)
 
 #define PTR_IS_ALIGNED(pointer,granularity)	\
     IS_ALIGNED((uintptr_t)pointer,granularity)

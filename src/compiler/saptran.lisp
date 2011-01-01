@@ -30,13 +30,19 @@
       `(foreign-symbol-sap ,symbol))
   #!+linkage-table
   (if (and (constant-lvar-p symbol) (constant-lvar-p datap))
-      (let ((name (lvar-value symbol))
-            (datap (lvar-value datap)))
-        (if (or #+sb-xc-host t ; only static symbols on host
-             (not datap)
-             (find-foreign-symbol-in-table name *static-foreign-symbols*))
-            `(foreign-symbol-sap ,name)
-            (give-up-ir1-transform)))
+      (let* ((name (lvar-value symbol))
+	     (datap (lvar-value datap))
+	     (star-name (concatenate 'base-string "*" name))
+	     (star-name-present-p
+	      (or #+sb-xc-host t
+		  (find-foreign-symbol-in-table star-name *static-foreign-symbols*))))
+	(cond
+	  ((and datap star-name-present-p)
+	   `(foreign-symbol-dataref-sap ,star-name))
+	  (datap
+	   `(foreign-symbol-dataref-sap ,name))
+	  (t
+	   `(foreign-symbol-sap ,name))))
       (give-up-ir1-transform)))
 
 (defknown (sap< sap<= sap= sap>= sap>)

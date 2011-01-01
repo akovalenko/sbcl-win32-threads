@@ -94,7 +94,19 @@
 #define END() .end
 #define TRAP int3
 #endif
-
+	
+#if !defined(LISP_FEATURE_SB_AUTO_FPU_SWITCH)
+#define CLEAR_FPU_STACK \
+	;fstp %st(0);fstp %st(0);fstp %st(0);fstp %st(0); \
+	fstp %st(0);fstp %st(0);fstp %st(0);fstp %st(0);
+	
+#define FILL_FPU_STACK	\
+	;fldz;fldz;fldz;fldz;fldz;fldz;fldz;fldz;
+#else
+#define CLEAR_FPU_STACK
+#define FILL_FPU_STACK	
+#endif
+	
 	.text
 	.globl	GNAME(all_threads)
 
@@ -117,119 +129,37 @@
 	.globl GNAME(call_into_c)
 	TYPE(GNAME(call_into_c))
 GNAME(call_into_c):
-/* Save the return Lisp address in ebx. */
-	popl	%ebx
 	cld
 /* Setup the NPX for C */
-#if !defined(LISP_FEATURE_WIN32)
-	fstp	%st(0)
-	fstp	%st(0)
-	fstp	%st(0)
-	fstp	%st(0)
-	fstp	%st(0)
-	fstp	%st(0)
-	fstp	%st(0)
-	fstp	%st(0)
-#endif
-	
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-	pushl %ebx		  # for debugging
-	pushl %eax
-	call GNAME(enter_c_function)
-	popl %eax
-	addl $4,%esp
-#endif
+	CLEAR_FPU_STACK
+#if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
+	movl	(%esp),%ebx /* return lisp addr */
+	subl	$4,%esp
+	movl	%ecx,(%esp) /* top == our callee, top+1 == finish */ 
+	movl	$Lfinish_call_into_c, 4(%esp)
+	jmp	GNAME(gc_enter_safe_region) /* esr => callee => */
+Lfinish_call_into_c:	
+	subl	$8,%esp
+	movl	%ebx,(%esp)
+	movl	%edx,4(%esp)
+	movl	%eax,%ebx
+	call	GNAME(gc_leave_region)
+	movl	4(%esp),%edx
+	movl	%ebx,%eax
+	FILL_FPU_STACK	
+	ret
+#else	
+/* Save the return Lisp address in ebx. */
+	popl	%ebx
 	call	*%eax		  # normal callout using Lisp stack
-	movl	%eax,%ecx	  # remember integer return value
 	
-#if !defined(LISP_FEATURE_WIN32)	
-/* Check for a return FP value. */
-	fxam
-	fnstsw	%ax
-	andl	$0x4500,%eax
-	cmpl	$0x4100,%eax
-	jne	Lfp_rtn_value
-#endif
-
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-	push %edx
-	push %ecx
-	call GNAME(leave_c_function)
-	pop %ecx
-	pop %edx
-#endif
-
-/* The return value is in eax, or eax,edx? */
 /* Set up the NPX stack for Lisp. */
-#if !defined(LISP_FEATURE_WIN32)
-	fldz			# Ensure no regs are empty.
-	fldz
-	fldz
-	fldz
-	fldz
-	fldz
-	fldz
-	fldz
-#endif	
-/* Restore the return value. */
-	movl	%ecx,%eax	# maybe return value
-
+	FILL_FPU_STACK
 /* Return. */
 	jmp	*%ebx
-
-#if !defined(LISP_FEATURE_WIN32)
-Lfp_rtn_value:
-/* The return result is in st(0). Only this?*/
-	/* Set up the NPX stack for Lisp, placing the result in st(0). */
-	fldz			# Ensure no regs are empty.
-	fldz
-	fldz
-	fldz
-	fldz
-	fldz
-	fldz
-	fxch %st(7)
 	
-/* We don't need to restore eax, because the result is in st(0). */
-
-/* Return. FIXME: It would be nice to restructure this to use RET. */	
-	jmp	*%ebx
-#endif
+#endif	
 	SIZE(GNAME(call_into_c))
-
-
-/*
- * A call to call_into_c_fp_return preserves esi, edi, and ebp.	
- * (The C function will preserve ebx, esi, edi, and ebp across its
- * function call, but we trash ebx ourselves by using it to save the
- * return Lisp address.)
- *
- * Return values are in eax and maybe edx for quads, or st(0) for
- * floats.
- *
- * This should work for Lisp calls C calls Lisp calls C..
- *
- * FIXME & OAOOM: This duplicates call-out in src/compiler/x86/c-call.lisp,
- * so if you tweak this, change that too!
- */
-	.text
-	.align	align_16byte,0x90
-	.globl GNAME(call_into_c_fp_return)
-	TYPE(GNAME(call_into_c_fp_return))
-GNAME(call_into_c_fp_return):
-/* Save the return Lisp address in ebx. */
-	popl	%ebx
-	cld
-/* Setup the NPX for C */
-	push 	%eax
-	call GNAME(establish_c_fpu_world)
-	call GNAME(gc_enter_safe_region)
-	pop	%eax
-	call	*%eax		  # normal callout using Lisp stack
-	call GNAME(leave_c_function_return_fp)
-	jmp	*%ebx
-	SIZE(GNAME(call_into_c_fp_return))
-	
 
 	.text	
 	.globl GNAME(call_into_lisp_first_time)
@@ -243,14 +173,11 @@ GNAME(call_into_c_fp_return):
 GNAME(call_into_lisp_first_time):
 	pushl	%ebp		# Save old frame pointer.
 	movl	%esp,%ebp	# Establish new frame.
-#ifndef LISP_FEATURE_WIN32
 	movl    GNAME(all_threads),%eax
 	/* pthread machinery takes care of this for other threads */
+#ifndef LISP_FEATURE_WIN32	
 	movl    THREAD_CONTROL_STACK_END_OFFSET(%eax) ,%esp
-#else
-/* Win32 -really- doesn't like you switching stacks out from under it. */
-	movl	GNAME(all_threads),%eax
-#endif
+#endif	
 	jmp     Lstack
 
 	.text	
@@ -265,7 +192,7 @@ GNAME(call_into_lisp):
 	pushl	%ebp		# Save old frame pointer.
 	movl	%esp,%ebp	# Establish new frame.
 Lstack:
-	call GNAME(enter_lisp_function)
+	call GNAME(gc_enter_unsafe_region)
 /* Save C regs: ebx esi edi. */
 	pushl	%ebx
 	pushl	%esi
@@ -733,7 +660,7 @@ GNAME(exception_handler_wrapper):
 	pushl	0x1c(%esp)
 	pushl	0x1c(%esp)
 	call	GNAME(handle_exception)
-	lea	8(%ebp), %esp
+	lea	8(%ebp),%esp
 	popl	%ebp
 	ret
 	SIZE(GNAME(exception_handler_wrapper))

@@ -476,14 +476,20 @@
   `(let
      ((,name (etypecase ,description
                (string ,description)
-               (cons (destructuring-bind (s &optional (l 0) c) ,description
-                       (declare (ignorable l))
-                       (format nil "~A~A" s
-                               (if c #!-sb-unicode "A" #!+sb-unicode "W" "")))))))
+               (cons
+		  (destructuring-bind (s c) ,description
+		    (format nil "~A~A" s
+			    (if c #!-sb-unicode "A" #!+sb-unicode "W" "")))))))
      ,@body)))
 
 (defmacro make-system-buffer (x)
  `(make-alien char #!+sb-unicode (ash ,x 1) #!-sb-unicode ,x))
+
+(define-alien-type pathname-buffer
+    (array char #.(ash (1+ max_path) #!+sb-unicode 1 #!-sb-unicode 0)))
+
+(defmacro decode-system-string (alien)
+  `(cast (cast ,alien (* char)) system-string))
 
 ;;; FIXME: The various FOO-SYSCALL-BAR macros, and perhaps some other
 ;;; macros in this file, are only used in this file, and could be
@@ -527,7 +533,7 @@
   "http://msdn.microsoft.com/library/default.asp?url=/library/en-us/debug/base/retrieving_the_last_error_code.asp"
   (let ((message
   (with-alien ((amsg (* char)))
-    (syscall (("FormatMessage" 28 t)
+    (syscall (("FormatMessage" t)
               dword dword dword dword dword (* (* char)) dword dword)
              (cast-and-free amsg :free-function local-free)
              (logior FORMAT_MESSAGE_ALLOCATE_BUFFER FORMAT_MESSAGE_FROM_SYSTEM)
@@ -549,43 +555,42 @@
             err-code
             (get-last-error-message err-code))))
 
-(declaim (notinline get-folder-namestring))
 (defun get-folder-namestring (csidl)
   "http://msdn.microsoft.com/library/en-us/shellcc/platform/shell/reference/functions/shgetfolderpath.asp"
-  (with-alien ((apath (* char) (make-system-buffer (1+ max_path))))
-    (syscall (("SHGetFolderPath" 20 t) int handle int handle dword (* char))
-             (concatenate 'string (cast-and-free apath) "\\")
-             0 csidl 0 0 apath)))
+  (with-alien ((apath pathname-buffer))
+    (syscall (("SHGetFolderPath" t) int handle int handle dword (* char))
+             (concatenate 'string (decode-system-string apath) "\\")
+             0 csidl 0 0 (cast apath (* char)))))
 
 (defun get-folder-pathname (csidl)
   (parse-native-namestring (get-folder-namestring csidl)))
 
 (defun sb!unix:posix-getcwd ()
-  (with-alien ((apath (* char) (make-system-buffer (1+ max_path))))
-    (with-sysfun (afunc ("GetCurrentDirectory" 8 t) dword dword (* char))
-      (let ((ret (alien-funcall afunc (1+ max_path) apath)))
+  (with-alien ((apath pathname-buffer))
+    (with-sysfun (afunc ("GetCurrentDirectory" t) dword dword (* char))
+      (let ((ret (alien-funcall afunc (1+ max_path) (cast apath (* char)))))
         (when (zerop ret)
           (win32-error "GetCurrentDirectory"))
-        (when (> ret (1+ max_path))
-          (free-alien apath)
-          (setf apath (make-system-buffer ret))
-          (alien-funcall afunc ret apath))
-        (cast-and-free apath)))))
+        (if (> ret (1+ max_path))
+	    (with-alien ((apath (* char) (make-system-buffer ret)))
+	      (alien-funcall afunc ret apath)
+	      (cast-and-free apath))
+	    (decode-system-string apath))))))
 
 (defun sb!unix:unix-mkdir (name mode)
   (declare (type sb!unix:unix-pathname name)
            (type sb!unix:unix-file-mode mode)
            (ignore mode))
-  (void-syscall* (("CreateDirectory" 8 t) system-string dword) name 0))
+  (void-syscall* (("CreateDirectory" t) system-string dword) name 0))
 
 (defun sb!unix:unix-rename (name1 name2)
   (declare (type sb!unix:unix-pathname name1 name2))
-  (void-syscall* (("MoveFile" 8 t) system-string system-string) name1 name2))
+  (void-syscall* (("MoveFile" t) system-string system-string) name1 name2))
 
 (defun sb!unix::posix-getenv (name)
   (declare (type simple-string name))
   (with-alien ((aenv (* char) (make-system-buffer default-environment-length)))
-    (with-sysfun (afunc ("GetEnvironmentVariable" 12 t)
+    (with-sysfun (afunc ("GetEnvironmentVariable" t)
                         dword system-string (* char) dword)
       (let ((ret (alien-funcall afunc name aenv default-environment-length)))
         (when (> ret default-environment-length)
@@ -622,7 +627,7 @@
                 (,exit-time filetime)
                 (,kernel-time filetime)
                 (,user-time filetime))
-     (syscall* (("GetProcessTimes" 20) handle (* filetime) (* filetime)
+     (syscall* ("GetProcessTimes" handle (* filetime) (* filetime)
                 (* filetime) (* filetime))
                (progn ,@forms)
                (get-current-process)
@@ -641,7 +646,7 @@
           epoch (get-internal-real-time)))
   (defun get-internal-real-time ()
     (- (with-alien ((system-time filetime))
-         (syscall (("GetSystemTimeAsFileTime" 4) void (* filetime))
+         (syscall ("GetSystemTimeAsFileTime" void (* filetime))
                   (values (floor system-time 100ns-per-internal-time-unit))
                   (addr system-time)))
        epoch)))
@@ -687,7 +692,7 @@
   "Return the number of seconds and microseconds since the beginning of the
 UNIX epoch: January 1st 1970."
   (with-alien ((system-time filetime))
-    (syscall (("GetSystemTimeAsFileTime" 4) void (* filetime))
+    (syscall ("GetSystemTimeAsFileTime" void (* filetime))
              (multiple-value-bind (sec 100ns)
                  (floor (- system-time +unix-epoch-filetime+)
                         (* 100ns-per-internal-time-unit
@@ -703,9 +708,9 @@ UNIX epoch: January 1st 1970."
 (defun setenv (name value)
   (declare (type simple-string name value))
   (if value
-      (void-syscall* (("SetEnvironmentVariable" 8 t) system-string system-string)
+      (void-syscall* (("SetEnvironmentVariable" t) system-string system-string)
                      name value)
-      (void-syscall* (("SetEnvironmentVariable" 8 t) system-string int-ptr)
+      (void-syscall* (("SetEnvironmentVariable" t) system-string int-ptr)
                      name 0)))
 
 ;; Let SETENV be an accessor for POSIX-GETENV. Just for fun.
@@ -737,7 +742,7 @@ UNIX epoch: January 1st 1970."
 (defun get-version-ex ()
   (with-alien ((info (struct OSVERSIONINFO)))
     (setf (slot info 'dwOSVersionInfoSize) (c-sizeof (struct OSVERSIONINFO)))
-    (syscall* (("GetVersionEx" 4 t) (* (struct OSVERSIONINFO)))
+    (syscall* (("GetVersionEx" t) (* (struct OSVERSIONINFO)))
               (values (slot info 'dwMajorVersion)
                       (slot info 'dwMinorVersion)
                       (slot info 'dwBuildNumber)
@@ -755,7 +760,7 @@ UNIX epoch: January 1st 1970."
 (defun get-computer-name ()
   (with-alien ((aname (* char) (make-system-buffer (1+ MAX_COMPUTERNAME_LENGTH)))
                (length dword (1+ MAX_COMPUTERNAME_LENGTH)))
-    (with-sysfun (afunc ("GetComputerName" 8 t) bool (* char) (* dword))
+    (with-sysfun (afunc ("GetComputerName" t) bool (* char) (* dword))
       (when (zerop (alien-funcall afunc aname (addr length)))
         (let ((err (get-last-error)))
           (unless (= err ERROR_BUFFER_OVERFLOW)
@@ -784,7 +789,7 @@ UNIX epoch: January 1st 1970."
   (protection dword)
   (maximum-size-high dword)
   (maximum-size-low dword)
-  (name (c-string #!+sb-unicode #!+sb-unicode :external-format :ucs-2)))
+  (name system-string))
 
 (define-alien-routine ("MapViewOfFile" map-view-of-file)
     system-area-pointer
