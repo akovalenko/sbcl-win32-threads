@@ -273,7 +273,11 @@
     (cond ((or #!+sb-gc-safepoint t
                (policy node (> space speed)))
            (move ecx function)
-	   (inst call (make-fixup "call_into_c" :foreign)))
+	   (let ((wrapper
+		  (if (and results (location= (tn-ref-tn results) fr0-tn))
+		      "call_into_c_fp_result"
+		      "call_into_c")))
+	     (inst call (make-fixup wrapper :foreign))))
           (t
            ;; Setup the NPX for C; all the FP registers need to be
            ;; empty; pop them all.

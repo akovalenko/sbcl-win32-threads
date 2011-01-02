@@ -18,7 +18,14 @@
     ((symbol &optional datap) (simple-string boolean) *
      :important t :policy :fast-safe)
   (if (and (constant-lvar-p symbol) (constant-lvar-p datap))
-      `(sap-int (foreign-symbol-sap symbol datap))
+      (let ((name (lvar-value symbol))
+	    (datap (lvar-value datap)))
+	#!+sb-dynamic-core
+	(if datap
+	    (give-up-ir1-transform)
+	    `(values (sap-int (foreign-symbol-sap ,name ,datap)) t))
+	#!-sb-dynamic-core
+	`(values (sap-int (foreign-symbol-sap ,name ,datap)) nil))
       (give-up-ir1-transform)))
 
 (deftransform foreign-symbol-sap ((symbol &optional datap)
@@ -29,20 +36,22 @@
       (give-up-ir1-transform)
       `(foreign-symbol-sap ,symbol))
   #!+linkage-table
-  (if (and (constant-lvar-p symbol) (constant-lvar-p datap))
-      (let* ((name (lvar-value symbol))
-	     (datap (lvar-value datap))
-	     (star-name (concatenate 'base-string "*" name))
-	     (star-name-present-p
-	      (or #+sb-xc-host t
-		  (find-foreign-symbol-in-table star-name *static-foreign-symbols*))))
-	(cond
-	  ((and datap star-name-present-p)
-	   `(foreign-symbol-dataref-sap ,star-name))
-	  (datap
-	   `(foreign-symbol-dataref-sap ,name))
-	  (t
-	   `(foreign-symbol-sap ,name))))
+  (if (and (constant-lvar-p symbol)
+	   (constant-lvar-p datap))
+      (let ((name (lvar-value symbol))
+	    (datap (lvar-value datap)))
+	#!-sb-dynamic-core
+	(if (or #+sb-xc-host t
+		(not datap)
+		(find-foreign-symbol-in-table name
+					      *static-foreign-symbols*))
+	    `(foreign-symbol-sap ,name)
+	    (give-up-ir1-transform))
+	#!+sb-dynamic-core
+	(list
+	 (if datap
+	     'foreign-symbol-dataref-sap
+	     'foreign-symbol-sap) name))
       (give-up-ir1-transform)))
 
 (defknown (sap< sap<= sap= sap>= sap>)

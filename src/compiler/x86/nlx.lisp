@@ -124,7 +124,7 @@
               new-uwp unwind-block-seh-frame-handler-slot)
       #!+sb-dynamic-core
       (progn
-        (inst mov seh-frame (make-fixup "*uwp_seh_handler_gate" :foreign-dataref))
+        (inst mov seh-frame (make-fixup "uwp_seh_handler_gate" :foreign-dataref))
         (storew seh-frame
                 new-uwp unwind-block-seh-frame-handler-slot))
       (inst lea seh-frame

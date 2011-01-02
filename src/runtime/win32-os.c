@@ -412,18 +412,15 @@ extern void undefined_alien_function(); /* see interrupt.c */
 void os_link_runtime()
 {
     lispobj head;
-    void *link_target = (void*)(intptr_t)0x21010000;
+    void *link_target = (void*)(intptr_t)LINKAGE_TABLE_SPACE_START;
     u32 nsymbol;
     lispobj symbol_name;
     char *namechars;
     char namecopy[256];
-    char *dlsymname;
     u32 namelength;
     char *at;
     void *myself = GetModuleHandleW(NULL);
     HMODULE buildTimeImages[16] = {myself};
-    u32 entry_size;
-    u32 space_size;
     boolean datap;
     u32 i;
     /* Somewhat arbitrary (and DLL topic itself is dirty on
@@ -443,22 +440,17 @@ void os_link_runtime()
         }
     }
 
-    /* How much space do we need? */
-    for (head = SymbolValue(REQUIRED_RUNTIME_C_SYMBOLS,0), space_size = 0u;
-         head!=NIL; space_size += fixnum_value(cdr(car(head))),head = cdr(head));
-
-    os_validate(link_target, space_size);
-    os_validate_recommit(link_target, space_size);
-
     for (head = SymbolValue(REQUIRED_RUNTIME_C_SYMBOLS,0);
          head!=NIL; head = cdr(head))
     {
         int linked = 0;
 	lispobj item = car(head);
 
-	entry_size = fixnum_value(cdr(item));
+	if (PTR_IS_ALIGNED(link_target,os_vm_page_size)) {
+	    os_validate_recommit(link_target,os_vm_page_size);
+	}
         symbol_name = car(item);
-	datap = (entry_size == (sizeof (lispobj)));
+	datap = (NIL!=(cdr(item)));
 	
         namechars = (void*)(intptr_t)FOTHERPTR(symbol_name,vector).data;
         namelength = fixnum_value(FOTHERPTR(symbol_name,vector).length);
@@ -470,10 +462,8 @@ void os_link_runtime()
         /* no stdcall mangling when ll/gpa */
         if ((at = strrchr(namecopy,'@'))) { (*at) = 0; }
 
-	dlsymname = namecopy + (datap? 2 : 1);
-	
         for (i=0u; i<nlibraries; ++i) {
-            void* result = GetProcAddress(buildTimeImages[i], dlsymname);
+            void* result = GetProcAddress(buildTimeImages[i], namecopy);
             if (result) {
                 if (dyndebug_runtime_link) {
                     fprintf(dyndebug_output,
@@ -481,7 +471,7 @@ void os_link_runtime()
                             link_target, namecopy, result);
                 }
 		if (datap) 
-		    *(void**)link_target = result;
+		    arch_write_linkage_table_ref(link_target,result);
 		else
 		    arch_write_linkage_table_jmp(link_target,result);
                 break;
@@ -494,14 +484,13 @@ void os_link_runtime()
 			link_target, namecopy);
             }
 	    if (datap)
-		*(void**)link_target = undefined_alien_address;
+		arch_write_linkage_table_ref(link_target,undefined_alien_address);
 	    else
 		arch_write_linkage_table_jmp(link_target,undefined_alien_function);
 		
         }
-	link_target += entry_size;
+	link_target = (void*)(((uintptr_t)link_target)+LINKAGE_TABLE_ENTRY_SIZE);
     }
-    /* exit(111); */
 }
 
 #endif

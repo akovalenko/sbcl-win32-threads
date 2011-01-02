@@ -301,7 +301,7 @@
           ;; nonexisting, so we check once more with native API.
           (unless existsp
             (when (sb!win32:close-handle
-                   (sb!win32:create-file filename 0 0 nil
+                   (sb!win32:create-file filename 0 7 nil
                                          sb!win32:file-open-existing
                                          0 0))
               (setf existsp t)

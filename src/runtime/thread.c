@@ -316,18 +316,14 @@ new_thread_trampoline(struct thread *th)
     result = funcall0(function);
 
     /* Block GC */
-    pthread_np_publish_context(NULL);
     block_blockable_signals(0, 0);
-    set_thread_state(th, STATE_DEAD);
-
     /* SIG_STOP_FOR_GC is blocked and GC might be waiting for this
      * thread, but since we are already dead it won't wait long. */
-
-    gc_assert(lock_ret == 0);
-
     gc_alloc_update_page_tables(BOXED_PAGE_FLAG, &th->alloc_region);
-    gc_assert(lock_ret == 0);
+
+    set_thread_state(th, STATE_DEAD);
     lock_ret = pthread_mutex_lock(&all_threads_lock);
+    gc_assert(lock_ret == 0);
     unlink_thread(th);
     pthread_mutex_unlock(&all_threads_lock);
 
@@ -339,13 +335,8 @@ new_thread_trampoline(struct thread *th)
     pthread_mutex_destroy(th->state_lock);
     pthread_cond_destroy(th->state_cond);
 
-#if defined(LISP_FEATURE_WIN32)
     os_invalidate_free((os_vm_address_t)th->interrupt_data,
                   (sizeof (struct interrupt_data)));
-#else
-    os_invalidate((os_vm_address_t)th->interrupt_data,
-                  (sizeof (struct interrupt_data)));
-#endif
 
 #if defined(LISP_FEATURE_WIN32)
     for (i = 0; i<

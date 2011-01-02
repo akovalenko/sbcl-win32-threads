@@ -1934,26 +1934,19 @@ core and return a descriptor to it."
 
 #!+sb-dynamic-core
 (progn
-  (defparameter *dyncore-address* #x21010000)
-  (defparameter *dyncore-symbols* nil)
-  (defparameter *dyncore-hashes* (vector (make-hash-table :test 'equal)
-					 (make-hash-table :test 'equal)))
+  (defparameter *dyncore-address* sb!vm::linkage-table-space-start)
+  (defparameter *dyncore-linkage-keys* nil)
+  (defparameter *dyncore-table* (make-hash-table :test 'equal))
 
   (defun dyncore-note-symbol (symbol-name datap)
     "Register a symbol and return its address in proto-linkage-table."
-    (let ((symbol-name (extern-alien-name symbol-name))
-	  (table (svref *dyncore-hashes* (if datap 0 1)))
-	  (entry-size (if datap
-			  sb!vm::n-word-bytes
-			  sb!vm::linkage-table-entry-size)))
-      (or (gethash symbol-name table)
-          (let ((new-address *dyncore-address*))
-            (incf *dyncore-address* entry-size)
-            (setf (gethash symbol-name table) new-address)
-            (push (cons symbol-name entry-size) *dyncore-symbols*)
-	    (setf (gethash symbol-name *cold-foreign-symbol-table*)
-		  new-address)
-            (return-from dyncore-note-symbol new-address))))))
+    (let ((key (cons symbol-name datap)))
+      (symbol-macrolet ((entry (gethash key *dyncore-table*)))
+	(or entry
+	    (setf entry
+		  (prog1 *dyncore-address*
+		    (push key *dyncore-linkage-keys*)
+		    (incf *dyncore-address* sb!vm::linkage-table-entry-size))))))))
 
 ;;; *COLD-FOREIGN-SYMBOL-TABLE* becomes *!INITIAL-FOREIGN-SYMBOLS* in
 ;;; the core. When the core is loaded, !LOADER-COLD-INIT uses this to
@@ -1962,20 +1955,22 @@ core and return a descriptor to it."
 (defun foreign-symbols-to-core ()
   (let ((symbols nil)
         (result *nil-descriptor*))
-    (maphash (lambda (symbol value)
-               (push (cons symbol value) symbols))
-             *cold-foreign-symbol-table*)
-    (setq symbols (sort symbols #'string< :key #'car))
-    (dolist (symbol symbols)
-      (cold-push (cold-cons (base-string-to-core (car symbol))
-                            (number-to-core (cdr symbol)))
-                 result))
+    #!-sb-dynamic-core
+    (progn 
+      (maphash (lambda (symbol value)
+		 (push (cons symbol value) symbols))
+	       *cold-foreign-symbol-table*)
+      (setq symbols (sort symbols #'string< :key #'car))
+      (dolist (symbol symbols)
+	(cold-push (cold-cons (base-string-to-core (car symbol))
+			      (number-to-core (cdr symbol)))
+		   result)))
     (cold-set (cold-intern 'sb!kernel:*!initial-foreign-symbols*) result)
-    #!+sb-dynamic-core t
+    #!+sb-dynamic-core
     (let ((runtime-linking-list *nil-descriptor*))
-      (dolist (symbol (copy-list *dyncore-symbols*))
+      (dolist (symbol *dyncore-linkage-keys*)
         (cold-push (cold-cons (base-string-to-core (car symbol))
-                              (number-to-core (cdr symbol)))
+                              (cdr symbol))
                    runtime-linking-list))
       (cold-set (cold-intern 'sb!vm::*required-runtime-c-symbols*)
                 runtime-linking-list)))

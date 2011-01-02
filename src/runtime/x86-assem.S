@@ -161,6 +161,39 @@ Lfinish_call_into_c:
 #endif	
 	SIZE(GNAME(call_into_c))
 
+	
+	.globl GNAME(call_into_c_fp_result)
+	TYPE(GNAME(call_into_c_fp_result))
+GNAME(call_into_c_fp_result):
+	cld
+/* Setup the NPX for C */
+	CLEAR_FPU_STACK
+#if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
+	movl	(%esp),%ebx /* return lisp addr */
+	subl	$4,%esp
+	movl	%ecx,(%esp) /* top == our callee, top+1 == finish */ 
+	movl	$Lfinish_call_into_c_fp_result, 4(%esp)
+	jmp	GNAME(gc_enter_safe_region) /* esr => callee => */
+Lfinish_call_into_c_fp_result:	
+	call	GNAME(gc_leave_region)
+#else	
+/* Save the return Lisp address in ebx. */
+	popl	%ebx
+	call	*%eax		  # normal callout using Lisp stack
+#endif
+	fldz;fldz;fldz;fldz;fldz;fldz;fldz;
+	fxch	%st(7)
+#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
+	movl	%fs:0xE10+4*63,%eax
+	fldcw	THREAD_SAVED_LISP_FPU_MODE_OFFSET(%eax)
+	incb	THREAD_IN_LISP_FPU_MODE_OFFSET(%eax)
+#endif	
+/* Return. */
+	jmp	*%ebx
+	
+	SIZE(GNAME(call_into_c))
+	
+	
 	.text	
 	.globl GNAME(call_into_lisp_first_time)
 	TYPE(GNAME(call_into_lisp_first_time))

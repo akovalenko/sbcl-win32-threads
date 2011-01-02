@@ -90,10 +90,6 @@
          (condition-name (cdr (assoc code *exception-code-map*)))
          (sb!debug:*stack-top-hint*
           (nth-value 1 (sb!kernel:find-interrupted-name-and-frame))))
-    (when (eql +exception-flt-stack-check+ code)
-      (format t "Floating stack check at ~X~%"
-              (slot record 'exception-address))
-      (sb!debug:backtrace))
     (when (and (eql code +exception-access-violation+)
                (> number-parameters 1)
                (sap= (sap-ref-sap
@@ -103,7 +99,21 @@
                                    system-area-pointer)))
       (setf condition-name 'sb!kernel::undefined-alien-variable-error))
     (if condition-name
-        (error condition-name)
+        (typecase condition-name
+	  (string
+	     (error "~S at ~S info ~S eip ~S"
+		    condition-name
+		    (slot record 'exception-address)
+		    (sap-ref-sap
+                      (alien-sap (addr (slot record 'exception-information)))
+                      (alien-size system-area-pointer :bytes))
+		    (sap-ref-sap
+		     (alien-funcall (extern-alien "os_context_pc_addr"
+						  (function system-area-pointer
+							    system-area-pointer))
+				    context-sap) 0)))
+	  (t
+	     (error condition-name)))
         (error "An exception occurred in context ~S: ~S. (Exception code: ~S)"
                context-sap exception-record-sap code))))
 

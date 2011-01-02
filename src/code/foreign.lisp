@@ -16,8 +16,8 @@
 
 (defun extern-alien-name (name)
   (handler-case
-      #!-win32 (coerce name 'base-string)
-      #!+win32 (concatenate 'base-string "_" name)
+      #!-(and win32 (not sb-dynamic-core)) (coerce name 'base-string)
+      #!+(and win32 (not sb-dynamic-core)) (concatenate 'base-string "_" name)
     (error ()
       (error "invalid external alien name: ~S" name))))
 
@@ -54,14 +54,9 @@ Dynamic symbols are entered into the linkage-table if they aren't there already.
 
 On non-linkage-table ports signals an error if the symbol isn't found."
   (declare (ignorable datap))
-  (when (and datap (char/= #\* (aref name 0)))
-    (let* ((star-name (concatenate 'base-string "*" name))
-	   (star-address
-	    (find-foreign-symbol-in-table
-	     star-name *static-foreign-symbols*)))
-      (when star-address
-	(return-from foreign-symbol-address
-	  (values star-address t)))))
+  #!+sb-dynamic-core
+  (values (ensure-foreign-symbol-linkage name datap) t)
+  #!-sb-dynamic-core
   (let ((static (find-foreign-symbol-in-table name *static-foreign-symbols*)))
     (if static
         (values static nil)
@@ -89,7 +84,6 @@ if the symbol isn't found."
   #!+linkage-table
   (multiple-value-bind (addr sharedp)
       (foreign-symbol-address symbol datap)
-    ;; (aver (not sharedp))
     ;; If the address is from linkage-table and refers to data
     ;; we need to do a bit of juggling. It is not the address of the
     ;; variable, but the address where the real address is stored.
@@ -98,37 +92,9 @@ if the symbol isn't found."
         (int-sap addr))))
 
 #-sb-xc-host
-(defun raise-undefined-runtime-symbols ()
-  (flet ((jump-target (sap)
-	   (sap+ sap  (+ (signed-sap-ref-word sap 1) 1 sb!vm::n-word-bytes))))
-    (let ((undefined-data-sap
-	   (sap-ref-sap (foreign-symbol-sap "undefined_alien_address" t) 0))
-	  (undefined-function-sap
-	   (jump-target (foreign-symbol-sap "undefined_alien_function")))
-	  (name-prefix-length (1- (length (extern-alien-name "t")))))
-      (flet ((maybe-raise-undefined (name address)
-	       (if (char= #\* (aref name name-prefix-length))
-		   (let* ((runtime-linkage-sap (int-sap address))
-			  (provided-sap (sap-ref-sap runtime-linkage-sap 0)))
-		     (when (sap= provided-sap undefined-data-sap)
-		       (setf (gethash
-			      (cons (subseq name
-					    (1+ name-prefix-length)) t)
-			      *linkage-info*)
-			     (make-linkage-info :address address :datap t))))
-		   (let ((bare-name (subseq name name-prefix-length)))
-		     (when (sap= (jump-target (foreign-symbol-sap bare-name))
-				 undefined-function-sap)
-		       (setf (gethash (cons bare-name nil) *linkage-info*)
-			     (make-linkage-info :address address :datap nil)))))))
-	(maphash #'maybe-raise-undefined *static-foreign-symbols*)))))
-
-#-sb-xc-host
 (defun foreign-reinit ()
   #!+os-provides-dlopen
   (reopen-shared-objects)
-  #!+sb-dynamic-core
-  (raise-undefined-runtime-symbols)
   #!+linkage-table
   ;; Don't warn about undefined aliens on startup. The same core can
   ;; reasonably be expected to work with different versions of the
@@ -214,8 +180,16 @@ if the symbol isn't found."
 
 #-sb-xc-host
 (defun !foreign-cold-init ()
+  #!-sb-dynamic-core
   (dolist (symbol *!initial-foreign-symbols*)
     (setf (gethash (car symbol) *static-foreign-symbols*) (cdr symbol)))
+  #!+sb-dynamic-core
+  (loop for table-address from sb!vm::linkage-table-space-start
+	  by sb!vm::linkage-table-entry-size
+	  and reference in sb!vm::*required-runtime-c-symbols*
+	do (setf (gethash reference *linkage-info*)
+		 (make-linkage-info :datap (cdr reference)
+		      :address table-address)))
   #!+os-provides-dlopen  
   (setf *runtime-dlhandle* (dlopen-or-lose))
   #!+os-provides-dlopen
