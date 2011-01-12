@@ -1306,8 +1306,6 @@ void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
     boolean maybe_wake = 0;
     DWORD lastError = GetLastError();
 
-    check_pending_gc();
-
     pthread_mutex_lock(self->state_lock);
     self->csp_around_foreign_call = csp;
     self->pc_around_foreign_call = pc;

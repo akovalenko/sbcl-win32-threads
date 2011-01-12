@@ -4788,11 +4788,8 @@ general_alloc(long nbytes, int page_type_flag)
 lispobj *
 alloc(long nbytes)
 {
-  lispobj* obj;
   gc_assert(get_pseudo_atomic_atomic(arch_os_get_current_thread()));
-
-  obj = general_alloc(nbytes, BOXED_PAGE_FLAG);
-  return obj;
+  return general_alloc(nbytes, BOXED_PAGE_FLAG);
 }
 
 /*
