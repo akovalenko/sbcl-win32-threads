@@ -768,8 +768,10 @@ void fff_foreign_callback( void *v_info_ptr)
 
     x87_fldcw(self->saved_c_fpu_mode>>16);
 
+    BEGIN_GC_UNSAFE_CODE;
     funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,self),
              LISPOBJ(args[0]),LISPOBJ(args[1]),LISPOBJ(args[2]));
+    END_GC_UNSAFE_CODE;
 
     /* Even if our return type is float or double, it's loaded into
      * fr0 by alien callback assembler wrapper, which expects FPU
@@ -799,10 +801,9 @@ void fff_generic_callback(lispobj arg0,lispobj arg1, lispobj arg2)
     struct thread* th = arch_os_get_current_thread();
     pthread_t companion_fiber;
     if (th) {
-	struct gcing_safety safety;
-	push_gcing_safety(&safety);
+	BEGIN_GC_UNSAFE_CODE;
         funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,th),arg0,arg1,arg2);
-	pop_gcing_safety(&safety,0);
+	END_GC_UNSAFE_CODE;
     } else {
         /* It is a foreign thread */
         pthread_np_notice_thread();
@@ -1639,7 +1640,6 @@ handle_exception(EXCEPTION_RECORD *exception_record,
     
     struct thread* self = arch_os_get_current_thread();
     int contextual_fpu_state = self ? self->in_lisp_fpu_mode : 0;
-    struct gcing_safety safety;
 
     lastError = GetLastError();
     
@@ -1783,9 +1783,9 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 	/* We are doing a displaced instruction. At least function
 	 * end breakpoints uses this. */
 
-	push_gcing_safety(&safety);
+	BEGIN_GC_UNSAFE_CODE;	/* todo is it really gc-unsafe? */
 	restore_breakpoint_from_single_step(&ctx);
-	pop_gcing_safety(&safety,0);
+	END_GC_UNSAFE_CODE;
 	goto finish;
     }
     if (IS_TRAP_EXCEPTION(exception_record, ctx)) {
@@ -1813,9 +1813,11 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 	    (lispobj *)*os_context_sp_addr(&ctx);
 
 	block_blockable_signals(0,&ctx.sigmask);
-	push_gcing_safety(&safety);
+
+	BEGIN_GC_UNSAFE_CODE;
 	handle_trap(&ctx, trap);
-	pop_gcing_safety(&safety,0);
+	END_GC_UNSAFE_CODE;
+	
 	thread_sigmask(SIG_SETMASK,&ctx.sigmask,NULL);
 
 	goto finish;
@@ -1877,7 +1879,7 @@ complain:
 	 * anyway. */
 
 	fake_foreign_function_call(&ctx);
-	push_gcing_safety(&safety);
+	BEGIN_GC_UNSAFE_CODE;
 
 	/* Allocate the SAP objects while the "interrupts" are still
 	 * disabled. */
@@ -1893,7 +1895,7 @@ complain:
 		 exception_record_sap);
 
 	/* If Lisp doesn't nlx, we need to put things back. */
-	pop_gcing_safety(&safety,0);
+	END_GC_UNSAFE_CODE;
 	undo_fake_foreign_function_call(&ctx);
 	thread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
 	/* FIXME: HANDLE-WIN32-EXCEPTION should be allowed to decline */

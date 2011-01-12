@@ -352,25 +352,25 @@ void push_gcing_safety(struct gcing_safety *into)
     if ((into->csp_around_foreign_call = th->csp_around_foreign_call)) {
 	gc_leave_foreign_call();
     }
-    odxprint(safepoints, "push_gcing_safety at %p in %p [csp %p => csp %p]",
-	     __builtin_return_address(0),
-	     th, into->csp_around_foreign_call,
-	     th->csp_around_foreign_call);
 }
 
 static inline
-void pop_gcing_safety(struct gcing_safety *from, boolean test_gc_page)
+void pop_gcing_safety(struct gcing_safety *from)
 {
     struct thread* th = arch_os_get_current_thread();
     if (from->csp_around_foreign_call) {
 	gc_enter_foreign_call(from->csp_around_foreign_call,
 			      from->pc_around_foreign_call);
     }
-    odxprint(safepoints, "pop_gcing_safety at %p in %p [csp %p <= csp %p]",
-	     __builtin_return_address(0),
-	     th, from->csp_around_foreign_call,
-	     th->csp_around_foreign_call);
 }
+
+#define BEGIN_GC_UNSAFE_CODE			\
+    { struct gcing_safety sbcl__gc_safety;	\
+    push_gcing_safety(&sbcl__gc_safety);
+
+#define END_GC_UNSAFE_CODE			\
+    pop_gcing_safety(&sbcl__gc_safety);		\
+    }
 
 #endif
 

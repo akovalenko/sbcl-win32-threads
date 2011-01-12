@@ -1127,22 +1127,23 @@ int check_pending_gc()
 	       && get_pseudo_atomic_interrupted(self)) */
             /*     clear_pseudo_atomic_interrupted(self); */
             block_deferrable_signals(NULL,&sigset);
-            struct gcing_safety safety;
-	    push_gcing_safety(&safety);
-            lispobj gc_happened = funcall0(StaticSymbolFunction(SUB_GC));
-	    pop_gcing_safety(&safety,0);
+	    lispobj gc_happened;
+	    BEGIN_GC_UNSAFE_CODE;
+	    gc_happened = funcall0(StaticSymbolFunction(SUB_GC));
+	    END_GC_UNSAFE_CODE;
+		
 	    int concurrency = fixnum_value(self->tls_cookie);
 	    self->tls_cookie = 0;
             unbind_variable(IN_SAFEPOINT,self);
             thread_sigmask(SIG_SETMASK,&sigset,NULL);
 
             if (gc_happened == T) {
-		struct gcing_safety safety;
-		push_gcing_safety(&safety);
 		if (SymbolValue(INTERRUPTS_ENABLED,self) == T ||
-		    SymbolValue(ALLOW_WITH_INTERRUPTS,self) == T)
+		    SymbolValue(ALLOW_WITH_INTERRUPTS,self) == T) {
+		    BEGIN_GC_UNSAFE_CODE;
 		    funcall0(StaticSymbolFunction(POST_GC));
-		pop_gcing_safety(&safety,0);
+		    END_GC_UNSAFE_CODE;
+		}
                 done = 1;
             }
             if (concurrency>0 &&
@@ -1173,10 +1174,11 @@ int check_pending_interrupts()
   SetSymbolValue(INTERRUPT_PENDING, NIL, p);
   oldset = pself->blocked_signal_set;
   pself->blocked_signal_set = deferrable_sigset;
-  struct gcing_safety safety;
-  push_gcing_safety(&safety);
+
+  BEGIN_GC_UNSAFE_CODE;
   funcall0(StaticSymbolFunction(RUN_INTERRUPTION));
-  pop_gcing_safety(&safety,0);
+  END_GC_UNSAFE_CODE;
+
   pself->blocked_signal_set = oldset;
   return 1;
 }
