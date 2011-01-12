@@ -766,7 +766,7 @@ void fff_foreign_callback( void *v_info_ptr)
     asm("ffree %st(0);");
 
 
-    x87_fldcw(self->saved_c_fpu_mode>>16);
+    x87_fldcw(self->saved_c_fpu_mode);
 
     BEGIN_GC_UNSAFE_CODE;
     funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,self),
@@ -1346,7 +1346,7 @@ extern boolean internal_errors_enabled;
  {
      struct thread* th = arch_os_get_current_thread();
      if (fpu_world_unknown_p()) {
-         x87_fldcw(th->saved_c_fpu_mode>>16);
+         x87_fldcw(th->saved_c_fpu_mode);
 	 asm("ffree %st(7);");
 	 asm("ffree %st(6);");
 	 asm("ffree %st(5);");
@@ -1361,8 +1361,8 @@ extern boolean internal_errors_enabled;
      if (fpu_world_lispy_p()) {
          unsigned int mode;
 	 asm("fnstcw %0": "=m"(mode));
-         th->saved_lisp_fpu_mode = mode <<16;
-         x87_fldcw(th->saved_c_fpu_mode>>16);
+         th->saved_lisp_fpu_mode = mode;
+         x87_fldcw(th->saved_c_fpu_mode);
 	 asm("fstp %st(0); fstp %st(0)");
 	 asm("fstp %st(0); fstp %st(0)");
 	 asm("fstp %st(0); fstp %st(0)");
@@ -1414,7 +1414,7 @@ extern boolean internal_errors_enabled;
 	 x87_env nice_fpu_environment = {
 	     .control = (lispyp ?
 			 this_thread->saved_lisp_fpu_mode :
-			 this_thread->saved_c_fpu_mode)>>16,
+			 this_thread->saved_c_fpu_mode),
 	     .status = 0,
 	     .tags = (lispyp ? 0x5555 : 0xFFFF)
 	 };
@@ -1740,14 +1740,14 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 
 	*((contextual_fpu_state ?
 	   &self->saved_lisp_fpu_mode :
-	   &self->saved_c_fpu_mode)) = (context->FloatSave.ControlWord & 0xFFFF)<<16;
+	   &self->saved_c_fpu_mode)) = (context->FloatSave.ControlWord & 0xFFFF);
 
 	contextual_fpu_state = contextual_fpu_state^4; /* inverted */
 
 	context->FloatSave.ControlWord =
 	    *(contextual_fpu_state ?
 	      &self->saved_lisp_fpu_mode :
-	      &self->saved_c_fpu_mode)>>16;
+	      &self->saved_c_fpu_mode);
 
 
 	context->FloatSave.StatusWord &= ~(0x3941);

@@ -258,7 +258,7 @@ GNAME(call_into_c_fp_result):
 	fldt	(%esp)			    /* and topmost one */
 #ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
 	movl	SBCL_THREAD_BASE_EA, %esi
-	fldcw	THREAD_SAVED_LISP_FPU_MODE_OFFSET+2(%esi)
+	fldcw	THREAD_SAVED_LISP_FPU_MODE_OFFSET(%esi)
 	or	$4, THREAD_IN_LISP_FPU_MODE_OFFSET(%esi)
 #endif	
 	jmp	*%ebx	/* without stack adjustment (esp overwrite allowed) */
@@ -270,7 +270,7 @@ GNAME(call_into_c_fp_result):
 	fxch	%st(7)
 #ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
 	movl	SBCL_THREAD_BASE_EA,%eax
-	fldcw	THREAD_SAVED_LISP_FPU_MODE_OFFSET+2(%eax)
+	fldcw	THREAD_SAVED_LISP_FPU_MODE_OFFSET(%eax)
 	or	$4, THREAD_IN_LISP_FPU_MODE_OFFSET(%eax)
 #endif	
 /* Return. */

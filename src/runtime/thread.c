@@ -302,7 +302,7 @@ new_thread_trampoline(struct thread *th)
     struct lisp_exception_frame exception_frame;
 #endif
 #if defined(LISP_FEATURE_SB_AUTO_FPU_SWITCH)
-    x87_fldcw(th->saved_c_fpu_mode>>16);
+    x87_fldcw(th->saved_c_fpu_mode);
 #endif
     FSHOW((stderr,"/creating thread %lu\n", thread_self()));
     wos_install_interrupt_handlers(&exception_frame);
@@ -756,9 +756,9 @@ create_thread_struct(lispobj initial_function) {
 	    th->saved_c_fpu_mode = parent->saved_c_fpu_mode;
 	    th->saved_lisp_fpu_mode = parent->saved_lisp_fpu_mode;
 	} else {
-	    th->saved_c_fpu_mode = (x87_fnstcw() & ~1)<<16;
+	    th->saved_c_fpu_mode = (x87_fnstcw() & ~1);
 	    th->saved_lisp_fpu_mode =
-		((th->saved_c_fpu_mode & 0xf2ff0000) | 0x02000000);
+		((th->saved_c_fpu_mode & 0xf2ff) | 0x0200);
 	}
     }
     th->gc_safepoint_context = 0;
@@ -1302,12 +1302,14 @@ void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
 
     pthread_mutex_lock(self->state_lock);
     self->csp_around_foreign_call = csp;
-    self->pc_around_foreign_call = (void*)(((uintptr_t)pc)&~3);
+    self->pc_around_foreign_call = pc;
     maybe_wake = gc_adjust_thread_state(self);
+    gc_accept_thread_state(maybe_wake);
     pthread_mutex_unlock(self->state_lock);
     
     if (maybe_wake)
-	gc_wake_wakeable();
+    	gc_wake_wakeable();
+
 
     SetLastError(lastError);
     /* Proceed to foreign code, while possibly being in suspended

@@ -155,7 +155,8 @@ case "$sbcl_os" in
         ;;
     win32)
         printf ' :win32' >> $ltf
-        printf ' :sb-pthread-futex' >> $ltf
+	# Native :-]
+        # printf ' :sb-pthread-futex' >> $ltf
 	printf ' :sb-thread' >> $ltf
 	printf ' :sb-foreign-thread' >> $ltf
 	printf ' :sb-auto-fpu-switch' >> $ltf

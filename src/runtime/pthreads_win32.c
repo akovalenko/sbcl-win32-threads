@@ -608,11 +608,14 @@ void pthread_np_add_pending_signal(pthread_t thread, int signum)
   thread->signal_is_pending[signum] = 1;
 }
 
+static void futex_interrupt(pthread_t thread);
+
 /* This pthread_kill doesn't do anything to notify target pthread of a
    new pending signal. */
 int pthread_kill(pthread_t thread, int signum)
 {
   pthread_np_add_pending_signal(thread,signum);
+  futex_interrupt(thread);
   return 0;
 }
 
@@ -860,11 +863,20 @@ int pthread_cond_signal(pthread_cond_t *cv)
   return 0;
 }
 
-void cv_wakeup_add(struct pthread_cond_t* cv, struct thread_wakeup* w)
+/* Return value is used for futexes: 0=ok, or EWOULDBLOCK on state change. */
+int cv_wakeup_add(struct pthread_cond_t* cv, struct thread_wakeup* w)
 {
   HANDLE event = cv->get_fn();
   w->next = NULL;
   pthread_mutex_lock(&cv->wakeup_lock);
+  if (w->uaddr) {
+      if (w->uval != *w->uaddr) {
+	  pthread_mutex_unlock(&cv->wakeup_lock);
+	  return 1;
+      }
+      pthread_self()->futex_wakeup = w;
+  }
+  
   w->event = event;
   if (cv->last_wakeup == w) {
     fprintf(stderr, "cv->last_wakeup == w\n");
@@ -882,6 +894,7 @@ void cv_wakeup_add(struct pthread_cond_t* cv, struct thread_wakeup* w)
     cv->last_wakeup = w;
   }
   pthread_mutex_unlock(&cv->wakeup_lock);
+  return 0;
 }
 
 /* Return true if wakeup found, false if missing */
@@ -916,6 +929,7 @@ int cv_wakeup_remove(struct pthread_cond_t* cv, struct thread_wakeup* w)
 int pthread_cond_wait(pthread_cond_t * cv, pthread_mutex_t * cs)
 {
   struct thread_wakeup w;
+  w.uaddr = 0;
   cv_wakeup_add(cv, &w);
   if (cv->last_wakeup->next == cv->last_wakeup) {
     fprintf(stderr, "cv->last_wakeup->next == cv->last_wakeup\n");
@@ -947,13 +961,17 @@ int pthread_cond_timedwait(pthread_cond_t * cv, pthread_mutex_t * cs, const stru
 {
   DWORD rv;
   struct thread_wakeup w;
+  pthread_t self = pthread_self();
+
+  w.uaddr = 0;
   cv_wakeup_add(cv, &w);
   if (cv->last_wakeup->next == cv->last_wakeup) {
     fprintf(stderr, "cv->last_wakeup->next == cv->last_wakeup\n");
     ExitProcess(0);
   }
-  pthread_self()->waiting_cond = cv;
+  self->waiting_cond = cv;
   DEBUG_RELEASE(*cs);
+  /* barrier (release); waiting_cond globally visible */
   pthread_mutex_unlock(cs);
   {
     struct timeval cur_tm;
@@ -969,7 +987,8 @@ int pthread_cond_timedwait(pthread_cond_t * cv, pthread_mutex_t * cs, const stru
       rv = WaitForSingleObject(w.event, msec);
     }
   }
-  pthread_self()->waiting_cond = NULL;
+  self->waiting_cond = NULL;
+
   if (rv == WAIT_TIMEOUT) {
     if (!cv_wakeup_remove(cv, &w)) {
       /* Someone removed our wakeup record: though we got a timeout,
@@ -1006,6 +1025,8 @@ void pthread_unlock_structures()
 
 static int pthread_initialized = 0;
 
+static pthread_cond_t futex_pseudo_cond;
+
 void pthreads_win32_init()
 {
   if (!pthread_initialized) {
@@ -1013,6 +1034,7 @@ void pthreads_win32_init()
     pthread_mutex_init(&mutex_init_lock, NULL);
     pthread_np_notice_thread();
     pthread_key_create(&cv_event_key,cv_event_destroy);
+    pthread_cond_init(&futex_pseudo_cond, NULL);
     pthread_initialized = 1;
   }
 }
@@ -1277,3 +1299,98 @@ int sigpending(sigset_t *set)
   return 0;
 }
 
+
+#define FUTEX_EWOULDBLOCK 3
+#define FUTEX_EINTR 2
+#define FUTEX_ETIMEDOUT 1
+
+int
+futex_wait(volatile int *lock_word, int oldval, long sec, unsigned long usec)
+{
+  struct thread_wakeup w;
+  pthread_t self = pthread_self();
+  DWORD msec = sec<0 ? INFINITE : (sec*1000 + usec/1000);
+  DWORD wfso;
+  int result;
+  sigset_t pendset, blocked;
+  int maybeINTR;
+
+  w.uaddr = lock_word;
+  w.uval = oldval;
+  
+  if (cv_wakeup_add(&futex_pseudo_cond,&w)) {
+      return FUTEX_EWOULDBLOCK;
+  }
+  self->futex_wakeup = &w;
+  wfso = WaitForSingleObject(w.event, msec);
+  self->futex_wakeup = NULL;
+  sigpending(&pendset);
+  maybeINTR = (pendset & ~self->blocked_signal_set)? FUTEX_EINTR : 0;
+
+  switch(wfso) {
+  case WAIT_TIMEOUT:
+      if (!cv_wakeup_remove(&futex_pseudo_cond,&w)) {
+	  result = maybeINTR;
+      } else {
+	  result = FUTEX_ETIMEDOUT;
+      }
+      break;
+  case WAIT_OBJECT_0:
+      result = maybeINTR;
+      break;
+  default:
+      result = -1;
+      break;
+  }
+  return result;
+}
+
+int
+futex_wake(volatile int *lock_word, int n)
+{
+    pthread_cond_t *cv = &futex_pseudo_cond;
+    int result = 0;
+    struct thread_wakeup *w, *prev;
+    if (n==0) return 0;
+    
+    pthread_mutex_lock(&cv->wakeup_lock);
+    for (w = cv->first_wakeup, prev = NULL; w && n;) {
+	if (w->uaddr == lock_word) {
+	    HANDLE event = w->event;
+	    if (cv->last_wakeup == w)
+		cv->last_wakeup = prev;
+	    w = w->next;
+	    if (!prev) {
+		cv->first_wakeup = w;
+	    } else {
+		prev->next = w;
+	    }
+	    n--;
+	    SetEvent(event);
+	} else {
+	    prev=w, w=w->next;
+	}
+    }
+    pthread_mutex_unlock(&cv->wakeup_lock);
+    return 0;
+}
+
+
+static void futex_interrupt(pthread_t thread)
+{
+    if (thread->futex_wakeup) {
+	pthread_cond_t *cv = &futex_pseudo_cond;
+	struct thread_wakeup *w;
+	HANDLE event;
+	pthread_mutex_lock(&cv->wakeup_lock);
+	if ((w = thread->futex_wakeup)) {
+	    /* we are taking wakeup_lock recursively - ok with
+	       CRITICAL_SECTIONs */
+	    event = w->event;
+	    thread->futex_wakeup = NULL;
+	    cv_wakeup_remove(&futex_pseudo_cond,w);
+	}
+	pthread_mutex_unlock(&cv->wakeup_lock);
+	if (w) SetEvent(event);
+    }
+}

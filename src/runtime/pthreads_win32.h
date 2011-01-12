@@ -129,6 +129,8 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex);
 typedef struct thread_wakeup {
   HANDLE event;
   struct thread_wakeup *next;
+  volatile int *uaddr;
+  int uval;
 } thread_wakeup;
 
 typedef HANDLE (*cv_event_get_fn)();
@@ -188,6 +190,7 @@ typedef struct pthread_thread {
   void* arg;
   HANDLE handle;
   pthread_cond_t *waiting_cond;
+  void *futex_wakeup;
   sigset_t blocked_signal_set;
   unsigned int signal_is_pending[NSIG];
   void * retval;
@@ -321,6 +324,11 @@ int sigismember(const sigset_t *set, int signum);
 
 typedef int sig_atomic_t;
 
+/* Futexes */
+int futex_wait(volatile int *lock_word, int oldval, long sec, unsigned long usec);
+int futex_wake(volatile int *lock_word, int n);
+
+
 #ifndef PTHREAD_INTERNALS
 static inline int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset)
 {
@@ -347,6 +355,29 @@ static inline int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset
   pthread_mutex_lock_annotate_np(mutex, __FILE__, __LINE__ )
 #define pthread_mutex_trylock(mutex)            \
   pthread_mutex_trylock_annotate_np(mutex, __FILE__ ,__LINE__)
-#endif
-#endif
-#endif
+#else
+
+/* I'm not after inlinining _everything_, but those two things below are
+   (1) fast, (2) critical (3) short */
+static inline int pthread_mutex_lock_np_inline(pthread_mutex_t *mutex)
+{
+    if ((*mutex) == PTHREAD_MUTEX_INITIALIZER) {
+	return pthread_mutex_lock(mutex);
+    } else {
+	EnterCriticalSection(&(*mutex)->cs);
+	return 0;
+    }
+}
+
+static inline int pthread_mutex_unlock_np_inline(pthread_mutex_t *mutex)
+{
+    LeaveCriticalSection(&(*mutex)->cs);
+    return 0;
+}
+
+#define pthread_mutex_lock(mutex) pthread_mutex_lock_np_inline(mutex)
+#define pthread_mutex_unlock(mutex) pthread_mutex_unlock_np_inline(mutex)
+
+#endif	/* !PTHREAD_DEBUG_OUTPUT */
+#endif	/* !PTHREAD_INTERNALS */
+#endif	/* WIN32_PTHREAD_INCLUDED */
