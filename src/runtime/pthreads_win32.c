@@ -11,8 +11,14 @@
   fprintf(stderr,fmt "\n", __VA_ARGS__);        \
   fflush(stderr);                               \
   } while (0)
+
+#define DEBUG_OWN(cs) do {(cs)->owner=pthread_self(); } while(0)
+#define DEBUG_RELEASE(cs) do {(cs)->owner=0;} while(0)
+
 #else
 #define pthshow(fmt,...) do {} while (0)
+#define DEBUG_OWN(cs) do {} while(0)
+#define DEBUG_RELEASE(cs) do {} while(0)
 #endif
 
 int pthread_attr_init(pthread_attr_t *attr)
@@ -631,7 +637,7 @@ int pthread_mutex_lock(pthread_mutex_t *mutex)
     pthread_mutex_unlock(&mutex_init_lock);
   }
   EnterCriticalSection(&(*mutex)->cs);
-  (*mutex)->owner = pthread_self();
+  DEBUG_OWN(*mutex);
   return 0;
 }
 
@@ -645,8 +651,8 @@ int pthread_mutex_trylock(pthread_mutex_t *mutex)
     pthread_mutex_unlock(&mutex_init_lock);
   }
   if (TryEnterCriticalSection(&(*mutex)->cs)) {
-    (*mutex)->owner = pthread_self();
-    return 0;
+      DEBUG_OWN(*mutex);
+      return 0;
   }
   else
     return EBUSY;
@@ -737,7 +743,7 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex)
 {
   /* Owner is for debugging only; NB if mutex is used recursively,
      owner field will lie. */
-  (*mutex)->owner = NULL;
+  DEBUG_RELEASE(*mutex);
   LeaveCriticalSection(&(*mutex)->cs);
   return 0;
 }
@@ -922,7 +928,7 @@ int pthread_cond_wait(pthread_cond_t * cv, pthread_mutex_t * cs)
     ExitProcess(0);
   }
   pthread_self()->waiting_cond = cv;
-  (*cs)->owner = 0;
+  DEBUG_RELEASE(*cs);
   pthread_mutex_unlock(cs);
   if (cv->alertable) {
     while (WaitForSingleObjectEx(w.event, INFINITE, TRUE) == WAIT_IO_COMPLETION);
@@ -933,7 +939,7 @@ int pthread_cond_wait(pthread_cond_t * cv, pthread_mutex_t * cs)
   /* Event is signalled once, wakeup is dequeued by signaller. */
   cv->return_fn(w.event);
   pthread_mutex_lock(cs);
-  (*cs)->owner = pthread_self();
+  DEBUG_OWN(*cs);
   return 0;
 }
 
@@ -947,7 +953,7 @@ int pthread_cond_timedwait(pthread_cond_t * cv, pthread_mutex_t * cs, const stru
     ExitProcess(0);
   }
   pthread_self()->waiting_cond = cv;
-  (*cs)->owner = 0;
+  DEBUG_RELEASE(*cs);
   pthread_mutex_unlock(cs);
   {
     struct timeval cur_tm;
@@ -973,7 +979,7 @@ int pthread_cond_timedwait(pthread_cond_t * cv, pthread_mutex_t * cs, const stru
   }
   cv->return_fn(w.event);
   pthread_mutex_lock(cs);
-  (*cs)->owner = pthread_self();
+  DEBUG_OWN(*cs);
   if (rv == WAIT_TIMEOUT)
     return ETIMEDOUT;
   else
