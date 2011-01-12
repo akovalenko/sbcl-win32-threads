@@ -41,7 +41,7 @@ typedef int os_vm_prot_t;
 #define OS_VM_PROT_READ    1
 #define OS_VM_PROT_WRITE   2
 #define OS_VM_PROT_EXECUTE 4
-#define OS_VM_MMAP_GRANULARITY_SHIFT 6
+#define OS_VM_MMAP_GRANULARITY_SHIFT 4
 
 #define os_open_core(file,mode) win32_open_for_mmap(file)
 #define HAVE_os_open_core

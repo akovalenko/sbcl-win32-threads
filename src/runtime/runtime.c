@@ -220,17 +220,15 @@ search_for_core ()
     char *sbcl_home = getenv("SBCL_HOME");
     char *lookhere;
     char *stem = "/sbcl.core";
-    char *core;
+    char *core = NULL;
 
-    if (!(sbcl_home && *sbcl_home)) sbcl_home = SBCL_HOME;
-    lookhere = (char *) calloc(strlen(sbcl_home) +
-                               strlen(stem) +
-                               1,
-                               sizeof(char));
-    sprintf(lookhere, "%s%s", sbcl_home, stem);
-    core = copied_existing_filename_or_null(lookhere);
 #ifdef LISP_FEATURE_WIN32
-    if (!core) {
+    /* Fixed prefixes is movais tone here.  Better to _begin_ with
+       searching core somewhere around the runtime.
+
+       Of course, if the user _wants_ explicit SBCL_HOME, don't
+       bother. */
+    if (!core && !(sbcl_home && *sbcl_home)) {
         CHAR exe_path[MAX_PATH];
         DWORD length;
         length = GetModuleFileNameA(NULL, exe_path, sizeof exe_path);
@@ -240,13 +238,21 @@ search_for_core ()
             CHAR* dotPointer = strrchr(exe_path,'.');
             if (((dotPointer-exe_path)+5)<MAX_PATH) {
                 strcpy(dotPointer,".core");
-                free(lookhere);
                 lookhere = exe_path;
                 core = copied_existing_filename_or_null(lookhere);
+		return core;
             }
         }
     }
 #endif /*  LISP_FEATURE_WIN32 */
+
+    if (!(sbcl_home && *sbcl_home)) sbcl_home = SBCL_HOME;
+    lookhere = (char *) calloc(strlen(sbcl_home) +
+                               strlen(stem) +
+                               1,
+                               sizeof(char));
+    sprintf(lookhere, "%s%s", sbcl_home, stem);
+    core = copied_existing_filename_or_null(lookhere);
 
     if (!core) {
         lose("can't find core file at %s\n", lookhere);

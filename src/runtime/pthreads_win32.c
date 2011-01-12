@@ -863,7 +863,7 @@ int pthread_cond_signal(pthread_cond_t *cv)
   return 0;
 }
 
-/* Return value is used for futexes: 0=ok, or EWOULDBLOCK on state change. */
+/* Return value is used for futexes: 0=ok, 1 on unexpected word change. */
 int cv_wakeup_add(struct pthread_cond_t* cv, struct thread_wakeup* w)
 {
   HANDLE event = cv->get_fn();
@@ -1386,9 +1386,12 @@ static void futex_interrupt(pthread_t thread)
 	if ((w = thread->futex_wakeup)) {
 	    /* we are taking wakeup_lock recursively - ok with
 	       CRITICAL_SECTIONs */
-	    event = w->event;
-	    thread->futex_wakeup = NULL;
-	    cv_wakeup_remove(&futex_pseudo_cond,w);
+	    if (cv_wakeup_remove(&futex_pseudo_cond,w)) {
+		event = w->event;
+		thread->futex_wakeup = NULL;
+	    } else {
+		w = NULL;
+	    }
 	}
 	pthread_mutex_unlock(&cv->wakeup_lock);
 	if (w) SetEvent(event);

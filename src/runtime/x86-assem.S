@@ -233,7 +233,8 @@ GNAME(call_into_c):
    and each event of "using FPU after not using it for a long time"
    costs more like a syscall (with user/kernel/user mode switching) than
    like a seven non-privileged assembler instructions. */
-	
+	.text
+	.align	align_16byte,0x90
 	.globl GNAME(call_into_c_fp_result)
 	TYPE(GNAME(call_into_c_fp_result))
 GNAME(call_into_c_fp_result):
@@ -249,10 +250,10 @@ GNAME(call_into_c_fp_result):
 	
 	call	*%esi /* foreign call, preserving ESI, EDI, and EBX */
 	
-	subl	$16,%esp
+	leal	-16(%esp),%esp
 	fstpt	(%esp)
 	
-	call	GNAME(gc_leave_foreign_call)
+	call	GNAME(gc_leave_foreign_call) /* it may interrupt (though not GC itself) */
 	
 	fldz;fldz;fldz;fldz;fldz;fldz;fldz; /* 7 elements */
 	fldt	(%esp)			    /* and topmost one */
@@ -280,6 +281,7 @@ GNAME(call_into_c_fp_result):
 	
 
 	.text	
+	.align	align_16byte,0x90
 	.globl GNAME(do_nothing)
 	TYPE(GNAME(do_nothing))
 GNAME(do_nothing):	

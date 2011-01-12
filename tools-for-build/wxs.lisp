@@ -237,6 +237,10 @@
            ("Component" ("Id" "SBCL_Base"
                          "Guid" ,(make-guid)
                          "DiskId" 1)
+			;; SBCL :win32 will find core in the executable's directory,
+			;; even without SBCL_HOME. Let's not clobber user environment
+			;; more than necessary.
+	    #-(and)
             ("Environment" ("Id" "Env_SBCL_HOME"
                             "System" "yes"
                             "Action" "set"
