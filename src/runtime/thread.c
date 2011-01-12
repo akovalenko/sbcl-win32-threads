@@ -409,7 +409,8 @@ new_thread_trampoline(struct thread *th)
 	int maybe_wake_gc = 0;
 	pthread_mutex_lock(th->state_lock);
 	if (th->state == STATE_PHASE1_BLOCKER||
-	    th->state == STATE_PHASE2_BLOCKER) {
+	    th->state == STATE_PHASE2_BLOCKER||
+	    th->state == STATE_INTERRUPT_BLOCKER) {
 	    maybe_wake_gc = 1;
 	    /* If GC waits for th, it's going to close its alloc
 	       region => we may just go on. */
@@ -1000,7 +1001,8 @@ static inline void safepoint_cycle_state(lispobj state)
   int gcwake = 0;
   pthread_mutex_lock(self->state_lock);
   if (self->state == STATE_PHASE1_BLOCKER ||
-      self->state == STATE_PHASE2_BLOCKER) {
+      self->state == STATE_PHASE2_BLOCKER ||
+      self->state == STATE_INTERRUPT_BLOCKER) {
       gcwake = maybe_wake_gc_begin();
   }
   unlock_suspend_info(__FILE__, __LINE__);
@@ -1212,12 +1214,30 @@ boolean gc_adjust_thread_state(struct thread *th)
 	result = 1;
 	th->state = full_suspend_possible ?
 	    STATE_SUSPENDED : STATE_SUSPENDED_BRIEFLY;
+	if (full_suspend_possible) {
+	    SetSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
+	    if (SymbolTlValue(GC_PENDING,self)==T &&
+		(SymbolTlValue(IN_SAFEPOINT,self)!=T ||
+		 SymbolTlValue(GC_SAFE,self)==T))
+		SetSymbolValue(GC_PENDING,NIL,self);
+	} else {
+	    SetSymbolValue(STOP_FOR_GC_PENDING,T,self);
+	}
 	break;
     case STATE_PHASE2_BLOCKER:
 	result = full_suspend_possible;
-	if (result)
+	if (result) {
 	    th->state = STATE_SUSPENDED;
+	    SetSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
+	    if (SymbolTlValue(GC_PENDING,self)==T &&
+		(SymbolTlValue(IN_SAFEPOINT,self)!=T ||
+		 SymbolTlValue(GC_SAFE,self)==T))
+		SetSymbolValue(GC_PENDING,NIL,self);
+	}
 	break;
+    case STATE_INTERRUPT_BLOCKER:
+	th->state = STATE_SUSPENDED_BRIEFLY;
+	result = 1;
     }
     return result;
 }
@@ -1253,22 +1273,9 @@ boolean gc_accept_thread_state(boolean wakep)
 
     switch (oldstate) {
     case STATE_SUSPENDED:
-	if (suspend_info.reason != SUSPEND_REASON_INTERRUPT)
-	    SetSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
 	waitp = 1;
-	/* Other thread's GC causes this thread to abandon its
-	   willingness to GC, if such one existed. Seems to be
-	   reasonable both for full and brief suspend. */
-        if (SymbolTlValue(GC_PENDING,self)==T &&
-	    (SymbolTlValue(IN_SAFEPOINT,self)!=T ||
-	     SymbolTlValue(GC_SAFE,self)==T) &&
-	    suspend_info.reason != SUSPEND_REASON_INTERRUPT)
-	    SetSymbolValue(GC_PENDING,NIL,self);
-
 	break;
     case STATE_SUSPENDED_BRIEFLY:
-	if (suspend_info.reason != SUSPEND_REASON_INTERRUPT)
-	    SetSymbolValue(STOP_FOR_GC_PENDING,T,self);
 	waitp = 1;
 	break;
     }
@@ -1388,8 +1395,6 @@ void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access)
 
     if (SymbolTlValue(STOP_FOR_GC_PENDING,self)==NIL
 	&& self->state != STATE_RUNNING) {
-	/* printf ("Loop in contextual safepoint in state %s\n", */
-	/* 	get_thread_state_as_string(self)); */
 	goto again;
     }
 }
@@ -1842,7 +1847,7 @@ void wake_the_world()
 	if (p==th) continue;
 	const char *oldss = dyndebug_safepoints ?
 	    get_thread_state_as_string(p) : "[?]";
-	if (move_thread_state(p,STATE_PHASE1_BLOCKER,
+	if (move_thread_state(p,STATE_INTERRUPT_BLOCKER,
 			      thread_needs_interrupt_signal,
 			      thread_needs_interrupt_signal,
 			      silently)) {

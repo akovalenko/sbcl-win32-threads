@@ -31,6 +31,7 @@ struct alloc_region { };
 
 #define STATE_PHASE1_BLOCKER (MAKE_FIXNUM(5))
 #define STATE_PHASE2_BLOCKER (MAKE_FIXNUM(6))
+#define STATE_INTERRUPT_BLOCKER (MAKE_FIXNUM(7))
 #endif
 
 #ifdef LISP_FEATURE_SB_THREAD
@@ -94,6 +95,7 @@ static inline const char * get_thread_state_string(lispobj state)
   if (state == STATE_SUSPENDED_BRIEFLY) return "SUSPENDED_BRIEFLY";
   if (state == STATE_PHASE1_BLOCKER) return "PHASE1_BLOCKER";
   if (state == STATE_PHASE2_BLOCKER) return "PHASE2_BLOCKER";
+  if (state == STATE_INTERRUPT_BLOCKER) return "INTERRUPT_BLOCKER";
   return "unknown";
 }
 
