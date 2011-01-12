@@ -1393,7 +1393,7 @@ static void futex_interrupt(pthread_t thread)
 		w = NULL;
 	    }
 	}
-	pthread_mutex_unlock(&cv->wakeup_lock);
 	if (w) SetEvent(event);
+	pthread_mutex_unlock(&cv->wakeup_lock);
     }
 }
