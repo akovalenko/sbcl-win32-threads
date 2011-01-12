@@ -1338,12 +1338,17 @@ void gc_leave_foreign_call()
     /* wait if externally suspended */
     gc_accept_thread_state(0);
     
+    do {
+	pthread_mutex_unlock(self->state_lock);
+	while(check_pending_gc() || check_pending_interrupts());
+	pthread_mutex_lock(self->state_lock);
+    } while (gc_accept_thread_state(0));
+
     /* Then unpublish context data */
     self->csp_around_foreign_call = NULL;
     self->pc_around_foreign_call = NULL;
     /* unlock is a memory barrier (release semantics) */
     pthread_mutex_unlock(self->state_lock);
-    while(check_pending_gc() || check_pending_interrupts());
     SetLastError(lastError);
 }
 
@@ -1398,8 +1403,6 @@ void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access)
 	goto again;
     }
 }
-
-
 
 lispobj fn_by_pc(unsigned int pc)
 {
