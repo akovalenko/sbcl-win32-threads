@@ -27,4 +27,8 @@
 #define os_allocate_lazily os_validate
 #endif
 
+#ifndef HAVE_os_number_of_processors
+#define os_number_of_processors 1
+#endif
+
 #endif /* SBCL_INCLUDED_OS_DEFAULT_H */

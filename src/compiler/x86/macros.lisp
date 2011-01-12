@@ -303,9 +303,11 @@
 ;;; (FIXME: so why aren't we asserting this?)
 
 (defun allocation (alloc-tn size &optional inline dynamic-extent lowtag)
+  (declare (ignorable inline))
   (cond
     (dynamic-extent
      (allocation-dynamic-extent alloc-tn size lowtag))
+    #!-(and win32 sb-thread)
     ((or (null inline) (policy inline (>= speed space)))
      (allocation-inline alloc-tn size))
     (t

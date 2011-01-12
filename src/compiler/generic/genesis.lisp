@@ -1635,8 +1635,6 @@ core and return a descriptor to it."
                          (setf (gethash name *cold-foreign-symbol-table*) value))))))))
   (values)) ;; PROGN
 
-(defparameter *undef-gate-start* #x21010000)
-
 (defun cold-foreign-symbol-address (name)
   (or (find-foreign-symbol-in-table name *cold-foreign-symbol-table*)
       (progn

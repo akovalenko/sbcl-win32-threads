@@ -22,11 +22,15 @@ struct alloc_region { };
 #include "genesis/fdefn.h"
 #include "interrupt.h"
 
-#define STATE_RUNNING (make_fixnum(1))
-#define STATE_SUSPENDED (make_fixnum(2))
-#define STATE_DEAD (make_fixnum(3))
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-#define STATE_SUSPENDED_BRIEFLY (make_fixnum(4))
+#define STATE_RUNNING (MAKE_FIXNUM(1))
+#define STATE_SUSPENDED (MAKE_FIXNUM(2))
+#define STATE_DEAD (MAKE_FIXNUM(3))
+#if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
+#define STATE_SUSPENDED_BRIEFLY (MAKE_FIXNUM(4))
+#define STATE_GC_BLOCKER (MAKE_FIXNUM(5))
+
+#define STATE_PHASE1_BLOCKER (MAKE_FIXNUM(5))
+#define STATE_PHASE2_BLOCKER (MAKE_FIXNUM(6))
 #endif
 
 #ifdef LISP_FEATURE_SB_THREAD
@@ -41,16 +45,32 @@ enum threads_suspend_reason {
 };
 
 struct threads_suspend_info {
-  int suspend;
-  pthread_mutex_t world_lock;
-  pthread_mutex_t lock;
-  enum threads_suspend_reason reason;
-  int phase;
-  struct thread * gc_thread;
-  struct thread * interrupted_thread;
+    int suspend;
+    pthread_mutex_t world_lock;
+    pthread_mutex_t lock;
+    enum threads_suspend_reason reason;
+    int phase;
+    struct thread * gc_thread;
+    struct thread * interrupted_thread;
+    int blockers;
+    int used_gc_page;
 };
 
+struct suspend_phase {
+    int suspend;
+    enum threads_suspend_reason reason;
+    int phase;
+    struct suspend_phase *next;
+};
+
+
 extern struct threads_suspend_info suspend_info;
+
+
+struct gcing_safety {
+    lispobj* csp_around_foreign_call;
+    lispobj* pc_around_foreign_call;
+};
 
 #endif
 
@@ -72,6 +92,8 @@ static inline const char * get_thread_state_string(lispobj state)
   if (state == STATE_SUSPENDED) return "SUSPENDED";
   if (state == STATE_DEAD) return "DEAD";
   if (state == STATE_SUSPENDED_BRIEFLY) return "SUSPENDED_BRIEFLY";
+  if (state == STATE_PHASE1_BLOCKER) return "PHASE1_BLOCKER";
+  if (state == STATE_PHASE2_BLOCKER) return "PHASE2_BLOCKER";
   return "unknown";
 }
 
@@ -84,14 +106,7 @@ static const char * get_thread_state_as_string(struct thread * thread)
 static inline void
 set_thread_state(struct thread *thread, lispobj state)
 {
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-    lispobj old_state;
-#endif
     pthread_mutex_lock(thread->state_lock);
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-    old_state = thread->state;
-    odprintf("changing thread state of 0x%p from %s to %s", thread->os_thread, get_thread_state_string(old_state), get_thread_state_string(state));
-#endif
     thread->state = state;
     pthread_cond_broadcast(thread->state_cond);
     pthread_mutex_unlock(thread->state_lock);
@@ -100,10 +115,12 @@ set_thread_state(struct thread *thread, lispobj state)
 static inline void
 wait_for_thread_state_change(struct thread *thread, lispobj state)
 {
-    pthread_mutex_lock(thread->state_lock);
-    while (thread->state == state)
-        pthread_cond_wait(thread->state_cond, thread->state_lock);
-    pthread_mutex_unlock(thread->state_lock);
+    if (thread->state == state) {
+	pthread_mutex_lock(thread->state_lock);
+	while (thread->state == state)
+	    pthread_cond_wait(thread->state_cond, thread->state_lock);
+	pthread_mutex_unlock(thread->state_lock);
+    }
 }
 
 extern pthread_key_t lisp_thread;
@@ -317,6 +334,46 @@ static inline struct thread *arch_os_get_current_thread(void)
      return all_threads;
 #endif
 }
+
+#ifdef LISP_FEATURE_SB_GC_SAFEPOINT
+void gc_safepoint();
+
+void wake_the_world();
+void gc_enter_foreign_call(lispobj* csp, lispobj* pc);
+void gc_leave_foreign_call();
+void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access);
+
+
+static inline
+void push_gcing_safety(struct gcing_safety *into)
+{
+    struct thread* th = arch_os_get_current_thread();
+    into->pc_around_foreign_call = th->pc_around_foreign_call;
+    if ((into->csp_around_foreign_call = th->csp_around_foreign_call)) {
+	gc_leave_foreign_call();
+    }
+    odxprint(safepoints, "push_gcing_safety at %p in %p [csp %p => csp %p]",
+	     __builtin_return_address(0),
+	     th, into->csp_around_foreign_call,
+	     th->csp_around_foreign_call);
+}
+
+static inline
+void pop_gcing_safety(struct gcing_safety *from, boolean test_gc_page)
+{
+    struct thread* th = arch_os_get_current_thread();
+    if (from->csp_around_foreign_call) {
+	gc_enter_foreign_call(from->csp_around_foreign_call,
+			      from->pc_around_foreign_call);
+    }
+    odxprint(safepoints, "pop_gcing_safety at %p in %p [csp %p <= csp %p]",
+	     __builtin_return_address(0),
+	     th, from->csp_around_foreign_call,
+	     th->csp_around_foreign_call);
+}
+
+#endif
+
 
 #if defined(LISP_FEATURE_MACH_EXCEPTION_HANDLER)
 #define THREAD_STRUCT_TO_EXCEPTION_PORT(th) ((mach_port_t) th)

@@ -254,7 +254,7 @@
   (:generator 1
     (inst break pending-interrupt-trap)))
 
-#!+(and sb-thread win32)
+#!+sb-gc-safepoint
 (define-vop (insert-gc-safepoint)
   (:generator 0
     (inst test eax-tn (make-ea :dword :disp sb!vm::gc-safepoint-page-addr))))

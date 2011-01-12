@@ -49,6 +49,9 @@ typedef int os_vm_prot_t;
 #define os_fopen_runtime(file,mode) win32_fopen_runtime()
 #define HAVE_os_fopen_runtime
 
+extern int os_number_of_processors;
+#define HAVE_os_number_of_processors
+
 extern int win32_open_for_mmap(const char* file);
 extern FILE* win32_fopen_runtime();
 
@@ -83,6 +86,21 @@ void accept_post_mortem_startup();
 void win32_interrupt_console_input();
 void os_link_runtime();
 void establish_c_fpu_world();
+
+
+extern int dyndebug_lazy_fpu;
+extern int dyndebug_lazy_fpu_careful;
+extern int dyndebug_skip_averlax;
+extern int dyndebug_survive_aver;
+extern int dyndebug_runtime_link;
+extern int dyndebug_safepoints;
+
+void odprintf_(const char * fmt, ...);
+
+#define odxprint(topic,fmt,...)			\
+    do if(dyndebug_##topic)			\
+	   odprintf_(fmt,__VA_ARGS__);		\
+    while(0)
 
 #define bcopy(src,dest,n) memmove(dest,src,n)
 

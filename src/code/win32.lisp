@@ -836,7 +836,7 @@ UNIX epoch: January 1st 1970."
                         "CreateFileA"
                         create-file)
     handle
-  (name (c-string #!+sb-unicode #!+sb-unicode :external-format :ucs-2))
+  (name system-string)
   (desired-access dword)
   (share-mode dword)
   (security-attributes (* t))

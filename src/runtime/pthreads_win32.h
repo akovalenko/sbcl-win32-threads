@@ -75,7 +75,11 @@ int pthread_detach(pthread_t thread);
 int pthread_join(pthread_t thread, void **retval);
 int pthread_kill(pthread_t thread, int signum);
 
+#ifndef PTHREAD_INTERNALS
+pthread_t pthread_self(void) __attribute__((__const__));
+#else
 pthread_t pthread_self(void);
+#endif
 
 typedef DWORD pthread_key_t;
 int pthread_key_create(pthread_key_t *key, void (*destructor)(void*));
@@ -83,7 +87,9 @@ int pthread_key_create(pthread_key_t *key, void (*destructor)(void*));
 #define SIG_BLOCK 1
 #define SIG_UNBLOCK 2
 #define SIG_SETMASK 3
+#ifdef PTHREAD_INTERNALS
 int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
+#endif
 
 /* 1a - Thread non-portable */
 
@@ -316,6 +322,26 @@ int sigismember(const sigset_t *set, int signum);
 typedef int sig_atomic_t;
 
 #ifndef PTHREAD_INTERNALS
+static inline int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset)
+{
+  pthread_t self = pthread_self();
+  if (oldset)
+    *oldset = self->blocked_signal_set;
+  if (set) {
+    switch (how) {
+      case SIG_BLOCK:
+        self->blocked_signal_set |= *set;
+        break;
+      case SIG_UNBLOCK:
+        self->blocked_signal_set &= ~(*set);
+        break;
+      case SIG_SETMASK:
+        self->blocked_signal_set = *set;
+        break;
+    }
+  }
+  return 0;
+}
 #ifdef PTHREAD_DEBUG_OUTPUT
 #define pthread_mutex_lock(mutex)               \
   pthread_mutex_lock_annotate_np(mutex, __FILE__, __LINE__ )

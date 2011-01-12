@@ -3982,9 +3982,16 @@ garbage_collect_generation(generation_index_t generation, int raise)
      * handler, you will lose. */
 
 #if defined(LISP_FEATURE_X86) || defined(LISP_FEATURE_X86_64)
+#if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
+    if (!conservative_stack) {
+	arch_os_get_current_thread()->pc_around_foreign_call = 0;
+    }
+#endif
     /* And if we're saving a core, there's no point in being conservative. */
     if (conservative_stack) {
         for_each_thread(th) {
+	    if (th->state == STATE_DEAD)
+		continue;
             void **ptr;
             void **esp=(void **)-1;
 #ifdef LISP_FEATURE_SB_THREAD
@@ -3992,29 +3999,45 @@ garbage_collect_generation(generation_index_t generation, int raise)
             if(th==arch_os_get_current_thread()) {
                 /* Somebody is going to burn in hell for this, but casting
                  * it in two steps shuts gcc up about strict aliasing. */
+		#ifndef LISP_FEATURE_SB_GC_SAFEPOINT
                 esp = (void **)((void *)&raise);
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-                {
-                  CONTEXT context;
-                  os_context_t ctx;
-/*                  if (!pthread_np_get_thread_context(th->os_thread, &context))
-                    lose("Unable to get thread context for thread 0x%x\n", (int)th->os_thread); */
-                  pthread_np_get_my_context_subset(&context);
-                  ctx.win32_context = &context;
-                  preserve_context_registers(&ctx);
-                }
-#endif
+		#else
+		/* Conservative collect_garbage is always invoked with
+		   foreign C call on top; we don't promise to preserve
+		   any registers in vop call-out for :sb-gc-safepoint
+		   builds, so preserved csp is enough. */
+
+		esp = (void**)th->csp_around_foreign_call;
+		/* ...Together with return address, that is the only
+		   value from the entire context that we need (and
+		   it's saved by foreign call wrapper). That's because
+		   it is removed from control stack into a register by
+		   the foreign call wrapper itself. */
+		preserve_pointer(th->pc_around_foreign_call);
+		th->pc_around_foreign_call =
+		    (void*)((~3) & (uintptr_t)th->pc_around_foreign_call);
+		#endif
             } else {
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-                CONTEXT context;
-                os_context_t ctx;
-                pthread_np_suspend(th->os_thread);
-                if (!pthread_np_get_thread_context(th->os_thread, &context))
-                  lose("Unable to get thread context for thread 0x%x\n", (int)th->os_thread);
-                ctx.win32_context = &context;
-                preserve_context_registers(&ctx);
-                pthread_np_resume(th->os_thread);
-                esp = (void**)context.Esp;
+#if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
+		th->pc_around_foreign_call =
+		    (void*)((~3) & (uintptr_t)th->pc_around_foreign_call);
+		/* target thread should provide either control stack
+		   pointer value, as it were before entering foreign
+		   call, or a full context (if the safepoint was
+		   caused by interrupt/signal/exception). There are
+		   some obscure cases when both CSP and context
+		   present; CSP should be preferred, as the thread is
+		   certainly in foreign call (on win32 using full
+		   context in this case will work too, but it's more
+		   work to do, and it would probably conserve too much) */
+		if (!th->csp_around_foreign_call) {
+		    preserve_context_registers(th->gc_safepoint_context);
+		    esp = (void**)*os_context_register_addr(th->gc_safepoint_context,
+							    reg_SP);
+		} else {
+		    esp = (void**)th->csp_around_foreign_call;
+		    preserve_pointer(th->pc_around_foreign_call);
+		}
 #else
                 void **esp1;
                 free=fixnum_value(SymbolValue(FREE_INTERRUPT_CONTEXT_INDEX,th));

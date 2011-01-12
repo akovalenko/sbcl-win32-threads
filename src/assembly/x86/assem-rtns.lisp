@@ -377,7 +377,12 @@
 
 ;; We want no VOP for this one and for it to only happen on Win32
 ;; targets.  Hence the following disaster.
-#!+#.(cl:if (cl:member sb-assembling cl:*features*) win32 '(or))
+
+;; Kovalenko: I had to reimplement it in x86-assem.S anyway, in order
+;; to satisfy DEP restriction on SEH handler location. 
+;; 
+;; #!+#.(cl:if (cl:member sb-assembling cl:*features*) win32 '(or))
+#|
 (define-assembly-routine
     (uwp-seh-handler (:return-style :none))
     ((:temp block unsigned-reg eax-offset))
@@ -456,6 +461,7 @@
   (inst mov ebx-tn ebp-tn)
   (loadw ebp-tn block unwind-block-current-cont-slot)
   (inst jmp (make-ea-for-object-slot block unwind-block-entry-pc-slot 0)))
+|#
 
 #!+win32
 (define-assembly-routine (continue-unwind

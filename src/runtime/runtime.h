@@ -237,6 +237,11 @@ make_fixnum(long n)
     return n << N_FIXNUM_TAG_BITS;
 }
 
+/* sometimes we want to use fixnums as switch() keys. Unfortunately,
+   it's impossible even with static inline make_fixnum, but o.k. with
+   constant expression, like this: */
+#define MAKE_FIXNUM(n) ((n)<<N_FIXNUM_TAG_BITS)
+
 static inline long
 fixnum_value(lispobj n)
 {

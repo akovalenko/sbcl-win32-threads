@@ -83,7 +83,7 @@
       (if (alien-integer-type-signed type)
           `(sign-extend ,alien ,(alien-type-bits type))
           `(logand ,alien ,(1- (ash 1 (alien-type-bits type)))))
-      alien))
+      `(truly-the ,(invoke-alien-type-method :lisp-rep type) alien)))
 
 (define-alien-type-method (system-area-pointer :result-tn) (type state)
   (declare (ignore type))
@@ -262,10 +262,18 @@
                    :from :eval :to :result) ecx)
   (:temporary (:sc unsigned-reg :offset edx-offset
                    :from :eval :to :result) edx)
+  #!+sb-gc-safepoint
+  (:temporary (:sc unsigned-reg :offset esi-offset
+                   :from :eval :to :result) esi)
+  #!+sb-gc-safepoint
+  (:temporary (:sc unsigned-reg :offset edi-offset
+                   :from :eval :to :result) edi)
   (:node-var node)
   (:vop-var vop)
   (:save-p t)
-  (:ignore args eax edx)
+  (:ignore args eax edx
+	   #!+sb-gc-safepoint esi
+	   #!+sb-gc-safepoint edi)
   (:generator 0
     ;; FIXME & OAOOM: This is brittle and error-prone to maintain two
     ;; instances of the same logic, on in arch-assem.S, and one in

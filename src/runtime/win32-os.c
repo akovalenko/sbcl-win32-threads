@@ -90,9 +90,14 @@ int dyndebug_lazy_fpu_careful = 0;
 int dyndebug_skip_averlax = 0;
 int dyndebug_survive_aver = 0;
 int dyndebug_runtime_link = 0;
+int dyndebug_safepoints = 0;
+
+int dyndebug_to_filestream = 1;
+int dyndebug_to_odstring = 0;
 
 unsigned int dyndebug_charge_count = 0;
 FILE* dyndebug_output = NULL;
+#define this_thread (arch_os_get_current_thread())
 
 static inline
 void dyndebug_init()
@@ -107,6 +112,8 @@ void dyndebug_init()
         GetEnvironmentVariableA("SBCL_DYNDEBUG__SURVIVE_AVER",NULL,0);
     dyndebug_runtime_link =
         GetEnvironmentVariableA("SBCL_DYNDEBUG__RUNTIME_LINK",NULL,0);
+    dyndebug_safepoints =
+        GetEnvironmentVariableA("SBCL_DYNDEBUG__SAFEPOINTS",NULL,0);
 }
 
 /* wrappers for winapi calls that must be successful */
@@ -125,6 +132,7 @@ void* win_aver(void* value, char* comment, char* file, int line,
             "Expression unexpectedly false: %s:%d\n"
             " ... %s\n"
             "     ===> returned #X%p, \n"
+	    "     (in thread %p)"
             " ... Win32 thinks:\n"
             "     ===> code %u, message => %s\n"
             " ... CRT thinks:\n"
@@ -144,12 +152,14 @@ void* win_aver(void* value, char* comment, char* file, int line,
             fprintf(dyndebug_output, report_template,
                     file, line,
                     comment, value,
+		    this_thread,
                     (unsigned)errorCode, errorMessage,
                     posixerrno, posixstrerror);
         } else {
             lose(report_template,
                     file, line,
                     comment, value,
+		    this_thread,
                     (unsigned)errorCode, errorMessage,
                     posixerrno, posixstrerror);
         }
@@ -233,11 +243,14 @@ void odprintf_(const char * fmt, ...)
     n = strlen(buf);
     buf[n] = '\n';
     buf[n + 1] = 0;
-    OutputDebugString(buf);
+
+    if (dyndebug_to_odstring)
+	OutputDebugString(buf);
+    if (dyndebug_to_filestream)
+	fprintf(dyndebug_output,"%s",buf);
     SetLastError(lastError);
 }
 
-#define this_thread (arch_os_get_current_thread())
 
 
 unsigned long block_deferrables_and_return_mask()
@@ -723,10 +736,60 @@ void fff_foreign_callback( void *v_info_ptr)
 {
     fff_call_info *info_ptr = v_info_ptr;
     lispobj *args = info_ptr->args;
-    gc_enter_unsafe_region();
-    funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,arch_os_get_current_thread()),
+    struct thread* self = arch_os_get_current_thread();
+
+    /* FPU stack should be empty if our caller follows C conventions;
+     * however, we have to reload the control word anyway, so cleaning
+     * the stack won't add much overhead (with modern OSes and TS bit
+     * in CR0, difference between using FPU and not using it at all is
+     * _much_ more noticeable than difference between nine and one
+     * instruction).
+
+     * There are some known situations where C convention is violated,
+     * at least by Wine -- e.g. any SEH handler may be entered with
+     * unpredictable content in FPU stack.
+
+     * Last but not least, it would be immoral to expect something
+     * from our caller that we don't provide for callouts; our
+     * :sb-auto-fpu-switch will make things right on demand, but if
+     * the foreign calling thread uses the same approach, it will
+     * surely interfere with our own SEH handler. */
+    
+    asm("fnclex;");
+    asm("ffree %st(7);");
+    asm("ffree %st(6);");
+    asm("ffree %st(5);");
+    asm("ffree %st(4);");
+    asm("ffree %st(3);");
+    asm("ffree %st(2);");
+    asm("ffree %st(1);");
+    asm("ffree %st(0);");
+
+
+    x87_fldcw(self->saved_c_fpu_mode>>16);
+
+    funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,self),
              LISPOBJ(args[0]),LISPOBJ(args[1]),LISPOBJ(args[2]));
-    gc_leave_region();
+
+    /* Even if our return type is float or double, it's loaded into
+     * fr0 by alien callback assembler wrapper, which expects FPU
+     * stack to be empty at his epilogue (initially/in the upstream it
+     * used to call funcall3(), which is a non-floating-result wrapper
+     * for call_into_lisp with a normal C ABI).
+     *
+     * With :sb-auto-fpu-switch, stack would be emptied automatically
+     * when the assembler wrapper loads a result (our exception
+     * handler would perceive assembler wrapper as C code;
+     * consequently, it would adjust FPU stack as for C
+     * calls). However, we can't rely on it in foreign threads: our
+     * exception handler isn't installed as a topmost one and won't
+     * have a chance to run. Fibers that we use are non-FPU-aware at
+     * all (a flag to specify FPU state preservation appeared
+     * somewhere around win2003 - too late); if we allowed foreign
+     * callback to return with a full ("lispy") FPU stack, we'd mess
+     * up both the fiber and the foreign thread. */
+
+    establish_c_fpu_world();
     info_ptr->done = 1;
     return;
 }
@@ -736,9 +799,10 @@ void fff_generic_callback(lispobj arg0,lispobj arg1, lispobj arg2)
     struct thread* th = arch_os_get_current_thread();
     pthread_t companion_fiber;
     if (th) {
-        gc_enter_unsafe_region();
+	struct gcing_safety safety;
+	push_gcing_safety(&safety);
         funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,th),arg0,arg1,arg2);
-        gc_leave_region();
+	pop_gcing_safety(&safety,0);
     } else {
         /* It is a foreign thread */
         pthread_np_notice_thread();
@@ -811,6 +875,7 @@ void fff_generic_callback(lispobj arg0,lispobj arg1, lispobj arg2)
             /* RWSO callback in pthreads_win32 takes care on pthread-created
                fiber etc. */
         }
+	/* Normal ftc exit */
     }
 }
 
@@ -831,12 +896,15 @@ static void restore_lisp_tls()
 
 #endif  /* LISP_FEATURE_SB_THREAD */
 
+int os_number_of_processors = 1;
+
 void os_init(char *argv[], char *envp[])
 {
     SYSTEM_INFO system_info;
     GetSystemInfo(&system_info);
     os_vm_page_size = system_info.dwPageSize;
     fast_bzero_pointer = fast_bzero_detect;
+    os_number_of_processors = system_info.dwNumberOfProcessors;
     dyndebug_init();
 
     base_seh_frame = get_seh_frame();
@@ -1277,7 +1345,7 @@ extern boolean internal_errors_enabled;
  {
      struct thread* th = arch_os_get_current_thread();
      if (fpu_world_unknown_p()) {
-	 asm("fldcw %0" : : "m"(th->saved_c_fpu_mode));
+         x87_fldcw(th->saved_c_fpu_mode>>16);
 	 asm("ffree %st(7);");
 	 asm("ffree %st(6);");
 	 asm("ffree %st(5);");
@@ -1290,8 +1358,10 @@ extern boolean internal_errors_enabled;
 	 th->in_lisp_fpu_mode = 0;
      }
      if (fpu_world_lispy_p()) {
-	 asm("fnstcw %0": "=m"(th->saved_lisp_fpu_mode));
-	 asm("fldcw %0" : : "m"(th->saved_c_fpu_mode));
+         unsigned int mode;
+	 asm("fnstcw %0": "=m"(mode));
+         th->saved_lisp_fpu_mode = mode <<16;
+         x87_fldcw(th->saved_c_fpu_mode>>16);
 	 asm("fstp %st(0); fstp %st(0)");
 	 asm("fstp %st(0); fstp %st(0)");
 	 asm("fstp %st(0); fstp %st(0)");
@@ -1343,7 +1413,7 @@ extern boolean internal_errors_enabled;
 	 x87_env nice_fpu_environment = {
 	     .control = (lispyp ?
 			 this_thread->saved_lisp_fpu_mode :
-			 this_thread->saved_c_fpu_mode),
+			 this_thread->saved_c_fpu_mode)>>16,
 	     .status = 0,
 	     .tags = (lispyp ? 0x5555 : 0xFFFF)
 	 };
@@ -1391,99 +1461,6 @@ extern boolean internal_errors_enabled;
  boolean sb_control_fpu_normally_untouched_by_non_float_calls = 1;
  boolean sb_control_update_sb_stat_counters = 1;
  LONG sb_stat_fpu_modeswitch_cycling_counter = 0L;
-
- void enter_c_function(void* which, void* wherefrom)
- {
-     gc_enter_safe_region();
-     if (sb_control_fpu_normally_untouched_by_non_float_calls)
-	 return;
-
-     check_fpu_state("Entering C function [#X%p] from [#X%p]",
-		     which,wherefrom);
-
-     /* Experiment: try to regard all calls through runtime linkage
-      * area as floatless. */
-     if (((((u32)which)&0xFFFF0000u)!=0x21010000u)
-	 && ((((u32)which)&0xFFF00000u)!=0x0040000u)) {
-	 establish_c_fpu_world();
-	 AVERLAX(!fpu_world_lispy_p());
-	 check_fpu_state("Entering C function [#X%p] from [#X%p]",
-			 which,wherefrom);
-     }
- }
-
- void leave_c_function()
- {
-     /* if (!fpu_world_lispy_p()) { */
-     /*     register unsigned short flags asm("%ax"); */
-     /* 	memfloat80 keep; */
-     /*     asm("fxam; fnstsw %0" : "=r"(flags)); */
-     /*     if ((flags & 0x4500) != 0x4100) { */
-     /*         /\* Save returned FP value: if safepoint will GC, it can */
-     /*          * be clobbered, especially on POST-GC *\/ */
-     /*         asm("fstpt %0": "=m"(keep)); */
-     /*         gc_leave_region(); */
-     /*         /\* In case of normal function return, we have 0 floats, */
-     /*          * i.e. normal situation for C ABI *\/ */
-     /*         if (dyndebug_lazy_fpu) { */
-     /*             c_level_backtrace("FP registers present. Lisp leftover?",5); */
-     /*         } */
-     /*         asm("fldcw %0" : :"m" (this_thread->saved_lisp_fpu_mode)); */
-     /*         asm("fldz;fldz;fldz;fldz;"); */
-     /*         asm("fldz;fldz;fldz;"); */
-     /*         (this_thread)->in_lisp_fpu_mode = 1; */
-
-     /*         /\* When C returns floats (here), thread switches to */
-     /*          * Lisp FPU mode *\/ */
-
-     /*         asm("fldt %0" : : "m"(keep)); */
-     /*         return; */
-     /*     } */
-     /* } */
-     gc_leave_region();
- }
-
- void leave_c_function_return_fp()
- {
-     AVER(!fpu_world_lispy_p());
-     memfloat80 keep;
-
-     /* Save returned FP value: if safepoint will GC, it can
-      * be clobbered, especially on POST-GC */
-     asm("fstpt %0": "=m"(keep));
-     gc_leave_region();
-     asm("fldcw %0" : :"m" (this_thread->saved_lisp_fpu_mode));
-     asm("fldz;fldz;fldz;fldz;");
-     asm("fldz;fldz;fldz;");
-     (this_thread)->in_lisp_fpu_mode = 1;
-
-     /* When C returns floats (here), thread switches to
-      * Lisp FPU mode */
-
-     asm("fldt %0" : : "m"(keep));
-     return;
- }
-
-
- void enter_lisp_function()
- {
-     /* It's called at funcalls done from C. In handle_exception,
-      * traps, gc safepoint etc., where no call_into_c has happened,
-      * C may run unwittingly with full FPU bag. */
-     /* recover_fpu_world(); */
-     /* check_fpu_state("Entering Lisp function..."); */
-     gc_enter_unsafe_region();
- }
-
- void leave_lisp_function()
- {
-     gc_leave_region();
-     if (!sb_control_fpu_normally_untouched_by_non_float_calls) {
-	 establish_c_fpu_world();
-     }
-     check_fpu_state("Leaving Lisp function");
- }
-
 
  #define WCTX_PUSH(wctx,value)                                           \
      do { wctx->Esp-=4;                                                  \
@@ -1643,348 +1620,315 @@ extern boolean internal_errors_enabled;
      }
  }
 
- /*
-  * A good explanation of the exception handling semantics is
-  * http://win32assembly.online.fr/Exceptionhandling.html .
-  */
+/*
+ * A good explanation of the exception handling semantics is
+ * http://win32assembly.online.fr/Exceptionhandling.html .
+ */
 
- EXCEPTION_DISPOSITION
- handle_exception(EXCEPTION_RECORD *exception_record,
-		  struct lisp_exception_frame *exception_frame,
-		  CONTEXT *context,
-		  void *dispatcher_context)
- {
-     DWORD lastError = GetLastError();
-     DWORD code = exception_record->ExceptionCode;
-     EXCEPTION_DISPOSITION disposition = ExceptionContinueExecution;
-     void* fault_address = (void*)exception_record->ExceptionInformation[1];
-     os_context_t ctx;
-     struct thread* self = arch_os_get_current_thread();
-     int contextual_fpu_state = self ? self->in_lisp_fpu_mode : 0;
+EXCEPTION_DISPOSITION
+handle_exception(EXCEPTION_RECORD *exception_record,
+		 struct lisp_exception_frame *exception_frame,
+		 CONTEXT *context,
+		 void *dispatcher_context)
+{
+    DWORD lastError;
+    DWORD code = exception_record->ExceptionCode;
+    EXCEPTION_DISPOSITION disposition = ExceptionContinueExecution;
+    void* fault_address = (void*)exception_record->ExceptionInformation[1];
+    os_context_t ctx, *oldctx;
+    
+    struct thread* self = arch_os_get_current_thread();
+    int contextual_fpu_state = self ? self->in_lisp_fpu_mode : 0;
+    struct gcing_safety safety;
 
-     if (dyndebug_lazy_fpu && !(exception_record->ExceptionFlags &
-				(EH_UNWINDING|EH_EXIT_UNWIND)))
-     {
-	 DWORD tags = context->FloatSave.TagWord;
-	 if (!fpu_world_lispy_p() && ((tags&0xFFFF)!=0xFFFF)) {
-	     fprintf(dyndebug_output,
-		     "Exception handler/ strange NPX for C world\n"
-		     "....with tags 0x%04lx, status 0x%04lx, control 0x%04lx\n",
-		     context->FloatSave.TagWord,
-		     context->FloatSave.StatusWord,
-		     context->FloatSave.ControlWord);
-	     c_level_backtrace("Exception handler: strange NPX state",10);
-	 }
-	 if (fpu_world_lispy_p() && ((tags&0x5555) & ((tags&0xAAAA)>>1)))
-	 {
-	     fprintf(dyndebug_output,
-		     "Exception handler/ strange NPX for Lisp world\n"
-		     "....with tags 0x%04lx, status 0x%04lx, control 0x%04lx\n",
-		     context->FloatSave.TagWord,
-		     context->FloatSave.StatusWord,
-		     context->FloatSave.ControlWord);
-	     c_level_backtrace("Exception handler: strange NPX state",10);
-	 }
-     }
-     if (code == EXCEPTION_FLT_STACK_CHECK) {
-	 int stack_empty = (!(context->FloatSave.StatusWord &(1<<9)));
+    lastError = GetLastError();
+    
+    if (dyndebug_lazy_fpu)
+    {
+	DWORD tags = context->FloatSave.TagWord;
+	if (!fpu_world_lispy_p() && ((tags&0xFFFF)!=0xFFFF)) {
+	    fprintf(dyndebug_output,
+		    "Exception handler/ strange NPX for C world\n"
+		    "....with tags 0x%04lx, status 0x%04lx, control 0x%04lx\n",
+		    context->FloatSave.TagWord,
+		    context->FloatSave.StatusWord,
+		    context->FloatSave.ControlWord);
+	    c_level_backtrace("Exception handler: strange NPX state",10);
+	}
+	if (fpu_world_lispy_p() && ((tags&0x5555) & ((tags&0xAAAA)>>1)))
+	{
+	    fprintf(dyndebug_output,
+		    "Exception handler/ strange NPX for Lisp world\n"
+		    "....with tags 0x%04lx, status 0x%04lx, control 0x%04lx\n",
+		    context->FloatSave.TagWord,
+		    context->FloatSave.StatusWord,
+		    context->FloatSave.ControlWord);
+	    c_level_backtrace("Exception handler: strange NPX state",10);
+	}
+    }
+    if (code == EXCEPTION_FLT_STACK_CHECK) {
+	int stack_empty = (!(context->FloatSave.StatusWord &(1<<9)));
 
-	 /* We used to expect such exceptions in non-lispy and
-	  * ambigious states only. With FPU insn restart support,
-	  * exceptions originating in C may be handled too. */
+	/* We used to expect such exceptions in non-lispy and
+	 * ambigious states only. With FPU insn restart support,
+	 * exceptions originating in C may be handled too. */
 
-	 AVERLAX(!fpu_world_cruel_p()); /* Let's complain if a Lisp
-					 * code was exposed to
-					 * interrupt at ambigious
-					 * time */
-	 if (stack_empty && fpu_world_lispy_p()) {
-	     fprintf(dyndebug_output,
-		     "Exception handler: stack EMPTY while it should be FULL.\n"
-		     "....tags 0x%04lx, status 0x%04lx, control 0x%04lx\n",
-		     context->FloatSave.TagWord,
-		     context->FloatSave.StatusWord,
-		     context->FloatSave.ControlWord);
-	     c_level_backtrace("Exception handler: strange NPX state",10);
-
-
-
-	     /* FPU stack must be in SBCL-compliant state, having no
-	      * empty regs, but somehow it became empty! BAD thing. */
-	     goto complain;
-	 }
-
-	 if (!stack_empty && !fpu_world_lispy_p()) {
-	     /* FPU stack must be in C-compliant state, having no
-	      * valid regs, but somehow it has overflown! BAD thing. */
+	AVERLAX(!fpu_world_cruel_p()); /* Let's complain if a Lisp
+					* code was exposed to
+					* interrupt at ambigious
+					* time */
+	if (stack_empty && fpu_world_lispy_p()) {
+	    fprintf(dyndebug_output,
+		    "Exception handler: stack EMPTY while it should be FULL.\n"
+		    "....tags 0x%04lx, status 0x%04lx, control 0x%04lx\n",
+		    context->FloatSave.TagWord,
+		    context->FloatSave.StatusWord,
+		    context->FloatSave.ControlWord);
+	    c_level_backtrace("Exception handler: strange NPX state",10);
 
 
-	     fprintf(dyndebug_output,
-		     "Exception handler: stack FULL while it should be EMPTY.\n"
-		     "....tags 0x%04lx, status 0x%04lx, control 0x%04lx\n",
-		     context->FloatSave.TagWord,
-		     context->FloatSave.StatusWord,
-		     context->FloatSave.ControlWord);
-	     c_level_backtrace("Exception handler: strange NPX state",10);
 
-	     goto complain;
-	 }
+	    /* FPU stack must be in SBCL-compliant state, having no
+	     * empty regs, but somehow it became empty! BAD thing. */
+	    goto complain;
+	}
 
-	 /* We have legitimate FPU stack exception that is to be
-	  * handled silently.  */
-	 if (dyndebug_lazy_fpu) {
-	     fprintf(dyndebug_output,
-		     "Exception handler: FPU stack %s (%s compliance expected).\n"
-		     "....tags 0x%04lx, status 0x%04lx, control 0x%04lx\n"
-		     "....DataOffset %08lx, ErrorOffset %08lx\n"
-		     "....DataSelector %08lx, ErrorSelector %08lx\n"
-		     "....Cr0Npx %08lx, XMM opcode [6]=%02x, [7]=%02x\n"
-		     "....Main CPU EIP %08lx, ESP %08lx\n",
-		     stack_empty ? "EMPTY" : "FULL",
-		     fpu_world_lispy_p() ? "Lisp" : "C",
-		     context->FloatSave.TagWord,
-		     context->FloatSave.StatusWord,
-		     context->FloatSave.ControlWord,
-		     context->FloatSave.DataOffset,
-		     context->FloatSave.ErrorOffset,
-		     context->FloatSave.DataSelector,
-		     context->FloatSave.ErrorSelector,
-		     context->FloatSave.Cr0NpxState,
-		     context->ExtendedRegisters[6],
-		     context->ExtendedRegisters[7],
-		     context->Eip, context->Esp);
-	     c_level_backtrace("....see where it happened.",10);
-	 }
-	 if (sb_control_update_sb_stat_counters) {
-	     InterlockedIncrement(&sb_stat_fpu_modeswitch_cycling_counter);
-	 }
-	 contextual_fpu_state = !fpu_world_lispy_p();
-	 context->FloatSave.ControlWord =
-	     contextual_fpu_state ?
-	     self->saved_lisp_fpu_mode :
-	     self->saved_c_fpu_mode;
-
-	 context->FloatSave.StatusWord &= ~(0x3941);
-
-	 context->FloatSave.TagWord = contextual_fpu_state ? 0x5555 : 0xFFFF;
-	 memset(context->FloatSave.RegisterArea,0,
-		sizeof(context->FloatSave.RegisterArea));
-	 maybe_set_xmm_state(context,contextual_fpu_state);
-	 maybe_inject_fpu_instruction_restart(context);
-	 goto finish;
-     }
-
-     /* If FPU world is not marked as cruel, we mark it (we don't
-      * really know where we interrupted). */
-
-     if (self&&((self->in_lisp_fpu_mode &&
-		 ((context->FloatSave.TagWord & 0x5555)&
-		  ((context->FloatSave.TagWord & 0xAAAA)>>1)))
-		||(!self->in_lisp_fpu_mode &&
-		   ((context->FloatSave.TagWord & 0xFFFF)!=0xFFFF)))) {
-	 self->in_lisp_fpu_mode |= 0xFF00; /* Hello cruel world */
-     }
+	if (!stack_empty && !fpu_world_lispy_p()) {
+	    /* FPU stack must be in C-compliant state, having no
+	     * valid regs, but somehow it has overflown! BAD thing. */
 
 
-     ctx.win32_context = context;
+	    fprintf(dyndebug_output,
+		    "Exception handler: stack FULL while it should be EMPTY.\n"
+		    "....tags 0x%04lx, status 0x%04lx, control 0x%04lx\n",
+		    context->FloatSave.TagWord,
+		    context->FloatSave.StatusWord,
+		    context->FloatSave.ControlWord);
+	    c_level_backtrace("Exception handler: strange NPX state",10);
 
-     /* For EXCEPTION_ACCESS_VIOLATION only. */
-     odprintf("handle exception, EIP = 0x%p, code = 0x%p (addr = 0x%p)",
-	      context->Eip, exception_record->ExceptionCode, fault_address);
-     if (exception_record->ExceptionFlags & (EH_UNWINDING | EH_EXIT_UNWIND)) {
-	 /* If we're being unwound, be graceful about it. */
-	 /* Undo any dynamic bindings, including *gc-safe*. */
-	 unbind_to_here(exception_frame->bindstack_pointer,
-			arch_os_get_current_thread());
-	 gc_safepoint();
-	 disposition = ExceptionContinueSearch;
-	 goto finish;
-     }
+	    goto complain;
+	}
 
-     if (single_stepping &&
-	 exception_record->ExceptionCode == EXCEPTION_SINGLE_STEP) {
-	 /* We are doing a displaced instruction. At least function
-	  * end breakpoints uses this. */
-	 restore_breakpoint_from_single_step(&ctx);
-	 goto finish;
-     }
-     if (IS_TRAP_EXCEPTION(exception_record, ctx)) {
-	 unsigned trap;
-	 /* This is just for info in case the monitor wants to print an
-	  * approximation. */
-	 access_control_stack_pointer(self) =
-	     (lispobj *)*os_context_sp_addr(&ctx);
-	 /* Unlike some other operating systems, Win32 leaves EIP
-	  * pointing to the breakpoint instruction. */
-	 ctx.win32_context->Eip += TRAP_CODE_WIDTH;
-	 /* Now EIP points just after the INT3 byte and aims at the
-	  * 'kind' value (eg trap_Cerror). */
-	 trap = *(unsigned char *)(*os_context_pc_addr(&ctx));
-	 /* Before any other trap handler: gc_safepoint ensures that
-	    inner alloc_sap for passing the context won't trap on
-	    pseudo-atomic. */
-	 gc_safepoint();
-	 if (trap == trap_PendingInterrupt) {
-	     /* Done everything needed for this trap, except EIP
-		adjustment */
-	     arch_skip_instruction(&ctx);
-	 } else {
-	     block_blockable_signals(0,&ctx.sigmask);
-	     handle_trap(&ctx, trap);
-	     thread_sigmask(SIG_SETMASK,&ctx.sigmask,NULL);
-	 }
-	 goto finish;
-     }
-     else if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION
-	      && fault_address == GC_SAFEPOINT_PAGE_ADDR) {
-	 /* Pick off GC-related memory fault next. */
-	 gc_safepoint();
-	 goto finish;
-     }
-     else if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
-	      (is_valid_lisp_addr(fault_address) ||
-	       is_linkage_table_addr(fault_address))) {
-	 /* Pick off GC-related memory fault next. */
-	 MEMORY_BASIC_INFORMATION mem_info;
-	 int index = find_page_index(fault_address);
-	 if ((index != -1) && (page_table[index].write_protected)) {
-	     gencgc_handle_wp_violation(fault_address);
-	     goto finish;
-	 }
-	 AVER(VirtualQuery(fault_address, &mem_info, sizeof mem_info));
+	/* We have legitimate FPU stack exception that is to be
+	 * handled silently.  */
+	if (dyndebug_lazy_fpu) {
+	    fprintf(dyndebug_output,
+		    "Exception handler: FPU stack %s (%s compliance expected).\n"
+		    "....tags 0x%04lx, status 0x%04lx, control 0x%04lx\n"
+		    "....DataOffset %08lx, ErrorOffset %08lx\n"
+		    "....DataSelector %08lx, ErrorSelector %08lx\n"
+		    "....Cr0Npx %08lx, XMM opcode [6]=%02x, [7]=%02x\n"
+		    "....Main CPU EIP %08lx, ESP %08lx\n",
+		    stack_empty ? "EMPTY" : "FULL",
+		    fpu_world_lispy_p() ? "Lisp" : "C",
+		    context->FloatSave.TagWord,
+		    context->FloatSave.StatusWord,
+		    context->FloatSave.ControlWord,
+		    context->FloatSave.DataOffset,
+		    context->FloatSave.ErrorOffset,
+		    context->FloatSave.DataSelector,
+		    context->FloatSave.ErrorSelector,
+		    context->FloatSave.Cr0NpxState,
+		    context->ExtendedRegisters[6],
+		    context->ExtendedRegisters[7],
+		    context->Eip, context->Esp);
+	    c_level_backtrace("....see where it happened.",10);
+	}
+	if (sb_control_update_sb_stat_counters) {
+	    InterlockedIncrement(&sb_stat_fpu_modeswitch_cycling_counter);
+	}
 
-	 if (mem_info.State == MEM_RESERVE) {
-	     /* First use new page, lets get some memory for it. */
-	     AVER(VirtualAlloc(mem_info.BaseAddress, os_vm_page_size,
-			       MEM_COMMIT, PAGE_EXECUTE_READWRITE));
-	     /*
-	      * Now, if the page is supposedly write-protected and this
-	      * is a write, tell the gc that it's been hit.
-	      *
-	      * FIXME: Are we supposed to fall-through to the Lisp
-	      * exception handler if the gc doesn't take the wp violation?
-	      */
-	     if ((index != -1) && (page_table[index].write_protected))
-		 gencgc_handle_wp_violation(fault_address);
-	     goto finish;
-	 } else {
-	     /* It's `almost certainly' a WP fault for GC's
-	      * attention. However, there is another possibility:
-	      * this page could be decommitted when we hit it, but
-	      * committed between that moment and our
-	      * VirtualQuery. Let's check what VirtualQuery said
-	      * about its protection: if it's not WP, there is no
-	      * point in calling GC, we just continue execution.
-	      */
-	     if (mem_info.Protect == PAGE_EXECUTE_READWRITE) {
-		 goto finish;
-	     }
-	     if (gencgc_handle_wp_violation(fault_address)) {
-		 goto finish;
-	     }
-	 }
-     } else
-	 if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
-	     (fault_address) &&
-	     (fault_address < undefined_alien_address ||
-	      fault_address >= undefined_alien_address + os_vm_page_size)) {
-	     /* For pages outside GC range, try to commit space allocated by
-		lazy os_validate with zero address. Recommit is possible, so
-		concurrency is not a problem. */
-	     LPVOID done;
-	     os_vm_size_t space;
-	     if (((uintptr_t)fault_address)<((uintptr_t)this_thread)&&
-		 ((uintptr_t)fault_address)>((uintptr_t)this_thread->alien_stack_start))
-	     {
-		 space = ((uintptr_t)this_thread)-((uintptr_t)fault_address);
-	     }  else {
-		 fault_address = PTR_ALIGN_DOWN(fault_address,os_vm_page_size);
-		 space = os_vm_page_size;
-	     }
-	     AVERLAX((done =
-		      VirtualAlloc((LPVOID)
-				   (((intptr_t)fault_address)), space,
-				   MEM_COMMIT, PAGE_EXECUTE_READWRITE))
-		     || internal_errors_enabled ||
-		     (fprintf(stderr,"Failed to lazy-commit mem at %p\n",
-			 fault_address)));
-	     if (done) {
-		 goto finish;
-	     }
-	 }
- complain:
-     /* All else failed, drop through to the lisp-side exception handler. */
-     gc_safepoint();             /* don't want to trap on pa_alloc */
-     block_blockable_signals(0,&ctx.sigmask);
+	*((contextual_fpu_state ?
+	   &self->saved_lisp_fpu_mode :
+	   &self->saved_c_fpu_mode)) = (context->FloatSave.ControlWord & 0xFFFF)<<16;
 
-     /*
-      * If we fall through to here then we need to either forward
-      * the exception to the lisp-side exception handler if it's
-      * set up, or drop to LDB.
-      */
+	contextual_fpu_state = contextual_fpu_state^4; /* inverted */
 
-     if (internal_errors_enabled) {
-	 lispobj context_sap;
-	 lispobj exception_record_sap;
+	context->FloatSave.ControlWord =
+	    *(contextual_fpu_state ?
+	      &self->saved_lisp_fpu_mode :
+	      &self->saved_c_fpu_mode)>>16;
 
-	 asm("fnclex");
-	 /* We're making the somewhat arbitrary decision that having
-	  * internal errors enabled means that lisp has sufficient
-	  * marbles to be able to handle exceptions, but exceptions
-	  * aren't supposed to happen during cold init or reinit
-	  * anyway. */
 
-	 fake_foreign_function_call(&ctx);
+	context->FloatSave.StatusWord &= ~(0x3941);
 
-	 /* Allocate the SAP objects while the "interrupts" are still
-	  * disabled. */
-	 context_sap = alloc_sap(&ctx);
-	 exception_record_sap = alloc_sap(exception_record);
-	 thread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
+	context->FloatSave.TagWord = contextual_fpu_state ? 0x5555 : 0xFFFF;
+	memset(context->FloatSave.RegisterArea,0,
+	       sizeof(context->FloatSave.RegisterArea));
+	maybe_set_xmm_state(context,contextual_fpu_state);
+	maybe_inject_fpu_instruction_restart(context);
+	goto finish;
+    }
 
-	 /* The exception system doesn't automatically clear pending
-	  * exceptions, so we lose as soon as we execute any FP
-	  * instruction unless we do this first. */
-	 /* Call into lisp to handle things. */
-	 funcall2(StaticSymbolFunction(HANDLE_WIN32_EXCEPTION), context_sap,
-		  exception_record_sap);
-	 /* If Lisp doesn't nlx, we need to put things back. */
-	 undo_fake_foreign_function_call(&ctx);
-	 thread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
-	 gc_safepoint();
-	 /* FIXME: HANDLE-WIN32-EXCEPTION should be allowed to decline */
-	 goto finish;
-     }
+    /* If FPU world is not marked as cruel, we mark it (we don't
+     * really know where we interrupted). */
 
-     fprintf(stderr, "Exception Code: 0x%lx.\n", exception_record->ExceptionCode);
-     fprintf(stderr, "Faulting IP: 0x%lx.\n", (DWORD)exception_record->ExceptionAddress);
-     if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
-	 MEMORY_BASIC_INFORMATION mem_info;
+    if (self&&((self->in_lisp_fpu_mode &&
+		((context->FloatSave.TagWord & 0x5555)&
+		 ((context->FloatSave.TagWord & 0xAAAA)>>1)))
+	       ||(!self->in_lisp_fpu_mode &&
+		  ((context->FloatSave.TagWord & 0xFFFF)!=0xFFFF)))) {
+	self->in_lisp_fpu_mode |= 0xFF00; /* Hello cruel world */
+    }
 
-	 if (VirtualQuery(fault_address, &mem_info, sizeof mem_info)) {
-	     fprintf(stderr, "page status: 0x%lx.\n", mem_info.State);
-	 }
+    ctx.win32_context = context;
+    ctx.sigmask = self ? self->os_thread->blocked_signal_set : 0;
 
-	 fprintf(stderr, "Was writing: %ld, where: 0x%lx.\n",
-		 exception_record->ExceptionInformation[0],
-		 (DWORD)fault_address);
-     }
+    /* For EXCEPTION_ACCESS_VIOLATION only. */
+    odprintf("handle exception, EIP = 0x%p, code = 0x%p (addr = 0x%p)",
+	     context->Eip, exception_record->ExceptionCode, fault_address);
 
-     fflush(stderr);
+    if (single_stepping &&
+	exception_record->ExceptionCode == EXCEPTION_SINGLE_STEP) {
+	/* We are doing a displaced instruction. At least function
+	 * end breakpoints uses this. */
 
-     fake_foreign_function_call(&ctx);
-     lose("Exception too early in cold init, cannot continue.");
+	push_gcing_safety(&safety);
+	restore_breakpoint_from_single_step(&ctx);
+	pop_gcing_safety(&safety,0);
+	goto finish;
+    }
+    if (IS_TRAP_EXCEPTION(exception_record, ctx)) {
+	unsigned trap;
+	/* Unlike some other operating systems, Win32 leaves EIP
+	 * pointing to the breakpoint instruction. */
+	ctx.win32_context->Eip += TRAP_CODE_WIDTH;
+	/* Now EIP points just after the INT3 byte and aims at the
+	 * 'kind' value (eg trap_Cerror). */
+	trap = *(unsigned char *)(*os_context_pc_addr(&ctx));
+	 
+	/* Before any other trap handler: gc_safepoint ensures that
+	   inner alloc_sap for passing the context won't trap on
+	   pseudo-atomic. */
+	if (trap == trap_PendingInterrupt) {
+	    /* Done everything needed for this trap, except EIP
+	       adjustment */
+	    gc_maybe_stop_with_context(&ctx, 0);
+	    arch_skip_instruction(&ctx);
+	    goto finish;
+	}
+	/* This is just for info in case the monitor wants to print an
+	 * approximation. */
+	access_control_stack_pointer(self) =
+	    (lispobj *)*os_context_sp_addr(&ctx);
 
-     /* FIXME: WTF? How are we supposed to end up here? */
- #if defined(LISP_FEATURE_SB_THREAD)
-     pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
-     gc_safepoint();
- #endif
+	block_blockable_signals(0,&ctx.sigmask);
+	push_gcing_safety(&safety);
+	handle_trap(&ctx, trap);
+	pop_gcing_safety(&safety,0);
+	thread_sigmask(SIG_SETMASK,&ctx.sigmask,NULL);
 
-     /* Common return point. */
- finish:
-     if (self)
-	 self->in_lisp_fpu_mode = contextual_fpu_state;
+	goto finish;
+    }
+    else if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
+	if (fault_address == GC_SAFEPOINT_PAGE_ADDR) {
+	    /* Pick off GC-related memory fault next. */
+	    gc_maybe_stop_with_context(&ctx, 1);
+	    goto finish;
+	}
+	int index = find_page_index(fault_address);
+	if (index != -1) {
+	    if (page_table[index].write_protected) {
+		gencgc_handle_wp_violation(fault_address);
+	    } else {
+		if (!addr_in_mmapped_core(fault_address)) {
+		    AVER(VirtualAlloc(PTR_ALIGN_DOWN(fault_address,os_vm_page_size),
+				      os_vm_page_size,
+				      MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+		} 
+	    }
+	    goto finish;
+	}
+	if (fault_address == undefined_alien_address)
+	    goto complain;
+	
+	AVER(VirtualAlloc(PTR_ALIGN_DOWN(fault_address,os_vm_page_size),
+			  os_vm_page_size,
+			  MEM_COMMIT, PAGE_EXECUTE_READWRITE)
+	     ||(fprintf(stderr,"Unable to recommit addr %p eip %p\n",
+			fault_address, context->Eip) &&
+		(c_level_backtrace("BT",5),
+		 fake_foreign_function_call(&ctx),
+		 lose("Lispy backtrace"),
+		 0)));
 
+	goto finish;
+	
+    }
+complain:
+    /* All else failed, drop through to the lisp-side exception handler. */
+
+    /*
+     * If we fall through to here then we need to either forward
+     * the exception to the lisp-side exception handler if it's
+     * set up, or drop to LDB.
+     */
+
+    if (internal_errors_enabled) {
+	struct gcing_safety safety;
+	lispobj context_sap;
+	lispobj exception_record_sap;
+
+	asm("fnclex");
+	/* We're making the somewhat arbitrary decision that having
+	 * internal errors enabled means that lisp has sufficient
+	 * marbles to be able to handle exceptions, but exceptions
+	 * aren't supposed to happen during cold init or reinit
+	 * anyway. */
+
+	fake_foreign_function_call(&ctx);
+	push_gcing_safety(&safety);
+
+	/* Allocate the SAP objects while the "interrupts" are still
+	 * disabled. */
+	context_sap = alloc_sap(&ctx);
+	exception_record_sap = alloc_sap(exception_record);
+	thread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
+
+	/* The exception system doesn't automatically clear pending
+	 * exceptions, so we lose as soon as we execute any FP
+	 * instruction unless we do this first. */
+	/* Call into lisp to handle things. */
+	funcall2(StaticSymbolFunction(HANDLE_WIN32_EXCEPTION), context_sap,
+		 exception_record_sap);
+
+	/* If Lisp doesn't nlx, we need to put things back. */
+	pop_gcing_safety(&safety,0);
+	undo_fake_foreign_function_call(&ctx);
+	thread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
+	/* FIXME: HANDLE-WIN32-EXCEPTION should be allowed to decline */
+	goto finish;
+    }
+
+    fprintf(stderr, "Exception Code: 0x%lx.\n", exception_record->ExceptionCode);
+    fprintf(stderr, "Faulting IP: 0x%lx.\n", (DWORD)exception_record->ExceptionAddress);
+    if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
+	MEMORY_BASIC_INFORMATION mem_info;
+
+	if (VirtualQuery(fault_address, &mem_info, sizeof mem_info)) {
+	    fprintf(stderr, "page status: 0x%lx.\n", mem_info.State);
+	}
+
+	fprintf(stderr, "Was writing: %ld, where: 0x%lx.\n",
+		exception_record->ExceptionInformation[0],
+		(DWORD)fault_address);
+    }
+
+    fflush(stderr);
+
+    fake_foreign_function_call(&ctx);
+    lose("Exception too early in cold init, cannot continue.");
+
+    /* FIXME: WTF? How are we supposed to end up here? */
+#if defined(LISP_FEATURE_SB_THREAD)
+    pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
+    gc_contextual_safepoint(&ctx);
+#endif
+
+    /* Common return point. */
+finish:
+    if (self)
+	self->in_lisp_fpu_mode = contextual_fpu_state;
     SetLastError(lastError);
     return disposition;
 }

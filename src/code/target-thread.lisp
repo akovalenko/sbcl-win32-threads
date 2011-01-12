@@ -936,8 +936,13 @@ have the foreground next."
 
 
 ;;;; The beef
-#!+(and win32 sb-thread)
-(sb!alien:define-alien-routine ("gc_safepoint" gc-safepoint) sb!alien:void)
+
+;;; gc_safepoint is currently an epilogue of any foreign function
+;;; call; it is specifically designed to be called this way.  We call
+;;; gc_safepoint by defining an alien routine for "do_nothing" (no-op
+;;; C function).
+#!+sb-gc-safepoint
+(sb!alien:define-alien-routine ("do_nothing" gc-safepoint) sb!alien:void)
 
 (defun make-thread (function &key name ephemeral)
   #!+sb-doc
@@ -1159,20 +1164,19 @@ SB-EXT:QUIT - the usual cleanup forms will be evaluated"
   (defun %symbol-value-in-thread (symbol thread)
     ;; Prevent the thread from dying completely while we look for the TLS
     ;; area...
-    (with-all-threads-lock
-      (loop
-        (if (thread-alive-p thread)
-	    ;; Maybe without-gcing is a way to go here.  My opinion is
-	    ;; based on a belief that, while _acquiring_ the lock in
-	    ;; without-gcing requires the same changes for other lock
-	    ;; acquisitions --- _holding_ the lock while doing
-	    ;; something (without-gcing) inside doesn't have such
-	    ;; restrictions.
-            (without-gcing
-	      (let* ((epoch sb!kernel::*gc-epoch*)
-		     (offset (* sb!vm:n-word-bytes
-				(sb!vm::symbol-tls-index symbol)))
-		     (tl-val (sap-ref-word (%thread-sap thread) offset)))
+    (loop
+      (with-all-threads-lock
+	(if (thread-alive-p thread)
+	    (let* (#!-sb-gc-safepoint (epoch sb!kernel::*gc-epoch*)
+		   (offset (* sb!vm:n-word-bytes
+			      (sb!vm::symbol-tls-index symbol)))
+		   #!-sb-gc-safepoint
+		   (tl-val (sap-ref-word (%thread-sap thread) offset))
+		   #!+sb-gc-safepoint
+		   (tl-pin (%make-lisp-obj (sap-ref-word (%thread-sap thread) offset)))
+		   #!+sb-gc-safepoint
+		   (tl-val (get-lisp-obj-address tl-pin)))
+	      (with-pinned-objects (#!+sb-gc-safepoint tl-pin)
 		(cond ((zerop offset)
 		       (return (values nil :no-tls-value)))
 		      ((or (eql tl-val sb!vm:no-tls-value-marker-widetag)
@@ -1193,11 +1197,14 @@ SB-EXT:QUIT - the usual cleanup forms will be evaluated"
 			 ;; object is that the call to MAKE-LISP-OBJ may cause
 			 ;; bignum allocation, at which point TL-VAL might not
 			 ;; be alive anymore -- hence the epoch check.
-			 (when (eq epoch sb!kernel::*gc-epoch*)
-			   (if ok
-			       (return (values obj :ok))
-			       (return (values obj :invalid-tls-value)))))))))
-            (return (values nil :thread-dead))))))
+			 #!+sb-gc-safepoint (aver (eql (get-lisp-obj-address tl-pin)
+						       tl-val))
+			 (when #!+sb-gc-safepoint t
+			       #!-sb-gc-safepoint (eq epoch sb!kernel::*gc-epoch*)
+			       (if ok
+				   (return (values obj :ok))
+				   (return (values obj :invalid-tls-value)))))))))
+	    (return (values nil :thread-dead))))))
 
   (defun %set-symbol-value-in-thread (symbol thread value)
     (with-pinned-objects (value)

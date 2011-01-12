@@ -15,6 +15,12 @@ static inline os_context_t *arch_os_get_context(void **void_context)
     return (os_context_t *) *void_context;
 }
 
+static inline DWORD NT_GetLastError() {
+    DWORD result;
+    asm("movl %%fs:0x0D,%0":"=r"(result));
+    return result;
+}
+
 unsigned long os_context_fp_control(os_context_t *context);
 void os_restore_fp_control(os_context_t *context);
 

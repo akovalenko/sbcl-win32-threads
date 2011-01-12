@@ -441,4 +441,10 @@
   (saved-c-fpu-mode :c-type "unsigned int" :length 1)
   #!+sb-auto-fpu-switch
   (saved-lisp-fpu-mode :c-type "unsigned int" :length 1)
+  #!+sb-gc-safepoint
+  (csp-around-foreign-call :c-type "lispobj *" :length 1)
+  #!+sb-gc-safepoint
+  (pc-around-foreign-call :c-type "lispobj *" :length 1)
+  #!+sb-gc-safepoint
+  (gc-safepoint-context :c-type "os_context_t *" :length 1)
   (interrupt-contexts :c-type "os_context_t *" :rest-p t))

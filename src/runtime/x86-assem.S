@@ -73,9 +73,17 @@
 
 #if defined(LISP_FEATURE_WIN32)
 	
-#define	MoveTlSymbol(symbol,reg) ; \
-	movl	%fs:0xE10+(4*63), reg ; \
+#define	TEB_STATIC_TLS_SLOTS_OFFSET	0xE10
+#define TEB_SBCL_THREAD_BASE_OFFSET	(TEB_STATIC_TLS_SLOTS_OFFSET+(63*4))
+#define	SBCL_THREAD_BASE_EA %fs:TEB_SBCL_THREAD_BASE_OFFSET
+	
+#define	LoadTlSymbolValueAddress(symbol,reg) ; 		\
+	movl	SBCL_THREAD_BASE_EA, reg ; 		\
 	addl	(symbol+SYMBOL_TLS_INDEX_OFFSET), reg ; \
+	
+#define	LoadCurrentThreadSlot(offset,reg);		\
+	movl	SBCL_THREAD_BASE_EA, reg ;		\
+	movl	offset(reg), reg ;			\
 	
 #endif	
 	
@@ -133,25 +141,63 @@ GNAME(call_into_c):
 /* Setup the NPX for C */
 	CLEAR_FPU_STACK
 #if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
-	movl	(%esp),%ebx /* return lisp addr */
-	subl	$4,%esp
-	movl	%ecx,(%esp) /* top == our callee, top+1 == finish */ 
-	movl	$Lfinish_call_into_c, 4(%esp)
-	jmp	GNAME(gc_enter_safe_region) /* esr => callee => */
-Lfinish_call_into_c:	
-	subl	$8,%esp
-	movl	%ebx,(%esp)
-	movl	%edx,4(%esp)
-	movl	%eax,%ebx
-	call	GNAME(gc_leave_region)
-	movl	4(%esp),%edx
-	movl	%ebx,%eax
-	FILL_FPU_STACK	
-	ret
+	
+/* On :sb-gc-safepoint platforms, vop call-out is defined to clobber
+   everything, so all live Lisp TNs are forced to stack. The purpose of
+   that is to provide context information for conservative GC
+   cooperatively, without forcing it to do GetThreadContext()
+   or something like that. With clobber-everything VOP CALL-OUT,
+   the only value needed by cooperative GC would be the top of stack
+   (for the moment of entering foreign function). Almost.
+
+   Because after function returns, there has to be an enclosing call
+   to gc_leave_foreign_call() or something like that; before that call
+   another thread's GC may be in progress because it thinks that this
+   thread is in foreign code and won't touch the Lisp heap. Thus we 
+   have to make the return address "unmovable" by conservative GC
+   as well.
+   
+   The problem as described above applies to "inline" version of VOP
+   CALL-OUT body, but it has an equivalent for non-inline version
+   (the one that you see here). In order to present the stack of
+   arguments as our foreign function expects them, call_into_c has to pop
+   Lisp return address into a register first; this register
+   has to preserved by GENCGC separately: our return address is not in
+   the stack anymore.
+	
+   Thus gc_enter_foreign_call takes two args: top of stack and return
+   PC to preserve. */
+
+	pushl 	%esp
+	movl 	%ecx,%esi
+	movl	4(%esp),%ebx
+	call	GNAME(gc_enter_foreign_call)
+	leal	8(%esp),%esp
+	
+	/* foreign call, preserving ESI, EDI, and EBX */
+	call	*%esi
+	
+	/* save and restore result (up to 64 bits); now that we
+	declared VOP call-out to trash ESI and EDI, we can use them
+	for this purpose. */
+	
+	movl	%eax, %esi
+	movl	%edx, %edi
+
+	/* gc_safepoint will clear out CSP field, unmarking this
+	thread as phase1-safe. */
+	
+	call	GNAME(gc_leave_foreign_call)
+
+	movl	%esi, %eax
+	movl	%edi, %edx
+
+	jmp	*%ebx
+
 #else	
 /* Save the return Lisp address in ebx. */
 	popl	%ebx
-	call	*%eax		  # normal callout using Lisp stack
+	call	*%ecx		  # normal callout using Lisp stack
 	
 /* Set up the NPX stack for Lisp. */
 	FILL_FPU_STACK
@@ -162,6 +208,32 @@ Lfinish_call_into_c:
 	SIZE(GNAME(call_into_c))
 
 	
+/* call_into_c_fp_result --
+	
+   Variation of call_into_c for calling functions with floating-point
+   result (in %st(0), a.k.a FR0-TN).
+	
+   Why have both? call_into_c used to have a smart code managing to
+   check FP result presence by asking FPU directly.  The reason for
+   replacing it with a separate wrapper was, frankly, :SB-AUTO-FPU-SWITCH
+   support (which is a questionable feature by itself, of course).
+	
+   Current implementation of :SB-AUTO-FPU-SWITCH (win32-only)
+   reacts on "floating stack check" exception, switching transparently between
+   "Lisp mode" (no registers empty + some control word settings) and "C mode"
+   (all registers empty on call-out + some other control word settings).
+
+   It works for normal C code, but, as of auto-detection of return
+   type, it would require to distinguish between "1 register used" and
+   "all registers used", which is more complicated than empty/non-empty check
+   that used to be in call_into_c. And it would completely defeat the purpose
+   of :SB-AUTO-FPU-SWITCH, as the point is not to save time on 7
+   fldz's here and there, but to be able to run with TS bit in CR0 for
+   some measurable intervals. Modern OSes switch FPU context lazily,
+   and each event of "using FPU after not using it for a long time"
+   costs more like a syscall (with user/kernel/user mode switching) than
+   like a seven non-privileged assembler instructions. */
+	
 	.globl GNAME(call_into_c_fp_result)
 	TYPE(GNAME(call_into_c_fp_result))
 GNAME(call_into_c_fp_result):
@@ -169,31 +241,52 @@ GNAME(call_into_c_fp_result):
 /* Setup the NPX for C */
 	CLEAR_FPU_STACK
 #if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
-	movl	(%esp),%ebx /* return lisp addr */
-	subl	$4,%esp
-	movl	%ecx,(%esp) /* top == our callee, top+1 == finish */ 
-	movl	$Lfinish_call_into_c_fp_result, 4(%esp)
-	jmp	GNAME(gc_enter_safe_region) /* esr => callee => */
-Lfinish_call_into_c_fp_result:	
-	call	GNAME(gc_leave_region)
+	pushl 	%esp
+	movl 	%ecx,%esi
+	movl	4(%esp),%ebx
+	call	GNAME(gc_enter_foreign_call)
+	leal	8(%esp),%esp
+	
+	call	*%esi /* foreign call, preserving ESI, EDI, and EBX */
+	
+	subl	$16,%esp
+	fstpt	(%esp)
+	
+	call	GNAME(gc_leave_foreign_call)
+	
+	fldz;fldz;fldz;fldz;fldz;fldz;fldz; /* 7 elements */
+	fldt	(%esp)			    /* and topmost one */
+#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
+	movl	SBCL_THREAD_BASE_EA, %esi
+	fldcw	THREAD_SAVED_LISP_FPU_MODE_OFFSET+2(%esi)
+	or	$4, THREAD_IN_LISP_FPU_MODE_OFFSET(%esi)
+#endif	
+	jmp	*%ebx	/* without stack adjustment (esp overwrite allowed) */
 #else	
 /* Save the return Lisp address in ebx. */
 	popl	%ebx
 	call	*%eax		  # normal callout using Lisp stack
-#endif
 	fldz;fldz;fldz;fldz;fldz;fldz;fldz;
 	fxch	%st(7)
 #ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
-	movl	%fs:0xE10+4*63,%eax
-	fldcw	THREAD_SAVED_LISP_FPU_MODE_OFFSET(%eax)
-	incb	THREAD_IN_LISP_FPU_MODE_OFFSET(%eax)
+	movl	SBCL_THREAD_BASE_EA,%eax
+	fldcw	THREAD_SAVED_LISP_FPU_MODE_OFFSET+2(%eax)
+	or	$4, THREAD_IN_LISP_FPU_MODE_OFFSET(%eax)
 #endif	
 /* Return. */
 	jmp	*%ebx
+#endif /* LISP_FEATURE_SB_GC_SAFEPOINT */	
+	SIZE(GNAME(call_into_c_fp_result))
 	
-	SIZE(GNAME(call_into_c))
+
+	.text	
+	.globl GNAME(do_nothing)
+	TYPE(GNAME(do_nothing))
+GNAME(do_nothing):	
+	ret
+	SIZE(GNAME(do_nothing))
 	
-	
+
 	.text	
 	.globl GNAME(call_into_lisp_first_time)
 	TYPE(GNAME(call_into_lisp_first_time))
@@ -225,7 +318,7 @@ GNAME(call_into_lisp):
 	pushl	%ebp		# Save old frame pointer.
 	movl	%esp,%ebp	# Establish new frame.
 Lstack:
-	call GNAME(gc_enter_unsafe_region)
+	
 /* Save C regs: ebx esi edi. */
 	pushl	%ebx
 	pushl	%esi
@@ -306,17 +399,14 @@ LsingleValue:
 	popl	%edi
 	popl	%esi
 	popl	%ebx
-
+	
+/* GC page access _after_ restoring phase1-safety, for the same reason as when
+   entering C function (we _are_ entering C function, after all, we're only doing
+   it from the inside...) */
+	
 /* Restore the NPX state. */
 	popl	%ebp		# c-sp
 	movl	%edx,%eax	# c-val
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-	push	%eax
-	push	%edx
-	call GNAME(leave_lisp_function)
-	pop	%edx
-	pop	%eax
-#endif
 	ret
 	SIZE(GNAME(call_into_lisp))
 
@@ -462,6 +552,7 @@ GNAME(do_pending_interrupt):
 #else
 #define ALLOC(size)                                             \
         pushl   size;              /* Argument to alloc      */ \
+        cld     ; 						\
         call    GNAME(alloc);                                   \
         addl    $4,%esp;           /* Pop argument           */
 #endif
@@ -673,6 +764,14 @@ GNAME(alloc_overflow_edi):
 	.globl	GNAME(exception_handler_wrapper)
 	TYPE(GNAME(exception_handler_wrapper))
 GNAME(exception_handler_wrapper):
+	/* handle_exception doesn't care of unwinding now, so we
+	   return */
+	movl 	4(%esp), %eax
+	testb 	$6, 4(%eax)
+	jz 	1f
+	movl	$1,%eax
+	ret
+1:	
 	/* Context layout is: */
 	/* 7 dwords before FSA. (0x1c) */
 	/* 8 dwords and 0x50 bytes in the FSA. (0x70/0x8c) */
@@ -903,7 +1002,7 @@ Lend_base:
         pop %eax
 	ret
 	SIZE(GNAME(fast_bzero_base))
-
+	
 #ifdef LISP_FEATURE_WIN32
 	.globl GNAME(uwp_seh_handler_gate)
 	TYPE(GNAME(uwp_seh_handler_gate))
@@ -920,14 +1019,13 @@ Lunwinding:
 	movl	0x28(%ebp),%eax   /* seh frame */
 	lea	-12(%eax),%eax    /* uwp block */
 	movl	(%eax),%ebx	  /* prev uwp block */
-	MoveTlSymbol(CURRENT_UNWIND_PROTECT_BLOCK,%ecx)
+	LoadTlSymbolValueAddress(CURRENT_UNWIND_PROTECT_BLOCK,%ecx)
 	movl	%ebx,(%ecx)
 	xor	%ecx,%ecx
 	movl	%ebp,%ebx
 	movl	4(%eax),%ebp
 	jmp	*8(%eax)
 	
-/*	jmp	*GNAME(real_uwp_seh_handler) */
 	SIZE(GNAME(uwp_seh_handler_gate))
 #endif	
 

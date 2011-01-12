@@ -856,9 +856,10 @@ int pthread_cond_signal(pthread_cond_t *cv)
 
 void cv_wakeup_add(struct pthread_cond_t* cv, struct thread_wakeup* w)
 {
+  HANDLE event = cv->get_fn();
   w->next = NULL;
   pthread_mutex_lock(&cv->wakeup_lock);
-  w->event = cv->get_fn();
+  w->event = event;
   if (cv->last_wakeup == w) {
     fprintf(stderr, "cv->last_wakeup == w\n");
     fflush(stderr);
@@ -921,6 +922,7 @@ int pthread_cond_wait(pthread_cond_t * cv, pthread_mutex_t * cs)
     ExitProcess(0);
   }
   pthread_self()->waiting_cond = cv;
+  (*cs)->owner = 0;
   pthread_mutex_unlock(cs);
   if (cv->alertable) {
     while (WaitForSingleObjectEx(w.event, INFINITE, TRUE) == WAIT_IO_COMPLETION);
@@ -931,6 +933,7 @@ int pthread_cond_wait(pthread_cond_t * cv, pthread_mutex_t * cs)
   /* Event is signalled once, wakeup is dequeued by signaller. */
   cv->return_fn(w.event);
   pthread_mutex_lock(cs);
+  (*cs)->owner = pthread_self();
   return 0;
 }
 
@@ -944,6 +947,7 @@ int pthread_cond_timedwait(pthread_cond_t * cv, pthread_mutex_t * cs, const stru
     ExitProcess(0);
   }
   pthread_self()->waiting_cond = cv;
+  (*cs)->owner = 0;
   pthread_mutex_unlock(cs);
   {
     struct timeval cur_tm;
@@ -969,6 +973,7 @@ int pthread_cond_timedwait(pthread_cond_t * cv, pthread_mutex_t * cs, const stru
   }
   cv->return_fn(w.event);
   pthread_mutex_lock(cs);
+  (*cs)->owner = pthread_self();
   if (rv == WAIT_TIMEOUT)
     return ETIMEDOUT;
   else
