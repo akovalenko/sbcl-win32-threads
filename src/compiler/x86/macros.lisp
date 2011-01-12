@@ -307,7 +307,6 @@
   (cond
     (dynamic-extent
      (allocation-dynamic-extent alloc-tn size lowtag))
-    #!-(and win32 sb-thread)
     ((or (null inline) (policy inline (>= speed space)))
      (allocation-inline alloc-tn size))
     (t

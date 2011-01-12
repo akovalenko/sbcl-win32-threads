@@ -1306,6 +1306,8 @@ void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
     boolean maybe_wake = 0;
     DWORD lastError = GetLastError();
 
+    check_pending_gc();
+
     pthread_mutex_lock(self->state_lock);
     self->csp_around_foreign_call = csp;
     self->pc_around_foreign_call = pc;
@@ -1335,20 +1337,15 @@ void gc_leave_foreign_call()
        something that can be satisfied on foreign call exit.
        That's why there's no gc_wake_wakeable here. */
     
-    /* wait if externally suspended */
     gc_accept_thread_state(0);
-    
-    do {
-	pthread_mutex_unlock(self->state_lock);
-	while(check_pending_gc() || check_pending_interrupts());
-	pthread_mutex_lock(self->state_lock);
-    } while (gc_accept_thread_state(0));
 
     /* Then unpublish context data */
     self->csp_around_foreign_call = NULL;
     self->pc_around_foreign_call = NULL;
+
     /* unlock is a memory barrier (release semantics) */
     pthread_mutex_unlock(self->state_lock);
+    while (check_pending_interrupts());
     SetLastError(lastError);
 }
 
