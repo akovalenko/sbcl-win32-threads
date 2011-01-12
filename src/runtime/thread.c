@@ -1256,14 +1256,6 @@ boolean gc_accept_thread_state(boolean wakep)
 	if (suspend_info.reason != SUSPEND_REASON_INTERRUPT)
 	    SetSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
 	waitp = 1;
-	break;
-    case STATE_SUSPENDED_BRIEFLY:
-	if (suspend_info.reason != SUSPEND_REASON_INTERRUPT)
-	    SetSymbolValue(STOP_FOR_GC_PENDING,T,self);
-	waitp = 1;
-	break;
-    }
-    if (waitp) {
 	/* Other thread's GC causes this thread to abandon its
 	   willingness to GC, if such one existed. Seems to be
 	   reasonable both for full and brief suspend. */
@@ -1273,6 +1265,14 @@ boolean gc_accept_thread_state(boolean wakep)
 	    suspend_info.reason != SUSPEND_REASON_INTERRUPT)
 	    SetSymbolValue(GC_PENDING,NIL,self);
 
+	break;
+    case STATE_SUSPENDED_BRIEFLY:
+	if (suspend_info.reason != SUSPEND_REASON_INTERRUPT)
+	    SetSymbolValue(STOP_FOR_GC_PENDING,T,self);
+	waitp = 1;
+	break;
+    }
+    if (waitp) {
 	if (wakep) {
 	    /* 1. wakep requires waitp now (only suspend states are
 	       waking -- when replacing blocker states)
@@ -1296,7 +1296,6 @@ boolean gc_accept_thread_state(boolean wakep)
 void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
 {
     struct thread* self = arch_os_get_current_thread();
-    int gcwake = 0;
     boolean maybe_wake = 0;
     DWORD lastError = GetLastError();
 
@@ -1304,13 +1303,11 @@ void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
     self->csp_around_foreign_call = csp;
     self->pc_around_foreign_call = pc;
     maybe_wake = gc_adjust_thread_state(self);
-    gc_accept_thread_state(maybe_wake);
     pthread_mutex_unlock(self->state_lock);
     
     if (maybe_wake)
-    	gc_wake_wakeable();
-
-
+	gc_wake_wakeable();
+    
     SetLastError(lastError);
     /* Proceed to foreign code, while possibly being in suspended
        state (!) or phase2-blocker. Foreign code shouldn't touch memory
@@ -1339,7 +1336,7 @@ void gc_leave_foreign_call()
     self->pc_around_foreign_call = NULL;
     /* unlock is a memory barrier (release semantics) */
     pthread_mutex_unlock(self->state_lock);
-    while(check_pending_interrupts());
+    while(check_pending_gc() || check_pending_interrupts());
     SetLastError(lastError);
 }
 
@@ -1387,8 +1384,7 @@ void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access)
     /* here our own willingness to GC (or interrupt handling) may take
        over. NB if concurrent GC was in progress, there is already no
        GC_PENDING. */
-    check_pending_gc();
-    while(check_pending_interrupts());
+    while(check_pending_gc() || check_pending_interrupts());
 
     if (SymbolTlValue(STOP_FOR_GC_PENDING,self)==NIL
 	&& self->state != STATE_RUNNING) {
