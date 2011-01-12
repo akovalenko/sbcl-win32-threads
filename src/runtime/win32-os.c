@@ -1878,6 +1878,7 @@ complain:
 	 * aren't supposed to happen during cold init or reinit
 	 * anyway. */
 
+        block_blockable_signals(0,&ctx.sigmask);
 	fake_foreign_function_call(&ctx);
 	BEGIN_GC_UNSAFE_CODE;
 
@@ -1924,7 +1925,7 @@ complain:
     /* FIXME: WTF? How are we supposed to end up here? */
 #if defined(LISP_FEATURE_SB_THREAD)
     pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
-    gc_contextual_safepoint(&ctx);
+    gc_maybe_stop_with_context(&ctx,0);
 #endif
 
     /* Common return point. */
