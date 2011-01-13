@@ -131,6 +131,7 @@ typedef struct thread_wakeup {
   struct thread_wakeup *next;
   volatile int *uaddr;
   int uval;
+  int info;
 } thread_wakeup;
 
 typedef HANDLE (*cv_event_get_fn)();
@@ -192,7 +193,7 @@ typedef struct pthread_thread {
   pthread_cond_t *waiting_cond;
   void *futex_wakeup;
   sigset_t blocked_signal_set;
-  unsigned int signal_is_pending[NSIG];
+  volatile sigset_t pending_signal_set;
   void * retval;
 
   pthread_mutex_t lock;
@@ -299,6 +300,8 @@ int sigpending(sigset_t *set);
 
 void pthread_np_add_pending_signal(pthread_t thread, int signum);
 void pthread_np_remove_pending_signal(pthread_t thread, int signum);
+sigset_t pthread_np_other_thread_sigpending(pthread_t thread);
+
 int pthread_np_notice_thread();
 int pthread_np_get_thread_context(pthread_t thread, CONTEXT* context);
 int pthread_np_convert_self_to_fiber();

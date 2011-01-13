@@ -410,8 +410,6 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
   } else {
     sigemptyset(&pth->blocked_signal_set);
   }
-  for (i = 1; i < NSIG; ++i)
-    pth->signal_is_pending[i] = 0;
   pth->state = pthread_state_running;
   pthread_mutex_init(&pth->lock, NULL);
   pthread_mutex_init(&pth->fiber_lock, NULL);
@@ -603,9 +601,15 @@ int pthread_mutex_destroy(pthread_mutex_t *mutex)
 /* Add pending signal to (other) thread */
 void pthread_np_add_pending_signal(pthread_t thread, int signum)
 {
-  const char * s = thread->signal_is_pending[signum] ? "pending" : "not pending";
+    /* See __sync_fetch_and_or() for gcc 4.4, at least.  As some
+       people are still using gcc 3.x, I prefer to do this in asm.
 
-  thread->signal_is_pending[signum] = 1;
+       For win64 we'll HAVE to rewrite it. __sync_fetch_and_or() seems
+       to be a rational choice -- there are plenty of GCCisms in SBCL
+       anyway.
+    */
+    sigset_t to_add = 1<<signum;
+    asm("lock orl %1,%0":"=m"(thread->pending_signal_set):"r"(to_add));
 }
 
 static void futex_interrupt(pthread_t thread);
@@ -621,8 +625,15 @@ int pthread_kill(pthread_t thread, int signum)
 
 void pthread_np_remove_pending_signal(pthread_t thread, int signum)
 {
-  const char * s = thread->signal_is_pending[signum] ? "pending" : "not pending";
-  thread->signal_is_pending[signum] = 0;
+    sigset_t to_and = ~(1<<signum);
+    asm("lock andl %1,%0":"=m"(thread->pending_signal_set):"r"(to_and));
+}
+
+sigset_t pthread_np_other_thread_sigpending(pthread_t thread)
+{
+    return
+	InterlockedCompareExchange((volatile LONG*)&pthread_self()->pending_signal_set,
+				   0, 0);
 }
 
 /* Mutex implementation uses CRITICAL_SECTIONs. Somethings to keep in
@@ -757,6 +768,16 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex)
    creation on each call to pthread_cond_[timed]wait */
 static pthread_key_t cv_event_key;
 
+/* .info field in wakeup record is an "opportunistic" indicator that
+   wakeup has happened. On timeout from WaitForSingleObject, thread
+   doesn't know (1) whether to reset event, (2) whether to (try) to
+   find and unlink wakeup record. Let's let it know (of course,
+   it will know for sure only under cv_wakeup_lock). */
+
+#define WAKEUP_NO_DATA 0
+#define WAKEUP_HAPPENED 1
+#define WAKEUP_BY_INTERRUPT 2
+
 static void cv_event_destroy(void* event)
 {
   CloseHandle((HANDLE)event);
@@ -839,6 +860,7 @@ int pthread_cond_broadcast(pthread_cond_t *cv)
     struct thread_wakeup * w = cv->first_wakeup;
     HANDLE waitevent = w->event;
     cv->first_wakeup = w->next;
+    w->info = WAKEUP_HAPPENED;
     SetEvent(waitevent);
     ++count;
   }
@@ -857,6 +879,7 @@ int pthread_cond_signal(pthread_cond_t *cv)
     cv->first_wakeup = w->next;
     if (!cv->first_wakeup)
       cv->last_wakeup = NULL;
+    w->info = WAKEUP_HAPPENED;
     SetEvent(waitevent);
   }
   pthread_mutex_unlock(&cv->wakeup_lock);
@@ -868,6 +891,7 @@ int cv_wakeup_add(struct pthread_cond_t* cv, struct thread_wakeup* w)
 {
   HANDLE event = cv->get_fn();
   w->next = NULL;
+  w->info = WAKEUP_NO_DATA;
   pthread_mutex_lock(&cv->wakeup_lock);
   if (w->uaddr) {
       if (w->uval != *w->uaddr) {
@@ -903,6 +927,8 @@ int cv_wakeup_remove(struct pthread_cond_t* cv, struct thread_wakeup* w)
   int result = 0;
   pthread_mutex_lock(&cv->wakeup_lock);
   {
+    if (w->info == WAKEUP_HAPPENED || w->info == WAKEUP_BY_INTERRUPT)
+	goto unlock;
     if (cv->first_wakeup == w) {
       cv->first_wakeup = w->next;
       if (cv->last_wakeup == w)
@@ -925,6 +951,7 @@ int cv_wakeup_remove(struct pthread_cond_t* cv, struct thread_wakeup* w)
   pthread_mutex_unlock(&cv->wakeup_lock);
   return result;
 }
+
 
 int pthread_cond_wait(pthread_cond_t * cv, pthread_mutex_t * cs)
 {
@@ -1070,11 +1097,7 @@ int pthread_np_notice_thread()
     pth->fiber_group = pth;
 
     sigemptyset(&pth->blocked_signal_set);
-    {
-      int i;
-      for (i = 1; i < NSIG; ++i)
-        pth->signal_is_pending[i] = 0;
-    }
+
     DuplicateHandle(GetCurrentProcess(), GetCurrentThread(),
                     GetCurrentProcess(), &pth->handle, 0, TRUE,
                     DUPLICATE_SAME_ACCESS);
@@ -1290,12 +1313,8 @@ int sigismember(const sigset_t *set, int signum)
 int sigpending(sigset_t *set)
 {
   int i;
-  sigemptyset(set);
-  for (i=0; i<NSIG;++i) {
-    if (pthread_self()->signal_is_pending[i]) {
-      sigaddset(set, i);
-    }
-  }
+  *set = InterlockedCompareExchange((volatile LONG*)&pthread_self()->pending_signal_set,
+				    0, 0);
   return 0;
 }
 
@@ -1330,7 +1349,9 @@ futex_wait(volatile int *lock_word, int oldval, long sec, unsigned long usec)
   switch(wfso) {
   case WAIT_TIMEOUT:
       if (!cv_wakeup_remove(&futex_pseudo_cond,&w)) {
+	  /* timeout, but someone other removed wakeup. */
 	  result = maybeINTR;
+	  ResetEvent(w.event);
       } else {
 	  result = FUTEX_ETIMEDOUT;
       }
@@ -1357,6 +1378,7 @@ futex_wake(volatile int *lock_word, int n)
     for (w = cv->first_wakeup, prev = NULL; w && n;) {
 	if (w->uaddr == lock_word) {
 	    HANDLE event = w->event;
+	    w->info = WAKEUP_HAPPENED;
 	    if (cv->last_wakeup == w)
 		cv->last_wakeup = prev;
 	    w = w->next;
@@ -1388,6 +1410,7 @@ static void futex_interrupt(pthread_t thread)
 	       CRITICAL_SECTIONs */
 	    if (cv_wakeup_remove(&futex_pseudo_cond,w)) {
 		event = w->event;
+		w->info = WAKEUP_BY_INTERRUPT;
 		thread->futex_wakeup = NULL;
 	    } else {
 		w = NULL;

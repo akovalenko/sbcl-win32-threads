@@ -951,7 +951,7 @@ void wake_thread_io(struct thread * thread)
 
 boolean wake_needed(struct thread * thread)
 {
-  if ((!thread->os_thread->signal_is_pending[SIGHUP])||
+  if ((!thread->os_thread->pending_signal_set)||
       (SymbolTlValue(STOP_FOR_GC_PENDING, thread) != NIL)||
       (thread->csp_around_foreign_call)||
       (SymbolTlValue(INTERRUPT_PENDING, thread) == T)||
@@ -1091,9 +1091,9 @@ static inline int thread_may_interrupt()
 {
   struct thread * self = arch_os_get_current_thread();
   // Thread may be interrupted if all of these are true:
-  // 1) SIGHUP is unblocked
+  // 1) deferrables are unblocked
   // 2) INTERRUPTS_ENABLED is not-nil
-  // 3) !pseudo_atomic (now guaranteed in gc_safepoint())
+  // 3) !pseudo_atomic (now guaranteed by safepoint-related callers)
 
   if (SymbolValue(INTERRUPTS_ENABLED, self) == NIL)
       return 0;
@@ -1165,9 +1165,8 @@ int check_pending_interrupts()
   struct thread * p = arch_os_get_current_thread();
   pthread_t pself = p->os_thread;
   sigset_t oldset;
-  if (pself->signal_is_pending[SIGHUP]) {
-    pself->signal_is_pending[SIGHUP]=0;
-    SetSymbolValue(INTERRUPT_PENDING, T, p);
+  if (InterlockedExchange(&pself->pending_signal_set,0)) {
+      SetSymbolValue(INTERRUPT_PENDING, T, p);
   }
   if (!thread_may_interrupt())
     return 0;
@@ -1216,10 +1215,13 @@ boolean gc_adjust_thread_state(struct thread *th)
 	    STATE_SUSPENDED : STATE_SUSPENDED_BRIEFLY;
 	if (full_suspend_possible) {
 	    SetSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
-	    if (SymbolTlValue(GC_PENDING,self)==T &&
-		(SymbolTlValue(IN_SAFEPOINT,self)!=T ||
-		 SymbolTlValue(GC_SAFE,self)==T))
+	    if (SymbolTlValue(GC_SAFE,self)==T)
 		SetSymbolValue(GC_PENDING,NIL,self);
+
+	    /* if (SymbolTlValue(GC_PENDING,self)==T && */
+	    /* 	(SymbolTlValue(IN_SAFEPOINT,self)!=T || */
+	    /* 	 SymbolTlValue(GC_SAFE,self)==T)) */
+	    /* 	SetSymbolValue(GC_PENDING,NIL,self); */
 	} else {
 	    SetSymbolValue(STOP_FOR_GC_PENDING,T,self);
 	}
@@ -1229,9 +1231,11 @@ boolean gc_adjust_thread_state(struct thread *th)
 	if (result) {
 	    th->state = STATE_SUSPENDED;
 	    SetSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
-	    if (SymbolTlValue(GC_PENDING,self)==T &&
-		(SymbolTlValue(IN_SAFEPOINT,self)!=T ||
-		 SymbolTlValue(GC_SAFE,self)==T))
+	    /* if (SymbolTlValue(GC_PENDING,self)==T && */
+	    /* 	(SymbolTlValue(IN_SAFEPOINT,self)!=T || */
+	    /* 	 SymbolTlValue(GC_SAFE,self)==T)) */
+	    /* 	SetSymbolValue(GC_PENDING,NIL,self); */
+	    if (SymbolTlValue(GC_SAFE,self)==T)
 		SetSymbolValue(GC_PENDING,NIL,self);
 	}
 	break;
@@ -1510,7 +1514,7 @@ thread_needs_interrupt_signal(struct thread *p)
 {
     return
 	p->state == STATE_RUNNING &&
-	p->os_thread->signal_is_pending[SIGHUP] &&
+	(p->os_thread->pending_signal_set) &&
 	SymbolTlValue(GC_PENDING,p)!=T &&
 	SymbolTlValue(STOP_FOR_GC_PENDING,p)!=T;
 }
