@@ -282,7 +282,7 @@ pthread_mutex_t resurrected_lock = PTHREAD_MUTEX_INITIALIZER;
 struct thread *resurrected_thread;
 
 unsigned int resurrectable_waiters = 0;
-unsigned int max_resurrectable_waiters = 5;
+unsigned int max_resurrectable_waiters = 0;
 
 #endif
 
