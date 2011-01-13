@@ -282,7 +282,7 @@ pthread_mutex_t resurrected_lock = PTHREAD_MUTEX_INITIALIZER;
 struct thread *resurrected_thread;
 
 unsigned int resurrectable_waiters = 0;
-unsigned int max_resurrectable_waiters = 0;
+unsigned int max_resurrectable_waiters = 4;
 
 #endif
 
@@ -1218,10 +1218,10 @@ boolean gc_adjust_thread_state(struct thread *th)
 	    if (SymbolTlValue(GC_SAFE,self)==T)
 		SetSymbolValue(GC_PENDING,NIL,self);
 
-	    /* if (SymbolTlValue(GC_PENDING,self)==T && */
-	    /* 	(SymbolTlValue(IN_SAFEPOINT,self)!=T || */
-	    /* 	 SymbolTlValue(GC_SAFE,self)==T)) */
-	    /* 	SetSymbolValue(GC_PENDING,NIL,self); */
+	    if (SymbolTlValue(GC_PENDING,self)==T &&
+	    	(SymbolTlValue(IN_SAFEPOINT,self)!=T ||
+	    	 SymbolTlValue(GC_SAFE,self)==T))
+	    	SetSymbolValue(GC_PENDING,NIL,self);
 	} else {
 	    SetSymbolValue(STOP_FOR_GC_PENDING,T,self);
 	}
@@ -1231,10 +1231,10 @@ boolean gc_adjust_thread_state(struct thread *th)
 	if (result) {
 	    th->state = STATE_SUSPENDED;
 	    SetSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
-	    /* if (SymbolTlValue(GC_PENDING,self)==T && */
-	    /* 	(SymbolTlValue(IN_SAFEPOINT,self)!=T || */
-	    /* 	 SymbolTlValue(GC_SAFE,self)==T)) */
-	    /* 	SetSymbolValue(GC_PENDING,NIL,self); */
+	    if (SymbolTlValue(GC_PENDING,self)==T &&
+	    	(SymbolTlValue(IN_SAFEPOINT,self)!=T ||
+	    	 SymbolTlValue(GC_SAFE,self)==T))
+	    	SetSymbolValue(GC_PENDING,NIL,self);
 	    if (SymbolTlValue(GC_SAFE,self)==T)
 		SetSymbolValue(GC_PENDING,NIL,self);
 	}
