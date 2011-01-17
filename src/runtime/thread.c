@@ -1897,6 +1897,8 @@ static inline void maybe_wake_gc_end(int oldword)
     }
 }
 
+#define X86_MEMORY_MODEL_IS_TRICKY
+
 void gc_stop_the_world()
 {
     struct thread *p, *th = arch_os_get_current_thread();
