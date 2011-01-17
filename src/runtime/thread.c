@@ -1249,8 +1249,12 @@ boolean gc_adjust_thread_state(struct thread *th)
 
     /* External state adjustment from blocker to suspend requires
        thread being in foreign call */
-    if (external && !th->csp_around_foreign_call)
-	return 0;
+    if (external) {
+	if (th->gc_safepoint_context == (void*)-1)
+	    return 0;
+	if (!th->csp_around_foreign_call)
+	    return 0;
+    }
 
     /* For X86_MEMORY_MODEL variant */
     COMPILER_BARRIER;
@@ -1906,15 +1910,18 @@ void gc_stop_the_world()
     suspend_flushword(pack_suspend_data(1,SUSPEND_REASON_GC,0));
     pthread_mutex_lock(&all_threads_lock);
 
+
+#ifdef X86_MEMORY_MODEL_IS_TRICKY
     full_serialize();		/* Anyone sees suspend, _and_ we see
-				   anyone's memory in its full glory */
+    				   anyone's memory in its full glory */
+#endif
 
     for_each_thread(p) {
 	if (p==th) continue;
 	const char *oldss = dyndebug_safepoints ?
 	    get_thread_state_as_string(p) : "[?]";
 	if (move_thread_state(p,STATE_PHASE1_BLOCKER,
-			      thread_needs_gc_signal,
+			      NULL,
 			      thread_needs_gc_signal,
 			      silently)) {
 	    odxprint(safepoints,
@@ -2021,9 +2028,12 @@ void wake_the_world()
     suspend_info.gc_thread = th;
     suspend_info.blockers = 0;
     suspend_flushword(pack_suspend_data(1,SUSPEND_REASON_INTERRUPT,0));
-    full_serialize();		/* Anyone sees suspend, _and_ we see
-				   anyone's memory in its full glory */
 
+#ifdef X86_MEMORY_MODEL_IS_TRICKY
+    full_serialize();		/* Anyone sees suspend, _and_ we see
+    				   anyone's memory in its full glory */
+#endif
+    
     pthread_mutex_lock(&all_threads_lock);
     for_each_thread(p) {
 	if (p==th) continue;
