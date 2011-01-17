@@ -2018,8 +2018,6 @@ void wake_the_world()
     int gc_blockers = 0;
     const boolean silently = 0, loudly = 1;
     
-    if (gc_accept_thread_state(0))
-	return;
     if (pthread_mutex_trylock(&suspend_info.world_lock)) {
 	if (suspend_info.suspend)
 	    return;
