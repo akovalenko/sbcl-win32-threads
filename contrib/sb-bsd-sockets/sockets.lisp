@@ -9,7 +9,7 @@
 ;;; Winsock is different w.r.t errno
 (defun socket-errno ()
   "Get socket error code, usually from errno, but see #+win32."
-  #+win32 (sockint::wsa-get-last-error)
+  #+win32 (sb-win32::get-last-error)
   #-win32 (sb-unix::get-errno))
 
 (defclass socket ()

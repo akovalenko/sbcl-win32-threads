@@ -4014,13 +4014,9 @@ garbage_collect_generation(generation_index_t generation, int raise)
 		   it is removed from control stack into a register by
 		   the foreign call wrapper itself. */
 		preserve_pointer(th->pc_around_foreign_call);
-		th->pc_around_foreign_call =
-		    (void*)((~3) & (uintptr_t)th->pc_around_foreign_call);
 		#endif
             } else {
 #if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
-		th->pc_around_foreign_call =
-		    (void*)((~3) & (uintptr_t)th->pc_around_foreign_call);
 		/* target thread should provide either control stack
 		   pointer value, as it were before entering foreign
 		   call, or a full context (if the safepoint was
@@ -4760,29 +4756,27 @@ lispobj *
 general_alloc(long nbytes, int page_type_flag)
 {
   lispobj* result;
-  DWORD lastError = GetLastError();
-    struct thread *thread = arch_os_get_current_thread();
-    /* Select correct region, and call general_alloc_internal with it.
-     * For other then boxed allocation we must lock first, since the
-     * region is shared. */
-    if (BOXED_PAGE_FLAG & page_type_flag) {
+  struct thread *thread = arch_os_get_current_thread();
+  /* Select correct region, and call general_alloc_internal with it.
+   * For other then boxed allocation we must lock first, since the
+   * region is shared. */
+  if (BOXED_PAGE_FLAG & page_type_flag) {
 #ifdef LISP_FEATURE_SB_THREAD
-        struct alloc_region *region = (thread ? &(thread->alloc_region) : &boxed_region);
+      struct alloc_region *region = (thread ? &(thread->alloc_region) : &boxed_region);
 #else
-        struct alloc_region *region = &boxed_region;
+      struct alloc_region *region = &boxed_region;
 #endif
-        result = general_alloc_internal(nbytes, page_type_flag, region, thread);
-    } else if (UNBOXED_PAGE_FLAG == page_type_flag) {
-        lispobj * obj;
-        gc_assert(0 == thread_mutex_lock(&allocation_lock));
-        obj = general_alloc_internal(nbytes, page_type_flag, &unboxed_region, thread);
-        gc_assert(0 == thread_mutex_unlock(&allocation_lock));
-        result = obj;
-    } else {
-        lose("bad page type flag: %d", page_type_flag);
-    }
-    SetLastError(lastError);
-    return result;
+      result = general_alloc_internal(nbytes, page_type_flag, region, thread);
+  } else if (UNBOXED_PAGE_FLAG == page_type_flag) {
+      lispobj * obj;
+      gc_assert(0 == thread_mutex_lock(&allocation_lock));
+      obj = general_alloc_internal(nbytes, page_type_flag, &unboxed_region, thread);
+      gc_assert(0 == thread_mutex_unlock(&allocation_lock));
+      result = obj;
+  } else {
+      lose("bad page type flag: %d", page_type_flag);
+  }
+  return result;
 }
 
 lispobj *

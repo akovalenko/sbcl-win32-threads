@@ -2528,8 +2528,7 @@
     (let ((ttyname #.(coerce #!+win32 "CON" #!-win32 "/dev/tty"
 			     'simple-base-string))
 	  (stdstream-vars '(*stdin* *stdout* *stderr* *tty*)))
-      (loop for fd in
-	    `(0 1 2 ,(sb!unix:unix-open ttyname sb!unix:o_rdwr #o666))
+      (loop for fd in '(0 1 2 t)
 	    and auto-close-p in '(nil nil nil t)
 	    and stream-var in stdstream-vars
 	    and direction in '(:input :output :output :io)
@@ -2540,6 +2539,15 @@
 	    do
 	 (let ((outputp (not (eq direction :input)))
 	       (inputp (not (eq direction :output))))
+	   (when (eq fd t)
+	     (setf fd
+		   (and #!+win32
+			(loop for fd in '(0 1)
+			      thereis
+			      (let ((handle (sb!win32:get-osfhandle fd)))
+				(or (= handle -1)
+				    (/= 3 (logand handle 3)))))			
+			(sb!unix:unix-open ttyname sb!unix:o_rdwr #o666))))
 	   (setf (symbol-value stream-var)
 		 (if fd
 		     (make-fd-stream fd

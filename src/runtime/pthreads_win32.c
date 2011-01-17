@@ -21,6 +21,65 @@
 #define DEBUG_RELEASE(cs) do {} while(0)
 #endif
 
+
+struct freelist_cell {
+    struct freelist_cell * next;
+    void* data;
+};
+
+struct freelist {
+    void* (*create_fn)();
+    pthread_mutex_t lock;
+    struct freelist_cell * empty;
+    struct freelist_cell * full;
+    unsigned int count;
+};
+
+static void* freelist_get(struct freelist *fl)
+{
+    void* result = NULL;
+    if (fl->full) {
+	pthread_mutex_lock(&fl->lock);
+	if (fl->full) {
+	    struct freelist_cell *cell = fl->full;
+	    fl->full = cell->next;
+	    result = cell->data;
+	    cell->next = fl->empty;
+	    fl->empty = cell;
+	} 
+	pthread_mutex_unlock(&fl->lock);
+    }
+    if (!result) {
+	result = fl->create_fn();
+    }
+    return result;
+}
+
+static void freelist_return(struct freelist *fl, void*data)
+{
+    struct freelist_cell* cell = NULL;
+    if (fl->empty) {
+	pthread_mutex_lock(&fl->lock);
+	if (fl->empty) {
+	    cell = fl->empty;
+	    fl->empty = cell->next;
+	    goto add_locked;
+	}
+	pthread_mutex_unlock(&fl->lock);
+    }
+    if (!cell)
+	cell = malloc(sizeof(*cell));
+
+    pthread_mutex_lock(&fl->lock);
+    ++fl->count;
+ add_locked:    
+    cell->data = data;
+    cell->next = fl->full;
+    fl->full = cell;
+    pthread_mutex_unlock(&fl->lock);
+}
+
+
 int pthread_attr_init(pthread_attr_t *attr)
 {
   attr->stack_size = 0;
@@ -51,6 +110,7 @@ typedef unsigned char boolean;
 /* TLS management internals */
 
 static DWORD thread_self_tls_index;
+
 static void (*tls_destructors[PTHREAD_KEYS_MAX])(void*);
 static boolean tls_used[PTHREAD_KEYS_MAX];
 static pthread_key_t tls_max_used_key;
@@ -593,9 +653,11 @@ int pthread_mutexattr_settype(pthread_mutexattr_t* attr,int mutex_type)
 
 int pthread_mutex_destroy(pthread_mutex_t *mutex)
 {
-  if (*mutex != PTHREAD_MUTEX_INITIALIZER)
-    DeleteCriticalSection(&(*mutex)->cs);
-  return 0;
+    if (*mutex != PTHREAD_MUTEX_INITIALIZER) {
+	DeleteCriticalSection(&(*mutex)->cs);
+	free(*mutex);
+    }
+    return 0;
 }
 
 /* Add pending signal to (other) thread */
@@ -778,6 +840,29 @@ static pthread_key_t cv_event_key;
 #define WAKEUP_HAPPENED 1
 #define WAKEUP_BY_INTERRUPT 2
 
+
+static void* event_create()
+{
+    return (void*)CreateEvent(NULL,FALSE,FALSE,NULL);
+}
+
+static struct freelist event_freelist = {event_create, PTHREAD_MUTEX_INITIALIZER};
+
+unsigned int pthread_free_event_pool_size()
+{
+    return event_freelist.count;
+}
+
+static HANDLE fe_get_event()
+{
+    return (HANDLE)freelist_get(&event_freelist);
+}
+
+static void fe_return_event(HANDLE handle)
+{
+    freelist_return(&event_freelist, (void*)handle);
+}
+    
 static void cv_event_destroy(void* event)
 {
   CloseHandle((HANDLE)event);
@@ -810,8 +895,10 @@ static void cv_default_event_return_fn(HANDLE event)
 
 static pthread_condattr_t cv_default_attr = {
   0,                            /* alertable */
-  cv_default_event_get_fn,      /* get_fn */
-  cv_default_event_return_fn    /* return_fn */
+  fe_get_event,
+  fe_return_event,
+  /* cv_default_event_get_fn,      /\* get_fn *\/ */
+  /* cv_default_event_return_fn    /\* return_fn *\/ */
 };
 
 int pthread_cond_init(pthread_cond_t * cv, const pthread_condattr_t * attr)
@@ -840,9 +927,9 @@ int pthread_condattr_destroy(pthread_condattr_t *attr)
 int pthread_condattr_setevent_np(pthread_condattr_t *attr,
                                  cv_event_get_fn get_fn, cv_event_return_fn ret_fn)
 {
-  attr->get_fn = get_fn ? get_fn : cv_default_event_get_fn;
-  attr->return_fn = ret_fn ? ret_fn : cv_default_event_return_fn;
-  return 0;
+    attr->get_fn = get_fn ? get_fn : fe_get_event;// cv_default_event_get_fn;
+    attr->return_fn = ret_fn ? ret_fn : fe_return_event; // cv_default_event_return_fn;
+    return 0;
 }
 
 int pthread_cond_destroy(pthread_cond_t *cv)
@@ -854,6 +941,10 @@ int pthread_cond_destroy(pthread_cond_t *cv)
 int pthread_cond_broadcast(pthread_cond_t *cv)
 {
   int count = 0;
+  /* No strict requirements to memory visibility model, because of
+     mutex unlock around waiting. */
+  if (!cv->first_wakeup)
+      return 0;
   pthread_mutex_lock(&cv->wakeup_lock);
   while (cv->first_wakeup)
   {
@@ -872,6 +963,10 @@ int pthread_cond_broadcast(pthread_cond_t *cv)
 int pthread_cond_signal(pthread_cond_t *cv)
 {
   struct thread_wakeup * w;
+  /* No strict requirements to memory visibility model, because of
+     mutex unlock around waiting. */
+  if (!cv->first_wakeup)
+      return 0;
   pthread_mutex_lock(&cv->wakeup_lock);
   w = cv->first_wakeup;
   if (w) {
@@ -889,7 +984,7 @@ int pthread_cond_signal(pthread_cond_t *cv)
 /* Return value is used for futexes: 0=ok, 1 on unexpected word change. */
 int cv_wakeup_add(struct pthread_cond_t* cv, struct thread_wakeup* w)
 {
-  HANDLE event = cv->get_fn();
+  HANDLE event;
   w->next = NULL;
   w->info = WAKEUP_NO_DATA;
   pthread_mutex_lock(&cv->wakeup_lock);
@@ -900,7 +995,7 @@ int cv_wakeup_add(struct pthread_cond_t* cv, struct thread_wakeup* w)
       }
       pthread_self()->futex_wakeup = w;
   }
-  
+  event = cv->get_fn();
   w->event = event;
   if (cv->last_wakeup == w) {
     fprintf(stderr, "cv->last_wakeup == w\n");
@@ -1363,6 +1458,7 @@ futex_wait(volatile int *lock_word, int oldval, long sec, unsigned long usec)
       result = -1;
       break;
   }
+  futex_pseudo_cond.return_fn(w.event);
   return result;
 }
 
@@ -1416,7 +1512,9 @@ static void futex_interrupt(pthread_t thread)
 		w = NULL;
 	    }
 	}
-	if (w) SetEvent(event);
+	if (w) {
+	    SetEvent(event);
+	}
 	pthread_mutex_unlock(&cv->wakeup_lock);
     }
 }

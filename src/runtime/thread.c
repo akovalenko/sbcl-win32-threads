@@ -1111,23 +1111,46 @@ static inline int thread_may_interrupt()
 }
 
 // returns 0 if skipped, 1 otherwise
+int check_pending_interrupts()
+{
+  struct thread * p = arch_os_get_current_thread();
+  pthread_t pself = p->os_thread;
+  sigset_t oldset;
+  if (pself->pending_signal_set) {
+      if (InterlockedExchange(&pself->pending_signal_set,0)) {
+	  SetSymbolValue(INTERRUPT_PENDING, T, p);
+      }
+  }
+  if (!thread_may_interrupt())
+    return 0;
+  if (SymbolValue(INTERRUPT_PENDING, p) == NIL)
+    return 0;
+  SetSymbolValue(INTERRUPT_PENDING, NIL, p);
+  oldset = pself->blocked_signal_set;
+  pself->blocked_signal_set = deferrable_sigset;
+
+  BEGIN_GC_UNSAFE_CODE;
+  funcall0(StaticSymbolFunction(RUN_INTERRUPTION));
+  END_GC_UNSAFE_CODE;
+
+  pself->blocked_signal_set = oldset;
+  return 1;
+}
+
+// returns 0 if skipped, 1 otherwise
 int check_pending_gc()
 {
     struct thread * self = arch_os_get_current_thread();
     int done = 0;
     sigset_t sigset = 0;
-    /* Take off recursive protection as soon as GC_PENDING becomes NIL
-       (behind the mutex) */
+    /* Take off recursive protection as soon as GC_PENDING becomes !T */
     if ((SymbolValue(IN_SAFEPOINT,self) == T) &&
-        (SymbolValue(GC_PENDING,self) == NIL)) {
+        (SymbolValue(GC_PENDING,self) != T)) {
         SetSymbolValue(IN_SAFEPOINT,NIL,self);
     }
     if (thread_may_gc() && (SymbolValue(IN_SAFEPOINT, self) == NIL)) {
         if ((SymbolTlValue(GC_PENDING, self) == T)) {
             bind_variable(IN_SAFEPOINT,T,self);
-            /* if (!get_pseudo_atomic_atomic(self)
-	       && get_pseudo_atomic_interrupted(self)) */
-            /*     clear_pseudo_atomic_interrupted(self); */
             block_deferrable_signals(NULL,&sigset);
 	    lispobj gc_happened;
 	    BEGIN_GC_UNSAFE_CODE;
@@ -1159,32 +1182,53 @@ int check_pending_gc()
     return done;
 }
 
-// returns 0 if skipped, 1 otherwise
-int check_pending_interrupts()
+void gc_safepoint() { return; }
+
+static inline
+void gc_abandon_pending(struct thread *th)
 {
-  struct thread * p = arch_os_get_current_thread();
-  pthread_t pself = p->os_thread;
-  sigset_t oldset;
-  if (InterlockedExchange(&pself->pending_signal_set,0)) {
-      SetSymbolValue(INTERRUPT_PENDING, T, p);
-  }
-  if (!thread_may_interrupt())
-    return 0;
-  if (SymbolValue(INTERRUPT_PENDING, p) == NIL)
-    return 0;
-  SetSymbolValue(INTERRUPT_PENDING, NIL, p);
-  oldset = pself->blocked_signal_set;
-  pself->blocked_signal_set = deferrable_sigset;
-
-  BEGIN_GC_UNSAFE_CODE;
-  funcall0(StaticSymbolFunction(RUN_INTERRUPTION));
-  END_GC_UNSAFE_CODE;
-
-  pself->blocked_signal_set = oldset;
-  return 1;
+    if (SymbolTlValue(GC_PENDING,th)==T &&
+	(SymbolTlValue(IN_SAFEPOINT,th)!=T ||
+	 SymbolTlValue(GC_SAFE,th)==T))
+	SetSymbolValue(GC_PENDING,NIL,th);
 }
 
-void gc_safepoint() { return; }
+/* Get the thread into appropriate suspend state depending on the
+   current gc/interrupt action in progress. Doesn't wait (see
+   gc_accept_thread_state() which does).
+
+   Useful for threads whose state wasn't modified by a thread
+   responsible for the action. Currently it's (1) a thread without
+   pending interrupt signal, for interrupt's wake_the_world(), and (2)
+   a thread linking into all_threads after gc_stop_the_world released
+   all_threads_lock. */
+
+static inline
+void gc_suspend_willfully(struct thread *th)
+{
+    boolean full_suspend_possible = (SymbolTlValue(GC_INHIBIT,th)!=T);
+    if (suspend_info.suspend && suspend_info.gc_thread!=th) {
+	lock_suspend_info(__FILE__,__LINE__);
+	if (suspend_info.suspend) {
+	    switch (suspend_info.reason) {
+	    case SUSPEND_REASON_GCING:
+		gc_assert(full_suspend_possible);
+		th->state = STATE_SUSPENDED;
+		break;
+	    case SUSPEND_REASON_GC:
+		th->state = full_suspend_possible ?
+		    STATE_SUSPENDED : STATE_SUSPENDED_BRIEFLY;
+		break;
+	    case SUSPEND_REASON_INTERRUPT:
+		th->state = STATE_SUSPENDED_BRIEFLY;
+		break;
+	    case SUSPEND_REASON_NONE:
+		break;
+	    }
+	}
+	unlock_suspend_info(__FILE__,__LINE__);
+    }
+}
 
 /* Get the thread into appropriate suspend state if it's in
    appropriate blocker state; return true if it left the blocker
@@ -1208,43 +1252,48 @@ boolean gc_adjust_thread_state(struct thread *th)
     if (external && !th->csp_around_foreign_call)
 	return 0;
 
+    /* For X86_MEMORY_MODEL variant */
+    COMPILER_BARRIER;
+    if (external && (th->gc_safepoint_context == (void*)-1))
+	return 0;
+    COMPILER_BARRIER;
+
     switch (th->state) {
     case STATE_PHASE1_BLOCKER:
 	result = 1;
 	th->state = full_suspend_possible ?
 	    STATE_SUSPENDED : STATE_SUSPENDED_BRIEFLY;
 	if (full_suspend_possible) {
-	    SetSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
-	    if (SymbolTlValue(GC_SAFE,self)==T)
-		SetSymbolValue(GC_PENDING,NIL,self);
-
-	    if (SymbolTlValue(GC_PENDING,self)==T &&
-	    	(SymbolTlValue(IN_SAFEPOINT,self)!=T ||
-	    	 SymbolTlValue(GC_SAFE,self)==T))
-	    	SetSymbolValue(GC_PENDING,NIL,self);
+	    SetSymbolValue(STOP_FOR_GC_PENDING,NIL,th);
 	} else {
-	    SetSymbolValue(STOP_FOR_GC_PENDING,T,self);
+	    SetSymbolValue(STOP_FOR_GC_PENDING,T,th);
 	}
+	gc_abandon_pending(th);
 	break;
     case STATE_PHASE2_BLOCKER:
 	result = full_suspend_possible;
 	if (result) {
 	    th->state = STATE_SUSPENDED;
-	    SetSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
-	    if (SymbolTlValue(GC_PENDING,self)==T &&
-	    	(SymbolTlValue(IN_SAFEPOINT,self)!=T ||
-	    	 SymbolTlValue(GC_SAFE,self)==T))
-	    	SetSymbolValue(GC_PENDING,NIL,self);
-	    if (SymbolTlValue(GC_SAFE,self)==T)
-		SetSymbolValue(GC_PENDING,NIL,self);
+	    SetSymbolValue(STOP_FOR_GC_PENDING,NIL,th);
+	} else {
+	    SetSymbolValue(STOP_FOR_GC_PENDING,T,th);
 	}
+	gc_abandon_pending(th);
 	break;
     case STATE_INTERRUPT_BLOCKER:
 	th->state = STATE_SUSPENDED_BRIEFLY;
 	result = 1;
+	break;
+    case STATE_RUNNING:
+	gc_suspend_willfully(th);
+	break;
     }
     return result;
 }
+
+#if defined(LISP_FEATURE_X86)||defined(LISP_FEATURE_X86_64)
+#define X86_MEMORY_MODEL
+#endif
 
 
 /* Applies GC wake if appropriate. */
@@ -1304,22 +1353,145 @@ boolean gc_accept_thread_state(boolean wakep)
 }
 
 
+
+#ifdef X86_MEMORY_MODEL
+
+
+static inline void
+full_serialize()
+{
+    __asm__ __volatile__ ( "mov $1,%%eax; cpuid"
+			   : : : "%eax","%edx","%ecx","%ebx", "memory");
+}
+
+/* GC will now rely on serializing instruction to ensure that there is
+   no pending writes on other CPUs. This way we make common flow of
+   control inexpensive.
+*/
+
 void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
 {
     struct thread* self = arch_os_get_current_thread();
     boolean maybe_wake = 0;
-    DWORD lastError = GetLastError();
+
+    self->pc_around_foreign_call = pc;
+    COMPILER_BARRIER;
+    self->csp_around_foreign_call = csp;
+    COMPILER_BARRIER;
+    if (!suspend_info.suspend)
+	goto finish;
+    if (self->state == STATE_PHASE2_BLOCKER &&
+	SymbolTlValue(GC_INHIBIT,self)==T)
+	goto finish;
 
     pthread_mutex_lock(self->state_lock);
     self->csp_around_foreign_call = csp;
     self->pc_around_foreign_call = pc;
     maybe_wake = gc_adjust_thread_state(self);
     pthread_mutex_unlock(self->state_lock);
-    
+
     if (maybe_wake)
 	gc_wake_wakeable();
     
-    SetLastError(lastError);
+ finish:
+    SetLastError(self->foreign_context_lasterror);
+    /* Proceed to foreign code, while possibly being in suspended
+       state (!) or phase2-blocker. Foreign code shouldn't touch memory
+       movable by GC; when foreign call is exited, it should wait for
+       thread state change if it's suspended (briefly or fully) 
+    */
+}
+
+void gc_leave_foreign_call()
+{
+   struct thread* self = arch_os_get_current_thread();
+   int maybe_wake = 0;
+
+   /* Common sequence */
+   self->foreign_context_lasterror = GetLastError();
+   
+   /* Interrupt signal pending */
+   if (self->os_thread->pending_signal_set)
+       goto full_locking;
+
+   /* GC already in progress. */
+   if (suspend_info.suspend)
+       goto full_locking;
+   
+   COMPILER_BARRIER;
+
+   /* Using ctx field as a flag. GC which is in progress won't notice,
+      but gc_stop_the_world will now enqueue after this thread as
+      gc-blocker. */
+   
+   self->gc_safepoint_context = (void*)-1;
+   COMPILER_BARRIER;
+
+   if (suspend_info.suspend)
+       goto full_locking;
+
+   COMPILER_BARRIER;
+   self->csp_around_foreign_call = NULL;
+
+   COMPILER_BARRIER;
+   self->gc_safepoint_context = NULL;
+   return;
+
+ full_locking:
+
+   self->gc_safepoint_context = NULL; /* Temporary protection removed */
+   COMPILER_BARRIER;
+
+   if (self->state == STATE_PHASE2_BLOCKER &&
+       SymbolTlValue(GC_INHIBIT,self)==T) {
+       /* if we run foreign call without GCing, and phase 2 is
+	  enqueued after this thread, we are safe */
+       self->csp_around_foreign_call = NULL;
+       self->pc_around_foreign_call = NULL;
+       return;
+   }
+
+
+   pthread_mutex_lock(self->state_lock);
+   gc_accept_thread_state(gc_adjust_thread_state(self));
+   /* Then unpublish context data */
+   self->csp_around_foreign_call = NULL;
+   self->pc_around_foreign_call = NULL;
+   self->gc_safepoint_context = NULL;
+   pthread_mutex_unlock(self->state_lock);
+   while (check_pending_gc()||check_pending_interrupts());
+}
+
+
+#else
+
+void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
+{
+    struct thread* self = arch_os_get_current_thread();
+    boolean maybe_wake = 0;
+
+    /* Shorthand: when GC phase 2 is enqueued on this thread, there's
+       no one to modify (or concurrently examine) its state.
+       Typical example are foreign calls in WITHOUT-GCING body.
+     */
+    if (self->state == STATE_PHASE2_BLOCKER &&
+	SymbolTlValue(GC_INHIBIT,self)==T) {
+	self->csp_around_foreign_call = csp;
+	self->pc_around_foreign_call = pc;
+	goto finish;
+    }
+    
+    pthread_mutex_lock(self->state_lock);
+    self->csp_around_foreign_call = csp;
+    self->pc_around_foreign_call = pc;
+    maybe_wake = gc_adjust_thread_state(self);
+    pthread_mutex_unlock(self->state_lock);
+
+    if (maybe_wake)
+	gc_wake_wakeable();
+    
+ finish:
+    SetLastError(self->foreign_context_lasterror);
     /* Proceed to foreign code, while possibly being in suspended
        state (!) or phase2-blocker. Foreign code shouldn't touch memory
        movable by GC; when foreign call is exited, it should wait for
@@ -1332,8 +1504,16 @@ void gc_leave_foreign_call()
     struct thread* self = arch_os_get_current_thread();
 
     boolean waitp = 0;
-    DWORD lastError = GetLastError();
+    self->foreign_context_lasterror = GetLastError();
 
+    /* shorthand: no locking (and no pending interrupt/gc check)
+       when GC phase 2 is enqueued after this thread. */
+    if (self->state == STATE_PHASE2_BLOCKER &&
+	SymbolTlValue(GC_INHIBIT,self)==T) {
+	self->csp_around_foreign_call = NULL;
+	self->pc_around_foreign_call = NULL;
+	return;
+    }
     pthread_mutex_lock(self->state_lock);
     /* when foreing csp is published, we are never waited upon for
        something that can be satisfied on foreign call exit.
@@ -1347,10 +1527,10 @@ void gc_leave_foreign_call()
 
     /* unlock is a memory barrier (release semantics) */
     pthread_mutex_unlock(self->state_lock);
-    while (check_pending_interrupts());
-    SetLastError(lastError);
+    while (check_pending_gc()||check_pending_interrupts());
 }
 
+#endif
 
 /* Should be called by a thread (possibly) trapped on GPA or
    receive-pending-interrupt.  */
@@ -1368,23 +1548,17 @@ void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access)
     if (get_pseudo_atomic_interrupted(self))
 	clear_pseudo_atomic_interrupted(self);
 
+    if (self->csp_around_foreign_call) {
+	BEGIN_GC_UNSAFE_CODE;
+	END_GC_UNSAFE_CODE;
+	return;
+    }
+
+
  again:
     pthread_mutex_lock(self->state_lock);
     /* possibly convert blocker state into suspend state */
     maybe_wake = gc_adjust_thread_state(self);
-    if ((!maybe_wake) && gc_page_access) {
-	/* 1. GC always marks all threads, interruptor may be more
-	   relaxed; 2. We'd better suspend briefly, but only if
-	   there's somebody to wake us up. */
-	if (suspend_info.suspend) {
-	    lock_suspend_info(__FILE__,__LINE__);
-	    if (suspend_info.suspend) {
-		self->state = STATE_SUSPENDED_BRIEFLY;
-	    }
-	    unlock_suspend_info(__FILE__,__LINE__);
-	}
-	gc_page_access = 0;	/* one-shot  */
-    }
     /* context for conservation */
     self->gc_safepoint_context = ctx;
     /* maybe wake GC and wait for restart */
@@ -1732,6 +1906,9 @@ void gc_stop_the_world()
     suspend_flushword(pack_suspend_data(1,SUSPEND_REASON_GC,0));
     pthread_mutex_lock(&all_threads_lock);
 
+    full_serialize();		/* Anyone sees suspend, _and_ we see
+				   anyone's memory in its full glory */
+
     for_each_thread(p) {
 	if (p==th) continue;
 	const char *oldss = dyndebug_safepoints ?
@@ -1844,6 +2021,9 @@ void wake_the_world()
     suspend_info.gc_thread = th;
     suspend_info.blockers = 0;
     suspend_flushword(pack_suspend_data(1,SUSPEND_REASON_INTERRUPT,0));
+    full_serialize();		/* Anyone sees suspend, _and_ we see
+				   anyone's memory in its full glory */
+
     pthread_mutex_lock(&all_threads_lock);
     for_each_thread(p) {
 	if (p==th) continue;

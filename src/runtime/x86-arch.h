@@ -47,6 +47,9 @@ get_spinlock(volatile lispobj *word, unsigned long value)
              : "r" (value), "m" (*word)
              : "memory", "cc");
 #else
+	if (eax!=0) {
+	    asm volatile("rep; nop");
+	}
         asm volatile ("xor %0,%0\n\
               lock cmpxchg %1,%2"
              : "=a" (eax)

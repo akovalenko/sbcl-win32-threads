@@ -38,7 +38,16 @@
 
 ;;; Retrieve the calling thread's last-error code value.  The
 ;;; last-error code is maintained on a per-thread basis.
+#!-sb-gc-safepoint
 (define-alien-routine ("GetLastError" get-last-error) dword)
+#!+sb-gc-safepoint
+(declaim (inline get-last-error))
+#!+sb-gc-safepoint
+(defun get-last-error ()
+  (declare (optimize (speed 3) (safety 0) (debug 0)))
+  (sap-int
+   (sb!vm::current-thread-offset-sap
+    sb!vm::thread-foreign-context-lasterror-slot)))
 
 ;;; Flag constants for FORMAT-MESSAGE.
 (defconstant format-message-from-system #x1000)
@@ -959,27 +968,33 @@ UNIX epoch: January 1st 1970."
 
 (define-alien-routine ("closesocket" close-socket) int (handle handle))
 
+(define-alien-routine ("DuplicateHandle" duplicate-handle) lispbool
+  (from-process handle)
+  (from-handle handle)
+  (to-process handle)
+  (to-handle handle :out)
+  (access dword)
+  (inheritp lispbool)
+  (options dword))
+
 (defconstant ebadf 9)
 
 ;;; For sockets, CloseHandle first and closesocket() afterwards is
 ;;; legal: winsock tracks its handles separately (that's why we have
 ;;; the problem with simple _close in the first place).
+;;;
+;;; ...Seems to be the problem on some OSes, though.  For now, we
+;;; duplicate a handle and attempt close-socket on a duplicated one.
 (defun unixlike-close (fd)
   (let ((handle (get-osfhandle fd)))
     (if (= handle invalid-handle)
         (values nil ebadf)
-        (let ((socketp
-               (and
-                ;; Wine workaround: its universal socket+pipe handles
-                ;; are closed by _any_ of closesocket/CloseHandle
-                ;; calls. On real Windows, named pipes and sockets are
-                ;; disctinct, and peek-named-pipe will fail.
-                (not (peek-named-pipe handle nil 0 nil nil nil))
-                (/= 5 (get-last-error))
-                (plusp (socket-input-available handle)))))
-          (multiple-value-prog1 (sb!unix:unix-close fd)
-            (when socketp
-              (close-socket handle)))))))
+        (multiple-value-bind (dup-ok dup-handle)
+	    (duplicate-handle -1 handle -1 0 nil 2)
+	  (multiple-value-prog1 (sb!unix:unix-close fd)
+	    (when dup-ok
+	      (or (zerop (close-socket dup-handle))
+		  (close-handle dup-handle))))))))
 
 (define-alien-routine ("GetExitCodeProcess" get-exit-code-process)
     int

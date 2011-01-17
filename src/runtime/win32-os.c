@@ -1632,7 +1632,6 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 		 CONTEXT *context,
 		 void *dispatcher_context)
 {
-    DWORD lastError;
     DWORD code = exception_record->ExceptionCode;
     EXCEPTION_DISPOSITION disposition = ExceptionContinueExecution;
     void* fault_address = (void*)exception_record->ExceptionInformation[1];
@@ -1641,7 +1640,9 @@ handle_exception(EXCEPTION_RECORD *exception_record,
     struct thread* self = arch_os_get_current_thread();
     int contextual_fpu_state = self ? self->in_lisp_fpu_mode : 0;
 
-    lastError = GetLastError();
+    if (self && self->csp_around_foreign_call) {
+	self->foreign_context_lasterror = GetLastError();
+    }
     
     if (dyndebug_lazy_fpu)
     {
@@ -1930,9 +1931,11 @@ complain:
 
     /* Common return point. */
 finish:
-    if (self)
+    if (self) {
 	self->in_lisp_fpu_mode = contextual_fpu_state;
-    SetLastError(lastError);
+	if (self->csp_around_foreign_call)
+	    SetLastError(self->foreign_context_lasterror);
+    }
     return disposition;
 }
 
