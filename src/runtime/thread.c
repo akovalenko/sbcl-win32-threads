@@ -334,10 +334,6 @@ new_thread_trampoline(struct thread *th)
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
     gc_enter_foreign_call(&function,0);
     odxprint(safepoints, "New thread to be linked: %p\n", th);
-    lock_suspend_info(__FILE__,__LINE__);
-    if (suspend_info.suspend)
-	th->state = STATE_SUSPENDED;
-    unlock_suspend_info(__FILE__,__LINE__);
 #endif
 
     lock_ret = pthread_mutex_lock(&all_threads_lock);
@@ -350,7 +346,10 @@ new_thread_trampoline(struct thread *th)
     gc_assert(lock_ret == 0);
 
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
-    gc_leave_foreign_call();
+    gc_leave_foreign_call();	/* will wait if needed */
+
+    /* With lock-free gc_leave_foreign_call, we may be "SUSPENDED"
+       here -- if suspend_info.suspend was removed before this point. */
 #endif
 
     result = funcall0(function);
@@ -659,6 +658,13 @@ create_thread_struct(lispobj initial_function) {
     set_binding_stack_pointer(th,th->binding_stack_start);
     th->this=th;
     th->os_thread=0;
+
+#ifdef LISP_FEATURE_SB_GC_SAFEPOINT
+    th->gc_safepoint_context = 0;
+    th->csp_around_foreign_call = 0;
+    th->pc_around_foreign_call = 0;
+#endif
+
 #ifdef LISP_FEATURE_SB_THREAD
     th->os_attr=malloc(sizeof(pthread_attr_t));
     th->state_lock=(pthread_mutex_t *)((void *)th->alien_stack_start +
@@ -1971,6 +1977,7 @@ void gc_start_the_world()
     boolean loudly=1;
     int nthreads = 0, nallthreads = 0;
     struct thread *p, *th = arch_os_get_current_thread();
+
     odxprint(safepoints,
 	     "GCer %p starting the world\n", th);
     suspend_flushword(0);
