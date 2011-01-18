@@ -4027,6 +4027,9 @@ garbage_collect_generation(generation_index_t generation, int raise)
 		   context in this case will work too, but it's more
 		   work to do, and it would probably conserve too much) */
 		if (!th->csp_around_foreign_call) {
+		    if (!th->gc_safepoint_context) {
+			lose("Thread %p without CSP and context",th);
+		    }
 		    preserve_context_registers(th->gc_safepoint_context);
 		    esp = (void**)*os_context_register_addr(th->gc_safepoint_context,
 							    reg_SP);

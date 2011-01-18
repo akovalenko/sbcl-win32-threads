@@ -367,10 +367,11 @@ new_thread_trampoline(struct thread *th)
     gc_assert(lock_ret == 0);
 
 #else
-    gc_enter_foreign_call(&function,0);
     bind_variable(IN_SAFEPOINT,T,th);	 /* so it won't attempt GC */
     SetSymbolValue(GC_PENDING,T,th);	 /* to check result */
     SetSymbolValue(GC_SAFE,T,th);	 /* discommend unmap_gc_page */
+
+    gc_enter_foreign_call(&function,0);
     /* May go into full suspend; returns without
        csp_around_foreign_call */
     gc_leave_foreign_call();
@@ -380,7 +381,7 @@ new_thread_trampoline(struct thread *th)
 	SetSymbolValue(GC_PENDING,NIL,th);
 	gc_alloc_update_page_tables(BOXED_PAGE_FLAG, &th->alloc_region);
     }
-    unbind(th);
+    unbind_variable(IN_SAFEPOINT,th);
     /* After gc_safepoint, csp_around_foreign_call is cleared (and we
        had no context); thus gc_stop_the_world (if any) will mark us
        as GC-blocker. 
@@ -1561,12 +1562,16 @@ void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access)
     pthread_mutex_lock(self->state_lock);
     /* context for conservation */
     self->gc_safepoint_context = ctx;
+
     /* possibly convert blocker state into suspend state */
     maybe_wake = gc_adjust_thread_state(self);
+
     /* maybe wake GC and wait for restart */
     gc_accept_thread_state(maybe_wake);
+
     /* no context now */
     self->gc_safepoint_context = NULL;
+
     pthread_mutex_unlock(self->state_lock);
     /* here our own willingness to GC (or interrupt handling) may take
        over. NB if concurrent GC was in progress, there is already no
