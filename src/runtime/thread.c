@@ -1559,10 +1559,10 @@ void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access)
 
  again:
     pthread_mutex_lock(self->state_lock);
-    /* possibly convert blocker state into suspend state */
-    maybe_wake = gc_adjust_thread_state(self);
     /* context for conservation */
     self->gc_safepoint_context = ctx;
+    /* possibly convert blocker state into suspend state */
+    maybe_wake = gc_adjust_thread_state(self);
     /* maybe wake GC and wait for restart */
     gc_accept_thread_state(maybe_wake);
     /* no context now */
