@@ -332,7 +332,7 @@ new_thread_trampoline(struct thread *th)
        to die */
     
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
-    gc_enter_foreign_call(&function,0);
+    th->csp_around_foreign_call = &function;
     odxprint(safepoints, "New thread to be linked: %p\n", th);
 #endif
 
@@ -1770,9 +1770,9 @@ static inline void suspend_flushword_nolock(int word)
 	suspend_info.phase = (word >> 16);
 	suspend_info.reason = (word >>8)&0xFF;
 	suspend_info.used_gc_page = word & 0xFF;
-	InterlockedExchange(&suspend_info.suspend, 1);
+	suspend_info.suspend = 1;
     } else {
-	InterlockedExchange(&suspend_info.suspend, 0);
+	suspend_info.suspend = 0;
     }
 }
 
