@@ -1366,14 +1366,6 @@ boolean gc_accept_thread_state(boolean wakep)
 
 #ifdef X86_MEMORY_MODEL
 
-
-static inline void
-full_serialize()
-{
-    __asm__ __volatile__ ( "mov $1,%%eax; cpuid"
-			   : : : "%eax","%edx","%ecx","%ebx", "memory");
-}
-
 /* GC will now rely on serializing instruction to ensure that there is
    no pending writes on other CPUs. This way we make common flow of
    control inexpensive.
@@ -1778,9 +1770,9 @@ static inline void suspend_flushword_nolock(int word)
 	suspend_info.phase = (word >> 16);
 	suspend_info.reason = (word >>8)&0xFF;
 	suspend_info.used_gc_page = word & 0xFF;
-	suspend_info.suspend = 1;
+	InterlockedExchange(&suspend_info.suspend, 1);
     } else {
-	suspend_info.suspend = 0;
+	InterlockedExchange(&suspend_info.suspend, 0);
     }
 }
 
@@ -1903,8 +1895,6 @@ static inline void maybe_wake_gc_end(int oldword)
     }
 }
 
-#define X86_MEMORY_MODEL_IS_TRICKY
-
 void gc_stop_the_world()
 {
     struct thread *p, *th = arch_os_get_current_thread();
@@ -1917,12 +1907,6 @@ void gc_stop_the_world()
     suspend_info.blockers = 0;
     suspend_flushword(pack_suspend_data(1,SUSPEND_REASON_GC,0));
     pthread_mutex_lock(&all_threads_lock);
-
-
-#ifdef X86_MEMORY_MODEL_IS_TRICKY
-    full_serialize();		/* Anyone sees suspend, _and_ we see
-    				   anyone's memory in its full glory */
-#endif
 
     for_each_thread(p) {
 	if (p==th) continue;
@@ -2036,11 +2020,6 @@ void wake_the_world()
     suspend_info.blockers = 0;
     suspend_flushword(pack_suspend_data(1,SUSPEND_REASON_INTERRUPT,0));
 
-#ifdef X86_MEMORY_MODEL_IS_TRICKY
-    full_serialize();		/* Anyone sees suspend, _and_ we see
-    				   anyone's memory in its full glory */
-#endif
-    
     pthread_mutex_lock(&all_threads_lock);
     for_each_thread(p) {
 	if (p==th) continue;
