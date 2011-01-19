@@ -331,6 +331,17 @@ typedef int sig_atomic_t;
 int futex_wait(volatile int *lock_word, int oldval, long sec, unsigned long usec);
 int futex_wake(volatile int *lock_word, int n);
 
+/* Debugging */
+void pthread_np_lose(int trace_depth, const char* fmt, ...);
+struct _pthread_mutex_info DEAD_MUTEX;
+
+static inline void pthread_np_assert_live_mutex(pthread_mutex_t* ptr,
+						const char *action)
+{
+    if (*ptr == &DEAD_MUTEX) {
+	pthread_np_lose(5,"Trying to %s dead mutex %p\n",action,ptr);
+    }
+}
 
 #ifndef PTHREAD_INTERNALS
 static inline int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset)
@@ -364,6 +375,7 @@ static inline int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset
    (1) fast, (2) critical (3) short */
 static inline int pthread_mutex_lock_np_inline(pthread_mutex_t *mutex)
 {
+    pthread_np_assert_live_mutex(mutex,"lock");
     if ((*mutex) == PTHREAD_MUTEX_INITIALIZER) {
 	return pthread_mutex_lock(mutex);
     } else {
@@ -374,6 +386,7 @@ static inline int pthread_mutex_lock_np_inline(pthread_mutex_t *mutex)
 
 static inline int pthread_mutex_unlock_np_inline(pthread_mutex_t *mutex)
 {
+    pthread_np_assert_live_mutex(mutex,"unlock");
     LeaveCriticalSection(&(*mutex)->cs);
     return 0;
 }

@@ -192,6 +192,7 @@ GNAME(call_into_c):
 	movl	%esi, %eax
 	movl	%edi, %edx
 
+	FILL_FPU_STACK
 	jmp	*%ebx
 
 #else	
@@ -773,7 +774,8 @@ GNAME(exception_handler_wrapper):
 	jz 	1f
 	movl	$1,%eax
 	ret
-1:	
+1:
+	cld
 	/* Context layout is: */
 	/* 7 dwords before FSA. (0x1c) */
 	/* 8 dwords and 0x50 bytes in the FSA. (0x70/0x8c) */

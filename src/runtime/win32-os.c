@@ -1632,16 +1632,28 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 		 CONTEXT *context,
 		 void *dispatcher_context)
 {
+    if (!context) return ExceptionContinueSearch;
     DWORD code = exception_record->ExceptionCode;
     EXCEPTION_DISPOSITION disposition = ExceptionContinueExecution;
     void* fault_address = (void*)exception_record->ExceptionInformation[1];
     os_context_t ctx, *oldctx;
-    
     struct thread* self = arch_os_get_current_thread();
     int contextual_fpu_state = self ? self->in_lisp_fpu_mode : 0;
 
     if (self && self->csp_around_foreign_call) {
 	self->foreign_context_lasterror = GetLastError();
+    }
+
+    if (self && context &&
+	(((DWORD)self->control_stack_end)-0x10000)>context->Esp) {
+	fprintf(stderr,
+		"Overflowing in SEH, thread %p\n"
+		"EIP %p Faddr %p code %p\n",
+		self,
+		context->Eip,
+		fault_address,
+		code);
+	ExitProcess(0);
     }
     
     if (dyndebug_lazy_fpu)
@@ -1824,6 +1836,32 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 	goto finish;
     }
     else if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
+	if (self) {
+	    if (((lispobj)fault_address)<0xFFFF) {
+		fprintf(stderr,
+			"Low page access (?) thread %p\n"
+			"(addr %p, EIP %p ESP %p EBP %p)\n",
+			self,
+			fault_address,
+			    context->Eip,
+			    context->Esp,
+			    context->Ebp);
+                /* c_level_backtrace("Low page access",5); */
+                Sleep(INFINITE);
+		ExitProcess(0);		
+	    }
+	    if (fault_address >= (void*)self->binding_stack_start &&
+		fault_address <= (void*)self->binding_stack_pointer) {
+		int n;
+		fprintf(stderr,
+			"Binding stack overflow (?) thread %p\n"
+			"(start %p, pointer %p)\n",
+			self,
+			self->binding_stack_start,
+			self->binding_stack_pointer);
+		ExitProcess(0);
+	    }
+	}
 	if (fault_address == GC_SAFEPOINT_PAGE_ADDR) {
 	    /* Pick off GC-related memory fault next. */
 	    gc_maybe_stop_with_context(&ctx, 1);

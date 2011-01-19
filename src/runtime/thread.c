@@ -348,8 +348,6 @@ new_thread_trampoline(struct thread *th)
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
     gc_leave_foreign_call();	/* will wait if needed */
 
-    /* With lock-free gc_leave_foreign_call, we may be "SUSPENDED"
-       here -- if suspend_info.suspend was removed before this point. */
 #endif
 
     result = funcall0(function);
@@ -506,7 +504,6 @@ new_thread_trampoline(struct thread *th)
 #ifdef LISP_FEATURE_GENCGC
     gc_set_region_empty(&th->alloc_region);
 #endif
-
     goto resurrect;
 
 
@@ -1150,9 +1147,9 @@ int check_pending_gc()
     struct thread * self = arch_os_get_current_thread();
     int done = 0;
     sigset_t sigset = 0;
-    /* Take off recursive protection as soon as GC_PENDING becomes !T */
+    /* Take off recursive protection as soon as GC_PENDING becomes NIL */
     if ((SymbolValue(IN_SAFEPOINT,self) == T) &&
-        (SymbolValue(GC_PENDING,self) != T)) {
+        (SymbolValue(GC_PENDING,self) == NIL)) {
         SetSymbolValue(IN_SAFEPOINT,NIL,self);
     }
     if (thread_may_gc() && (SymbolValue(IN_SAFEPOINT, self) == NIL)) {
@@ -1438,6 +1435,8 @@ void gc_leave_foreign_call()
 
    COMPILER_BARRIER;
    self->gc_safepoint_context = NULL;
+   COMPILER_BARRIER;
+   while (check_pending_gc()||check_pending_interrupts());
    return;
 
  full_locking:
@@ -1553,6 +1552,7 @@ void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access)
 
     if (self->csp_around_foreign_call) {
 	BEGIN_GC_UNSAFE_CODE;
+	while (check_pending_gc()||check_pending_interrupts());
 	END_GC_UNSAFE_CODE;
 	return;
     }

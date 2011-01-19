@@ -270,10 +270,12 @@ void pthread_np_unpublish_context()
 
 void pthread_np_resume(pthread_t thread)
 {
+  /* Unlock first, _then_ resume, or we may end up accessing freed
+     pthread structure (e.g. at startup with CREATE_SUSPENDED) */
+  pthread_mutex_unlock(&thread->fiber_lock);
   if (!thread->fiber_context.Esp) {
     ResumeThread(thread->fiber_group->handle);
   }
-  pthread_mutex_unlock(&thread->fiber_lock);
 }
 
 /* FIXME shouldn't be used. */
@@ -654,8 +656,10 @@ int pthread_mutexattr_settype(pthread_mutexattr_t* attr,int mutex_type)
 int pthread_mutex_destroy(pthread_mutex_t *mutex)
 {
     if (*mutex != PTHREAD_MUTEX_INITIALIZER) {
+	pthread_np_assert_live_mutex(mutex,"destroy");
 	DeleteCriticalSection(&(*mutex)->cs);
 	free(*mutex);
+	*mutex = &DEAD_MUTEX;
     }
     return 0;
 }
@@ -694,7 +698,7 @@ void pthread_np_remove_pending_signal(pthread_t thread, int signum)
 sigset_t pthread_np_other_thread_sigpending(pthread_t thread)
 {
     return
-	InterlockedCompareExchange((volatile LONG*)&pthread_self()->pending_signal_set,
+	InterlockedCompareExchange((volatile LONG*)&thread->pending_signal_set,
 				   0, 0);
 }
 
@@ -705,6 +709,7 @@ sigset_t pthread_np_other_thread_sigpending(pthread_t thread)
    the next one hangs. */
 int pthread_mutex_lock(pthread_mutex_t *mutex)
 {
+  pthread_np_assert_live_mutex(mutex,"lock");
   if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
     pthread_mutex_lock(&mutex_init_lock);
     if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
@@ -719,6 +724,7 @@ int pthread_mutex_lock(pthread_mutex_t *mutex)
 
 int pthread_mutex_trylock(pthread_mutex_t *mutex)
 {
+  pthread_np_assert_live_mutex(mutex,"trylock");
   if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
     pthread_mutex_lock(&mutex_init_lock);
     if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
@@ -740,6 +746,7 @@ int pthread_mutex_trylock(pthread_mutex_t *mutex)
 int pthread_mutex_lock_annotate_np(pthread_mutex_t *mutex, const char* file, int line)
 {
   int contention = 0;
+  pthread_np_assert_live_mutex(mutex,"lock");
   if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
     pthread_mutex_lock(&mutex_init_lock);
     if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
@@ -779,6 +786,7 @@ int pthread_mutex_lock_annotate_np(pthread_mutex_t *mutex, const char* file, int
 int pthread_mutex_trylock_annotate_np(pthread_mutex_t *mutex, const char* file, int line)
 {
   int contention = 0;
+  pthread_np_assert_live_mutex(mutex,"trylock");
   if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
     pthread_mutex_lock(&mutex_init_lock);
     if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
@@ -819,6 +827,7 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex)
 {
   /* Owner is for debugging only; NB if mutex is used recursively,
      owner field will lie. */
+  pthread_np_assert_live_mutex(mutex,"unlock");
   DEBUG_RELEASE(*mutex);
   LeaveCriticalSection(&(*mutex)->cs);
   return 0;
@@ -1517,4 +1526,28 @@ static void futex_interrupt(pthread_t thread)
 	}
 	pthread_mutex_unlock(&cv->wakeup_lock);
     }
+}
+
+void pthread_np_lose(int trace_depth, const char* fmt, ...)
+{
+    va_list header;
+    void* frame;
+    int n = 0;
+    void** lastseh;
+
+    va_start(header,fmt);
+    vfprintf(stderr,fmt,header);
+    for (lastseh = *(void**)NtCurrentTeb();
+	 lastseh && (lastseh!=(void*)0xFFFFFFFF);
+	 lastseh = *lastseh);
+
+    fprintf(stderr, "Backtrace: %s (pthread %p)\n", header, pthread_self());
+    for (frame = __builtin_frame_address(0); frame; frame=*(void**)frame)
+	{
+	    if ((n++)>trace_depth)
+		return;
+	    fprintf(stderr, "[#%02d]: ebp = 0x%p, ret = 0x%p\n",n,
+		    frame, ((void**)frame)[1]);
+	}
+    ExitProcess(0);
 }

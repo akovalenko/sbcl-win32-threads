@@ -52,7 +52,7 @@
       its client (caller) somewhere around handle_exception).
  */
 
-.align 8,0x90
+.align 16,0x90
 
 .globl GNAME(fpu_insns_modrm)
 GNAME(fpu_insns_modrm):

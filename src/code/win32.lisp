@@ -967,6 +967,8 @@ UNIX epoch: January 1st 1970."
                   (values fd 0))))))))
 
 (define-alien-routine ("closesocket" close-socket) int (handle handle))
+(define-alien-routine ("shutdown" shutdown-socket) int (handle handle)
+  (how int))
 
 (define-alien-routine ("DuplicateHandle" duplicate-handle) lispbool
   (from-process handle)
@@ -977,24 +979,50 @@ UNIX epoch: January 1st 1970."
   (inheritp lispbool)
   (options dword))
 
+(define-alien-routine ("SetHandleInformation" set-handle-information) lispbool
+  (handle handle)
+  (mask dword)
+  (flags dword))
+
 (defconstant ebadf 9)
 
 ;;; For sockets, CloseHandle first and closesocket() afterwards is
 ;;; legal: winsock tracks its handles separately (that's why we have
 ;;; the problem with simple _close in the first place).
 ;;;
-;;; ...Seems to be the problem on some OSes, though.  For now, we
-;;; duplicate a handle and attempt close-socket on a duplicated one.
+;;; ...Seems to be the problem on some OSes, though. We could
+;;; duplicate a handle and attempt close-socket on a duplicated one,
+;;; but it also have some problems...
+;;;
+;;; For now, we protect socket handle from close with SetHandleInformation,
+;;; then call CRT _close() that fails to close a handle but _gets rid of fd_,
+;;; and then we close a handle ourserves.
+
 (defun unixlike-close (fd)
   (let ((handle (get-osfhandle fd)))
     (if (= handle invalid-handle)
-        (values nil ebadf)
-        (multiple-value-bind (dup-ok dup-handle)
-	    (duplicate-handle -1 handle -1 0 nil 2)
-	  (multiple-value-prog1 (sb!unix:unix-close fd)
-	    (when dup-ok
-	      (or (zerop (close-socket dup-handle))
-		  (close-handle dup-handle))))))))
+	(values nil ebadf)
+        (let ((socketp
+               (and
+                ;; Wine workaround: its universal socket+pipe handles
+                ;; are closed by _any_ of closesocket/CloseHandle
+                ;; calls. On real Windows, named pipes and sockets are
+                ;; disctinct, and peek-named-pipe will fail.
+                (not (peek-named-pipe handle nil 0 nil nil nil))
+                (/= 5 (get-last-error))
+                (plusp (socket-input-available handle)))))
+	  
+	  (if socketp
+	      (progn
+		(shutdown-socket handle 1)
+		(shutdown-socket handle 0)
+		(set-handle-information handle 2 2)
+		(sb!unix:unix-close fd)
+		(set-handle-information handle 2 0)
+		(close-socket handle)
+		(values t 0))
+	      (sb!unix:unix-close fd))))))
+
 
 (define-alien-routine ("GetExitCodeProcess" get-exit-code-process)
     int
