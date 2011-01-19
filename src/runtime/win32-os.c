@@ -2355,13 +2355,13 @@ int win32_unix_read(int fd, void * buf, int count)
         goto done_something;
     } else {
         errorCode = GetLastError();
-        if (errorCode == ERROR_HANDLE_EOF || errorCode == ERROR_BROKEN_PIPE) {
-            /* it is an `error' for positioned reads! oh wtf */
+        if (errorCode == ERROR_HANDLE_EOF ||
+	    errorCode == ERROR_BROKEN_PIPE ||
+	    errorCode == ERROR_NETNAME_DELETED) {
             goto done_something;
         }
         if (errorCode!=ERROR_IO_PENDING) {
             /* is it some _real_ error? */
-	    fprintf(stderr,"LastError: %d\n",GetLastError());
             errno = EIO;
             return -1;
         } else {
