@@ -1140,7 +1140,9 @@ int sched_yield()
 {
   /* http://stackoverflow.com/questions/1383943/switchtothread-vs-sleep1
      SwitchToThread(); was here. Unsure what's better for us, just trying.. */
-  SwitchToThread();
+
+  if(!SwitchToThread())
+      Sleep(0);
   return 0;
 }
 
