@@ -1436,7 +1436,8 @@ void gc_leave_foreign_call()
    COMPILER_BARRIER;
    self->gc_safepoint_context = NULL;
    COMPILER_BARRIER;
-   while (check_pending_gc()||check_pending_interrupts());
+   while (self->os_thread->pending_signal_set &&
+	  (check_pending_gc()||check_pending_interrupts()));
    return;
 
  full_locking:
