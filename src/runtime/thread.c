@@ -1378,6 +1378,7 @@ void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
     COMPILER_BARRIER;
     self->csp_around_foreign_call = csp;
     COMPILER_BARRIER;
+    __sync_synchronize();	/* :-( */
     if (!suspend_info.suspend)
 	goto finish;
     if (self->state == STATE_PHASE2_BLOCKER &&
@@ -1425,6 +1426,7 @@ void gc_leave_foreign_call()
       gc-blocker. */
    
    self->gc_safepoint_context = (void*)-1;
+   __sync_synchronize();	/* :-( */
    COMPILER_BARRIER;
 
    if (suspend_info.suspend)
@@ -1436,8 +1438,6 @@ void gc_leave_foreign_call()
    COMPILER_BARRIER;
    self->gc_safepoint_context = NULL;
    COMPILER_BARRIER;
-   while (self->os_thread->pending_signal_set &&
-	  (check_pending_gc()||check_pending_interrupts()));
    return;
 
  full_locking:

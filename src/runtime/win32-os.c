@@ -327,6 +327,13 @@ void map_gc_page()
                         PAGE_READWRITE, &oldProt));
 }
 
+void map_gc_page_readonly()
+{
+    DWORD oldProt;
+    AVER(VirtualProtect(GC_SAFEPOINT_PAGE_ADDR, 4,
+                        PAGE_READONLY, &oldProt));
+}
+
 void unmap_gc_page()
 {
     DWORD oldProt;
