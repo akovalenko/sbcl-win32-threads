@@ -1006,7 +1006,7 @@
        ((lambda (return-reason)
           (ecase return-reason
             ((nil))                     ; fast path normal cases
-            ((:wait-for-input) (go :wait-for-input))
+            ((:wait-for-input) (go #!-win32 :wait-for-input #!+win32 :main))
             ((:closed-flame)   (go :closed-flame))
             ((:read-error)     (go :read-error))))
         (without-interrupts

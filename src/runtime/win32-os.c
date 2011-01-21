@@ -1857,17 +1857,6 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                 Sleep(INFINITE);
 		ExitProcess(0);		
 	    }
-	    if (fault_address >= (void*)self->binding_stack_start &&
-		fault_address <= (void*)self->binding_stack_pointer) {
-		int n;
-		fprintf(stderr,
-			"Binding stack overflow (?) thread %p\n"
-			"(start %p, pointer %p)\n",
-			self,
-			self->binding_stack_start,
-			self->binding_stack_pointer);
-		ExitProcess(0);
-	    }
 	}
 	if (fault_address == GC_SAFEPOINT_PAGE_ADDR) {
 	    /* Pick off GC-related memory fault next. */

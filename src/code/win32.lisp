@@ -1004,23 +1004,17 @@ UNIX epoch: January 1st 1970."
 	(values nil ebadf)
         (let ((socketp
                (and
-                ;; Wine workaround: its universal socket+pipe handles
-                ;; are closed by _any_ of closesocket/CloseHandle
-                ;; calls. On real Windows, named pipes and sockets are
-                ;; disctinct, and peek-named-pipe will fail.
-                (not (peek-named-pipe handle nil 0 nil nil nil))
-                (/= 5 (get-last-error))
-                (plusp (socket-input-available handle)))))
-	  
+		(member (get-file-type handle) `(,file-type-pipe ,file-type-remote))
+		(zerop (shutdown-socket handle 2)))))
 	  (if socketp
 	      (progn
-		(shutdown-socket handle 1)
-		(shutdown-socket handle 0)
 		(set-handle-information handle 2 2)
 		(sb!unix:unix-close fd)
 		(set-handle-information handle 2 0)
-		(close-socket handle)
-		(values t 0))
+		(if (or (zerop (close-socket handle))
+			(close-handle handle))
+		    (values t 0)
+		    (values nil ebadf)))
 	      (sb!unix:unix-close fd))))))
 
 
