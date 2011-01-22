@@ -1235,11 +1235,13 @@ void gc_suspend_willfully(struct thread *th)
 	    switch (suspend_info.reason) {
 	    case SUSPEND_REASON_GCING:
 		gc_assert(full_suspend_possible);
+		gc_abandon_pending(th);
 		th->state = STATE_SUSPENDED;
 		break;
 	    case SUSPEND_REASON_GC:
 		th->state = full_suspend_possible ?
 		    STATE_SUSPENDED : STATE_SUSPENDED_BRIEFLY;
+		gc_abandon_pending(th);
 		break;
 	    case SUSPEND_REASON_INTERRUPT:
 		th->state = STATE_SUSPENDED_BRIEFLY;
