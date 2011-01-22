@@ -1260,6 +1260,7 @@ os_protect(os_vm_address_t address, os_vm_size_t length, os_vm_prot_t prot)
 {
     DWORD old_prot;
 
+    length = ALIGN_UP(length, os_vm_page_size);
     RECURSIVE_REDUCE_TO_ONE_SPACE_VOID(os_protect,address,length,,prot);
 
     if (addr_in_mmapped_core(address)) {
