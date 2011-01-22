@@ -41,7 +41,6 @@ typedef int os_vm_prot_t;
 #define OS_VM_PROT_READ    1
 #define OS_VM_PROT_WRITE   2
 #define OS_VM_PROT_EXECUTE 4
-#define OS_VM_MMAP_GRANULARITY_SHIFT 4
 
 #define os_open_core(file,mode) win32_open_for_mmap(file)
 #define HAVE_os_open_core
@@ -74,11 +73,13 @@ void wos_install_interrupt_handlers(struct lisp_exception_frame *handler);
 char *dirname(char *path);
 
 #define HAVE_os_invalidate_free
-#define HAVE_os_validate_commit
+#define HAVE_os_validate_recommit
 #define HAVE_os_allocate_lazily
 
+#define os_vm_mmap_unit_size 65536
+#define HAVE_os_vm_mmap_unit_size
+
 void os_invalidate_free(os_vm_address_t addr, os_vm_size_t len);
-void os_validate_commit(os_vm_address_t addr, os_vm_size_t len);
 void* os_validate_recommit(os_vm_address_t addr, os_vm_size_t len);
 os_vm_address_t os_allocate_lazily(os_vm_size_t len);
 void accept_post_mortem_startup();

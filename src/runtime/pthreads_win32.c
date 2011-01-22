@@ -35,6 +35,13 @@ struct freelist {
     unsigned int count;
 };
 
+#define FREELIST_INITIALIZER(create_fn)			\
+    {							\
+	event_create, PTHREAD_MUTEX_INITIALIZER,	\
+	    NULL, NULL, 0				\
+	    }    					\
+
+
 static void* freelist_get(struct freelist *fl)
 {
     void* result = NULL;
@@ -855,7 +862,8 @@ static void* event_create()
     return (void*)CreateEvent(NULL,FALSE,FALSE,NULL);
 }
 
-static struct freelist event_freelist = {event_create, PTHREAD_MUTEX_INITIALIZER};
+static struct freelist event_freelist = FREELIST_INITIALIZER(event_create);
+
 
 unsigned int pthread_free_event_pool_size()
 {
@@ -1063,14 +1071,10 @@ int pthread_cond_wait(pthread_cond_t * cv, pthread_mutex_t * cs)
   w.uaddr = 0;
   cv_wakeup_add(cv, &w);
   if (cv->last_wakeup->next == cv->last_wakeup) {
-    fprintf(stderr, "cv->last_wakeup->next == cv->last_wakeup\n");
-    fflush(stderr);
-    ExitProcess(0);
+      pthread_np_lose(5,"cv->last_wakeup->next == cv->last_wakeup\n");
   }
   if (cv->last_wakeup->next != NULL) {
-    fprintf(stderr, "cv->last_wakeup->next != NULL\n");
-    fflush(stderr);
-    ExitProcess(0);
+      pthread_np_lose(5,"cv->last_wakeup->next == cv->last_wakeup\n");
   }
   pthread_self()->waiting_cond = cv;
   DEBUG_RELEASE(*cs);

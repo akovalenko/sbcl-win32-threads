@@ -377,6 +377,10 @@ new_thread_trampoline(struct thread *th)
        tables already. */
     if (SymbolValue(GC_PENDING,th)==T) {
 	SetSymbolValue(GC_PENDING,NIL,th);
+	/* though "gc signal blocked" doesn't matter for
+	   :sb-gc-safepoint builds, we have an equivalent here:
+	   this thread is now "in lisp" and doesn't trap,
+	   and that delays gc_stop_the_world at phase 1. */
 	gc_alloc_update_page_tables(BOXED_PAGE_FLAG, &th->alloc_region);
     }
     unbind_variable(IN_SAFEPOINT,th);
@@ -611,7 +615,18 @@ create_thread_struct(lispobj initial_function) {
          THREAD_STATE_LOCK_SIZE);
 
 #ifdef LISP_FEATURE_SB_THREAD
-    os_validate_recommit(per_thread, dynamic_values_bytes);
+    /* If lazy allocation is used, it makes sense to recommit a page
+       or two here and there in advance, if we know they're going to
+       be used. It may be omitted safely, we just save a few
+       pagefaults #!+win32 (and SEH traps) */
+    
+    /* A page of alien stack + TLS dynamic values */
+    os_validate_recommit(((void*)per_thread)-os_vm_page_size,
+			 dynamic_values_bytes + os_vm_page_size);
+
+    /* A page of binding stack (the first one, surely it will be used) */
+    os_validate_recommit(aligned_spaces+thread_control_stack_size,
+			 os_vm_page_size);
     for(i = 0; i < (dynamic_values_bytes / sizeof(lispobj)); i++)
         per_thread->dynamic_values[i] = NO_TLS_VALUE_MARKER_WIDETAG;
     if (all_threads == 0) {
@@ -1175,8 +1190,7 @@ int check_pending_gc()
 		}
                 done = 1;
             }
-            if (concurrency>0 &&
-		os_number_of_processors <= 1) {
+            if (concurrency>0 && os_number_of_processors <= 1) {
 		while(concurrency-- &&
 		      !suspend_info.suspend)
 		    thread_yield();
@@ -1192,9 +1206,9 @@ static inline
 void gc_abandon_pending(struct thread *th)
 {
     if (SymbolTlValue(GC_PENDING,th)==T &&
-	(SymbolTlValue(IN_SAFEPOINT,th)!=T ||
-	 SymbolTlValue(GC_SAFE,th)==T))
-	SetSymbolValue(GC_PENDING,NIL,th);
+    	(SymbolTlValue(IN_SAFEPOINT,th)!=T ||
+    	 SymbolTlValue(GC_SAFE,th)==T))
+    	SetSymbolValue(GC_PENDING,NIL,th);
 }
 
 /* Get the thread into appropriate suspend state depending on the
@@ -1420,24 +1434,26 @@ void gc_leave_foreign_call()
        goto full_locking;
    
    COMPILER_BARRIER;
-
    /* Using ctx field as a flag. GC which is in progress won't notice,
       but gc_stop_the_world will now enqueue after this thread as
       gc-blocker. */
    
    self->gc_safepoint_context = (void*)-1;
    __sync_synchronize();	/* :-( */
-   COMPILER_BARRIER;
 
    if (suspend_info.suspend)
        goto full_locking;
 
    COMPILER_BARRIER;
    self->csp_around_foreign_call = NULL;
+   if (suspend_info.suspend)
+       goto full_locking;
 
    COMPILER_BARRIER;
    self->gc_safepoint_context = NULL;
    COMPILER_BARRIER;
+   if (suspend_info.suspend)
+       goto full_locking;
    return;
 
  full_locking:

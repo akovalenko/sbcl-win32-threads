@@ -910,7 +910,8 @@ void os_init(char *argv[], char *envp[])
 {
     SYSTEM_INFO system_info;
     GetSystemInfo(&system_info);
-    os_vm_page_size = system_info.dwPageSize;
+    os_vm_page_size = system_info.dwPageSize > BACKEND_PAGE_BYTES?
+	system_info.dwPageSize : BACKEND_PAGE_BYTES;
     fast_bzero_pointer = fast_bzero_detect;
     os_number_of_processors = system_info.dwNumberOfProcessors;
     dyndebug_init();
@@ -1048,6 +1049,11 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
 {
     MEMORY_BASIC_INFORMATION mem_info;
 
+    /* align len to page boundary for any operation (especially
+     * important as we're going to experiment with larger "pages" than
+     * the OS-supplied minimum) */
+    len = ALIGN_UP(len,os_vm_page_size);
+    
     if (!addr) {
         /* the simple case first */
         return
@@ -1094,6 +1100,8 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
 os_vm_address_t
 os_validate_recommit(os_vm_address_t addr, os_vm_size_t len)
 {
+    /* align len to page boundary for any operation */
+    len = ALIGN_UP(len,os_vm_page_size);
     return
         AVERLAX(VirtualAlloc(addr, len, MEM_COMMIT, PAGE_EXECUTE_READWRITE));
 }
@@ -1101,6 +1109,8 @@ os_validate_recommit(os_vm_address_t addr, os_vm_size_t len)
 os_vm_address_t
 os_allocate_lazily(os_vm_size_t len)
 {
+    /* align len to page boundary for any operation */
+    len = ALIGN_UP(len,os_vm_page_size);
     return
         AVERLAX(VirtualAlloc(NULL, len, MEM_RESERVE, PAGE_EXECUTE_READWRITE));
 }
