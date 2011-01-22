@@ -1056,9 +1056,6 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
      * important as we're going to experiment with larger "pages" than
      * the OS-supplied minimum) */
 
-    /* len = PTR_ALIGN_UP(addr+len,os_vm_page_size)-PTR_ALIGN_DOWN(addr,os_vm_page_size); */
-    /* addr = PTR_ALIGN_DOWN(addr,os_vm_page_size); */
-    
     if (!addr) {
         /* the simple case first */
         return
@@ -1105,11 +1102,6 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
 os_vm_address_t
 os_validate_recommit(os_vm_address_t addr, os_vm_size_t len)
 {
-    /* align len/addr, as a pair, to page boundary for any operation */
-    /* len = PTR_ALIGN_UP(addr+len,os_vm_page_size)-PTR_ALIGN_DOWN(addr,os_vm_page_size); */
-    /* addr = PTR_ALIGN_DOWN(addr,os_vm_page_size); */
-    /* simultaneously, align addr down! */
-    /* addr = PTR_ALIGN_DOWN(addr,os_vm_page_size); */
     return
         AVERLAX(VirtualAlloc(addr, len, MEM_COMMIT, PAGE_EXECUTE_READWRITE));
 }
@@ -1141,8 +1133,6 @@ os_allocate_lazily(os_vm_size_t len)
 void
 os_invalidate(os_vm_address_t addr, os_vm_size_t len)
 {
-    /* len = PTR_ALIGN_UP(addr+len,os_vm_page_size)-PTR_ALIGN_DOWN(addr,os_vm_page_size); */
-    /* addr = PTR_ALIGN_DOWN(addr,os_vm_page_size); */
     RECURSIVE_REDUCE_TO_ONE_SPACE_VOID(os_invalidate,addr,len);
 
     if (addr_in_mmapped_core(addr)) {
@@ -1269,9 +1259,6 @@ void
 os_protect(os_vm_address_t address, os_vm_size_t length, os_vm_prot_t prot)
 {
     DWORD old_prot;
-    /* length = PTR_ALIGN_UP(address+length,os_vm_page_size) */
-    /* 	- PTR_ALIGN_DOWN(address,os_vm_page_size); */
-    /* address = PTR_ALIGN_DOWN(address,os_vm_page_size); */
 
     RECURSIVE_REDUCE_TO_ONE_SPACE_VOID(os_protect,address,length,,prot);
 
