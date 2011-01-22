@@ -690,7 +690,11 @@ create_thread_struct(lispobj initial_function) {
     th->state=STATE_RUNNING;
 #ifdef LISP_FEATURE_STACK_GROWS_DOWNWARD_NOT_UPWARD
     th->alien_stack_pointer=((void *)th->alien_stack_start
-                             + ALIEN_STACK_SIZE-N_WORD_BYTES);
+                             + ALIEN_STACK_SIZE
+			     - N_WORD_BYTES
+			     /* see win32-os.h whose THREAD_ALIEN_RESERVE
+				is now defined to non-zero */
+			     - THREAD_ALIEN_RESERVE);
 #else
     th->alien_stack_pointer=((void *)th->alien_stack_start);
 #endif
@@ -1191,9 +1195,9 @@ int check_pending_gc()
                 done = 1;
             }
             if (concurrency>0 && os_number_of_processors <= 1) {
-		while(concurrency-- &&
-		      !suspend_info.suspend)
-		    thread_yield();
+	    	while(concurrency-- &&
+	    	      !suspend_info.suspend)
+	    	    thread_yield();
             }
         }
     }
@@ -1976,6 +1980,7 @@ void gc_stop_the_world()
     gc_roll_or_wait(gc_blockers, 2, SUSPEND_REASON_GC, gc_page_signalling);
     odxprint(safepoints,
 	     "GCer %p stopped the world\n", th);
+    /* pthread_mutex_lock(&all_threads_lock); */
 }
 
 void gc_start_the_world()

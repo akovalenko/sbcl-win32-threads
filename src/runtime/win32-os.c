@@ -91,6 +91,7 @@ int dyndebug_skip_averlax = 0;
 int dyndebug_survive_aver = 0;
 int dyndebug_runtime_link = 0;
 int dyndebug_safepoints = 0;
+int dyndebug_pagefaults = 0;
 
 int dyndebug_to_filestream = 1;
 int dyndebug_to_odstring = 0;
@@ -114,6 +115,8 @@ void dyndebug_init()
         GetEnvironmentVariableA("SBCL_DYNDEBUG__RUNTIME_LINK",NULL,0);
     dyndebug_safepoints =
         GetEnvironmentVariableA("SBCL_DYNDEBUG__SAFEPOINTS",NULL,0);
+    dyndebug_pagefaults =
+        GetEnvironmentVariableA("SBCL_DYNDEBUG__PAGEFAULTS",NULL,0);
 }
 
 /* wrappers for winapi calls that must be successful */
@@ -1052,7 +1055,9 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
     /* align len to page boundary for any operation (especially
      * important as we're going to experiment with larger "pages" than
      * the OS-supplied minimum) */
-    len = ALIGN_UP(len,os_vm_page_size);
+
+    /* len = PTR_ALIGN_UP(addr+len,os_vm_page_size)-PTR_ALIGN_DOWN(addr,os_vm_page_size); */
+    /* addr = PTR_ALIGN_DOWN(addr,os_vm_page_size); */
     
     if (!addr) {
         /* the simple case first */
@@ -1100,8 +1105,11 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
 os_vm_address_t
 os_validate_recommit(os_vm_address_t addr, os_vm_size_t len)
 {
-    /* align len to page boundary for any operation */
-    len = ALIGN_UP(len,os_vm_page_size);
+    /* align len/addr, as a pair, to page boundary for any operation */
+    /* len = PTR_ALIGN_UP(addr+len,os_vm_page_size)-PTR_ALIGN_DOWN(addr,os_vm_page_size); */
+    /* addr = PTR_ALIGN_DOWN(addr,os_vm_page_size); */
+    /* simultaneously, align addr down! */
+    /* addr = PTR_ALIGN_DOWN(addr,os_vm_page_size); */
     return
         AVERLAX(VirtualAlloc(addr, len, MEM_COMMIT, PAGE_EXECUTE_READWRITE));
 }
@@ -1110,7 +1118,7 @@ os_vm_address_t
 os_allocate_lazily(os_vm_size_t len)
 {
     /* align len to page boundary for any operation */
-    len = ALIGN_UP(len,os_vm_page_size);
+    /* len = ALIGN_UP(len,os_vm_page_size); */
     return
         AVERLAX(VirtualAlloc(NULL, len, MEM_RESERVE, PAGE_EXECUTE_READWRITE));
 }
@@ -1133,6 +1141,8 @@ os_allocate_lazily(os_vm_size_t len)
 void
 os_invalidate(os_vm_address_t addr, os_vm_size_t len)
 {
+    /* len = PTR_ALIGN_UP(addr+len,os_vm_page_size)-PTR_ALIGN_DOWN(addr,os_vm_page_size); */
+    /* addr = PTR_ALIGN_DOWN(addr,os_vm_page_size); */
     RECURSIVE_REDUCE_TO_ONE_SPACE_VOID(os_invalidate,addr,len);
 
     if (addr_in_mmapped_core(addr)) {
@@ -1259,8 +1269,10 @@ void
 os_protect(os_vm_address_t address, os_vm_size_t length, os_vm_prot_t prot)
 {
     DWORD old_prot;
+    /* length = PTR_ALIGN_UP(address+length,os_vm_page_size) */
+    /* 	- PTR_ALIGN_DOWN(address,os_vm_page_size); */
+    /* address = PTR_ALIGN_DOWN(address,os_vm_page_size); */
 
-    length = ALIGN_UP(length, os_vm_page_size);
     RECURSIVE_REDUCE_TO_ONE_SPACE_VOID(os_protect,address,length,,prot);
 
     if (addr_in_mmapped_core(address)) {
@@ -1576,7 +1588,7 @@ extern boolean internal_errors_enabled;
      /* 	return ; */
      uint8_t* fpu_eip = (void*)(uintptr_t)context->FloatSave.ErrorOffset;
 
-     DWORD* temp_data = (((void*)&fpu_eip)-0x2000);
+     DWORD* temp_data = get_thread_alien_reserve(this_thread);
 
      uint8_t fpu_prefix_D8toDF = (0xFFu & (context->FloatSave.ErrorSelector>>24))|0xD8;
      uint8_t fpu_next_byte = 0xFFu & (context->FloatSave.ErrorSelector>>16);
@@ -1854,6 +1866,13 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 	goto finish;
     }
     else if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
+        odxprint(pagefaults,
+		     "SEGV. ThSap %p, Eip %p, Esp %p, Addr %p Access %d\n",
+		     self,
+		     context->Eip,
+		     context->Esp,
+		     fault_address,
+		     exception_record->ExceptionInformation[0]);
 	if (self) {
 	    if (((lispobj)fault_address)<0xFFFF) {
 		fprintf(stderr,
@@ -1879,7 +1898,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 	    if (page_table[index].write_protected) {
 		gencgc_handle_wp_violation(fault_address);
 	    } else {
-		if (!addr_in_mmapped_core(fault_address)) {
+		if (!addr_in_mmapped_core(fault_address)) {		    
 		    AVER(VirtualAlloc(PTR_ALIGN_DOWN(fault_address,os_vm_page_size),
 				      os_vm_page_size,
 				      MEM_COMMIT, PAGE_EXECUTE_READWRITE));

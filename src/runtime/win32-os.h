@@ -88,6 +88,21 @@ void win32_interrupt_console_input();
 void os_link_runtime();
 void establish_c_fpu_world();
 
+/* Temporal per-thread storage for non-lisp values, that I constantly
+   need on Win32 to run code snippets injected by SEH handler and
+   continue into normal code (yes, :sb-auto-fpu-switch is hackish).
+
+   If your platform runs signal handlers on normal stack, you may need
+   such space as well, for equivalent purposes. Please consider using
+   the same place: convenient, easy-to-find, and not affecting gencgc's
+   conservatism. */
+
+#define THREAD_ALIEN_RESERVE (64*N_WORD_BYTES)
+
+#define get_thread_alien_reserve(th)		\
+    ((void *)th->alien_stack_start		\
+     + ALIEN_STACK_SIZE - THREAD_ALIEN_RESERVE)
+    
 
 extern int dyndebug_lazy_fpu;
 extern int dyndebug_lazy_fpu_careful;

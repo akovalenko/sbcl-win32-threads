@@ -35,4 +35,8 @@
 #define os_number_of_processors 0
 #endif
 
+#ifndef THREAD_ALIEN_RESERVE
+#define THREAD_ALIEN_RESERVE (0)
+#endif
+
 #endif /* SBCL_INCLUDED_OS_DEFAULT_H */
