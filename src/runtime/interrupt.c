@@ -360,7 +360,13 @@ check_blockables_unblocked_or_lose(sigset_t *sigset)
 void
 check_blockables_blocked_or_lose(sigset_t *sigset)
 {
-#if !defined(LISP_FEATURE_WIN32) || defined(LISP_FEATURE_SB_THREAD)
+#if !defined(LISP_FEATURE_WIN32)
+    /* Even on threaded win32 builds, the concern that something will
+       be interrupted _suddenly_ is out of question.  Adjusting
+       *FREE-INTERRUPT-CONTEXT-INDEX* and other aspecs of
+       fake_foreign_function_call machinery are sometimes useful here,
+       but we'd better let it just happen without annoying
+       incantations around. */
     if (!blockables_blocked_p(sigset))
         lose("blockables unblocked\n");
 #endif

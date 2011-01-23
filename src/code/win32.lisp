@@ -942,7 +942,6 @@ UNIX epoch: January 1st 1970."
                                ((2 3) (logior access-generic-write
                                               access-generic-read)))))
                       (logior file-share-read
-                              file-share-delete
                               file-share-write)
                       nil
                         create-disposition
@@ -1006,15 +1005,25 @@ UNIX epoch: January 1st 1970."
                (and
 		(member (get-file-type handle) `(,file-type-pipe ,file-type-remote))
 		(zerop (shutdown-socket handle 2)))))
-	  (if socketp
+	  (if (and socketp ; right answer from get-file-type AND shutdown succeeded
+		   (set-handle-information handle 2 2))	; protected from close => T
 	      (progn
-		(set-handle-information handle 2 2)
-		(sb!unix:unix-close fd)
-		(set-handle-information handle 2 0)
-		(if (or (zerop (close-socket handle))
-			(close-handle handle))
-		    (values t 0)
-		    (values nil ebadf)))
+		(multiple-value-bind (falsehood code) (sb!unix:unix-close fd)
+		  (if falsehood ;; we protected the handle, but
+		      ;; unix-close reports success [never
+		      ;; seen it in real life].
+		      ;; return unix-close result without doing any more
+		      ;; to avoid double close. 
+		      (return-from unixlike-close (values falsehood code))
+		      (progn
+			;; unprotect:
+			(set-handle-information handle 2 0)
+			(if (or (zerop (close-socket handle)) ; as socket
+				(close-handle handle)) ; ws2 call failed => close as file
+			    (values t 0)	       ; success
+			    (values nil ebadf))))))
+	      ;; Either non-socket FD, or we couldn't protect the handle from close;
+	      ;; in the latter case, we'd better leak. Double close is much worse.
 	      (sb!unix:unix-close fd))))))
 
 

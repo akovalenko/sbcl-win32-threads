@@ -1134,7 +1134,7 @@ static inline int thread_may_interrupt()
 }
 
 // returns 0 if skipped, 1 otherwise
-int check_pending_interrupts()
+int check_pending_interrupts(os_context_t *ctx)
 {
   struct thread * p = arch_os_get_current_thread();
   pthread_t pself = p->os_thread;
@@ -1153,10 +1153,16 @@ int check_pending_interrupts()
   pself->blocked_signal_set = deferrable_sigset;
 
   BEGIN_GC_UNSAFE_CODE;
+  if (ctx) fake_foreign_function_call(&ctx);
+  if (ctx)
+      access_control_stack_pointer(p) =
+	  (lispobj *)*os_context_sp_addr(ctx);
   funcall0(StaticSymbolFunction(RUN_INTERRUPTION));
+  if (ctx) undo_fake_foreign_function_call(&ctx);
   END_GC_UNSAFE_CODE;
 
   pself->blocked_signal_set = oldset;
+  if (ctx) ctx->sigmask = oldset;
   return 1;
 }
 
@@ -1451,6 +1457,7 @@ void gc_leave_foreign_call()
        goto full_locking;
 
    COMPILER_BARRIER;
+   access_control_stack_pointer(self) = self->csp_around_foreign_call;
    self->csp_around_foreign_call = NULL;
    if (suspend_info.suspend)
        goto full_locking;
@@ -1484,7 +1491,7 @@ void gc_leave_foreign_call()
    self->pc_around_foreign_call = NULL;
    self->gc_safepoint_context = NULL;
    pthread_mutex_unlock(self->state_lock);
-   while (check_pending_gc()||check_pending_interrupts());
+   while (check_pending_gc()||check_pending_interrupts(NULL));
 }
 
 
@@ -1552,7 +1559,7 @@ void gc_leave_foreign_call()
 
     /* unlock is a memory barrier (release semantics) */
     pthread_mutex_unlock(self->state_lock);
-    while (check_pending_gc()||check_pending_interrupts());
+    while (check_pending_gc()||check_pending_interrupts(NULL));
 }
 
 #endif
@@ -1575,7 +1582,7 @@ void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access)
 
     if (self->csp_around_foreign_call) {
 	BEGIN_GC_UNSAFE_CODE;
-	while (check_pending_gc()||check_pending_interrupts());
+	while (check_pending_gc()||check_pending_interrupts(ctx));
 	END_GC_UNSAFE_CODE;
 	return;
     }
@@ -1599,7 +1606,7 @@ void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access)
     /* here our own willingness to GC (or interrupt handling) may take
        over. NB if concurrent GC was in progress, there is already no
        GC_PENDING. */
-    while(check_pending_gc() || check_pending_interrupts());
+    while(check_pending_gc() || check_pending_interrupts(NULL));
 
     if (SymbolTlValue(STOP_FOR_GC_PENDING,self)==NIL
 	&& self->state != STATE_RUNNING) {

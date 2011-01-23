@@ -1090,8 +1090,23 @@ return DEFAULT if given or else signal JOIN-THREAD-ERROR."
     ;; OS's point of view the signal we are in the handler for is no
     ;; longer pending, so the signal will not be lost.
     (when (thread-interruptions *current-thread*)
+      #!-(and win32 sb-gc-safepoint)
       (kill-safely (thread-os-thread *current-thread*)
-                   +interrupt-signal+))
+                   +interrupt-signal+)
+      #!+(and win32 sb-gc-safepoint)
+      ;; This interrupt mechanism now works on win32, but it may be
+      ;; rather expensive and unpredictable, so we'd rather avoid
+      ;; it. Imagine there is a call to check_pending_interrupts()
+      ;; here and now, ahead of us. The only thing it could do is
+      ;; setting *INTERRUPT-PENDING* to T.  Then why not do it
+      ;; ourselves?
+      ;; 
+      ;; POSIX systems are another story: deferrables, blocked signal
+      ;; mask and GC interact on SBCL-for-UNIX in many subtle
+      ;; ways. Win32, for now, won't call the signal handler when
+      ;; deferrables are unblocked, and GC on Win32 doesn't block
+      ;; deferrables when pending. 
+      (setf *interrupt-pending* t))
     (when interruption
       (invoke-interruption interruption))))
 

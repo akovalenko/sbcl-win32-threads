@@ -1842,13 +1842,11 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 	access_control_stack_pointer(self) =
 	    (lispobj *)*os_context_sp_addr(&ctx);
 
-	block_blockable_signals(0,&ctx.sigmask);
-
 	BEGIN_GC_UNSAFE_CODE;
+	block_blockable_signals(0,&ctx.sigmask);
 	handle_trap(&ctx, trap);
-	END_GC_UNSAFE_CODE;
-	
 	thread_sigmask(SIG_SETMASK,&ctx.sigmask,NULL);
+	END_GC_UNSAFE_CODE;
 
 	goto finish;
     }

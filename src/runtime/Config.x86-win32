@@ -35,8 +35,9 @@ GC_SRC = gencgc.c
 
 CFLAGS =  -g -W -Wall \
        -Wno-unused-variable -Wno-unused-function -Wno-unused-parameter \
-       -fomit-frame-pointer \
-       -O3 -mno-cygwin -DWINVER=0x0501
+       -O5 -march=i686 -mno-cygwin -DWINVER=0x0501
+
+#       -fomit-frame-pointer \
 
 ASFLAGS = $(CFLAGS)
 
@@ -64,7 +65,6 @@ ifndef LISP_FEATURE_SB_DYNAMIC_CORE
 
 OS_LATE_OBJS = win32-stub.o
 after-grovel-headers: mangled-stuff.nm
-
 else
-OS_LATE_OBJS = 
+OS_LATE_OBJS = safepoint.o
 endif
