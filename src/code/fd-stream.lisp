@@ -2543,19 +2543,21 @@
 	     #!+win32
 	     (multiple-value-bind (keyboard screen)
 		 (sb!win32::make-console-fds)
-	       (make-two-way-stream
-		(if keyboard
-		    (make-fd-stream keyboard :name name :input t
-				    :element-type :default :buffering :line
-				    :auto-close auto-close-p
-				    :external-format :ucs-2)
-		    *stdin*)
-		(if screen
-		    (make-fd-stream screen :name name :output t
-				    :element-type :default :buffering :line
-				    :auto-close auto-close-p
-				    :external-format :ucs-2)
-		    *stdout*)))
+	       (setf (symbol-value stream-var)
+		     (make-two-way-stream
+		      (if keyboard
+			  (make-fd-stream keyboard :name name :input t
+					  :element-type :default :buffering :line
+					  :auto-close auto-close-p
+					  :external-format :ucs-2)
+			  *stdin*)
+		      (if screen
+			  (make-fd-stream screen :name name :output t
+					  :element-type :default :buffering :line
+					  :auto-close auto-close-p
+					  :external-format :ucs-2)
+			  *stdout*)))
+	       (return))
 	     #!-win32
 	     (setf fd (sb!unix:unix-open ttyname sb!unix:o_rdwr 0)))
 	   (setf (symbol-value stream-var)
