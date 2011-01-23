@@ -99,12 +99,34 @@ int dyndebug_to_odstring = 0;
 
 unsigned int dyndebug_charge_count = 0;
 FILE* dyndebug_output = NULL;
+
+/* Tired of writing arch_os_get_current_thread each time.  It does
+ * make sense, but I'd better "commit" it with search/replace after
+ * big chunks of work... */
 #define this_thread (arch_os_get_current_thread())
 
-static inline
-void dyndebug_init()
+/* dyndebug_... functions and variables solve two problems: sometimes
+ * a bug doesn't occur with full :sb-show support (or other similar
+ * logging facilities) because of different timings. Then we may
+ * enable required dyndebug_[category] separately without getting full
+ * report on each step (believe me, levels don't help too much
+ * here. TOPICS do).
+ *
+ * dyndebug_... control flags are settable without recompilation, even
+ * without restarting SBCL (as EXTERN_ALIENs). Recompilation and
+ * restarting is the second problem I had in mind. Even the latter may
+ * change the world in a way that an almost-tracked-down problem
+ * vanishes and doesn't reproduce.
+ *
+ * Setting those flags from (the presense of) OS environment variables
+ * may be potentially insecure for production builds, so it will be
+ * removed eventually; availability of the flags with (extern-alien)
+ * doesn't have such implications, so it'd better be retained. */
+
+static inline void dyndebug_init()
 {
     dyndebug_output = stderr;
+    
     dyndebug_lazy_fpu = GetEnvironmentVariableA("SBCL_DYNDEBUG__LAZY_FPU",NULL,0);
     dyndebug_lazy_fpu_careful =
         GetEnvironmentVariableA("SBCL_DYNDEBUG__LAZY_FPU_CAREFUL",NULL,0);
@@ -122,7 +144,12 @@ void dyndebug_init()
         GetEnvironmentVariableA("SBCL_DYNDEBUG__IO",NULL,0);
 }
 
-/* wrappers for winapi calls that must be successful */
+/* wrappers for winapi calls that must be successful (like SBCL's
+ * (aver ...) form). */
+
+/* win_aver function: basic building block for miscellaneous
+ * ..AVER.. macrology (below) */
+
 static inline
 void* win_aver(void* value, char* comment, char* file, int line,
                int justwarn)
@@ -175,6 +202,9 @@ void* win_aver(void* value, char* comment, char* file, int line,
     return value;
 }
 
+/* sys_aver function: really tiny adaptor of win_aver for
+ * "POSIX-parody" CRT results ("lowio" and similar stuff):
+ * negative number means something... negative. */
 static inline
 long sys_aver(long value, char* comment, char* file, int line,
               int justwarn)
@@ -183,17 +213,35 @@ long sys_aver(long value, char* comment, char* file, int line,
     return value;
 }
 
+/* Check for (call) result being boolean true. (call) may be arbitrary
+ * expression now; massive attack of gccisms ensures transparent type
+ * conversion back and forth, so the type of AVER(expression) is the
+ * type of expression. Value is the same _if_ it can be losslessly
+ * converted to (void*) and back.
+ *
+ * Failed AVER() is normally fatal. Well, unless dyndebug_survive_aver
+ * flag is set. */
+
 #define AVER(call)                                                      \
     ({ __typeof__(call) __attribute__((unused)) me =                    \
             (__typeof__(call))                                          \
             win_aver((void*)(call), #call, __FILE__, __LINE__, 0);      \
         me;})
 
+/* AVERLAX(call): do the same check as AVER did, but be mild on
+ * failure: print an annoying unrequested message to stderr, and
+ * continue. With dyndebug_skip_averlax flag, AVERLAX stop even to
+ * check and complain. */
+
 #define AVERLAX(call)                                                   \
     ({ __typeof__(call) __attribute__((unused)) me =                    \
             (__typeof__(call))                                          \
             win_aver((void*)(call), #call, __FILE__, __LINE__, 1);      \
         me;})
+
+/* Now, when failed AVER... prints both errno and GetLastError(), two
+ * variants of "POSIX/lowio" style checks below are almost useless
+ * (they build on sys_aver like the two above do on win_aver). */
 
 #define CRT_AVER_NONNEGATIVE(call)                              \
     ({ __typeof__(call) __attribute__((unused)) me =            \
@@ -207,11 +255,14 @@ long sys_aver(long value, char* comment, char* file, int line,
             sys_aver((call), #call, __FILE__, __LINE__, 1);     \
         me;})
 
+/* to be removed */
 #define CRT_AVER(booly)                                         \
     ({ __typeof__(booly) __attribute__((unused)) me = (booly);  \
         sys_aver((booly)?0:-1, #booly, __FILE__, __LINE__, 0);  \
         me;})
 
+/* Another logging mechanism, useful with debugview.exe by
+ * sysinternals.com */
 void odprint(const char * msg)
 {
     char buf[1024];
@@ -225,6 +276,15 @@ void odprint(const char * msg)
     SetLastError(lastError);
 }
 const char * t_nil_s(lispobj symbol);
+
+/* odprintf_: print formatted string (by passing va_list), prefixed by
+ * some fixed context information (GC_SAFE and pthread_self() were
+ * very important some months back -- TODO now `thread SAP' and
+ * csp_/ctx_ stuff took their place).
+ *
+ * As of 2011/01/23, it's used in odxprint() macro, and odxprint is
+ * what I use now for categorized message logging.
+ */
 
 void odprintf_(const char * fmt, ...)
 {
@@ -257,8 +317,7 @@ void odprintf_(const char * fmt, ...)
     SetLastError(lastError);
 }
 
-
-
+/* As of win32, deferrables _do_ matter. gc_signal doesn't. */
 unsigned long block_deferrables_and_return_mask()
 {
     sigset_t sset;
@@ -279,6 +338,27 @@ EXCEPTION_DISPOSITION handle_exception(EXCEPTION_RECORD *,
                                        struct lisp_exception_frame *,
                                        CONTEXT *,
                                        void *);
+/* handle_exception is defined further in this file, but it doesn't
+ * get registered as SEH handler, not even by
+ * wos_install_interrupt_handlers anymore. x86-assem.S provides
+ * exception_handler_wrapper; we install it here, and each exception
+ * frame on nested funcall()s also points to it
+ */
+
+
+/* Two UL_ funs below aren't called by any SBCL code. Sometimes we
+ * have a REPL thread (e.g. in SLIME) and a stream of logged info
+ * going separately to stderr; it may be very interesting what
+ * messages are about _this REPL_. This pair of functions 
+ * is what you may need to (ALIEN-FUNCALL) in such situation.
+ *
+ * (current-thread-sap), equal to arch_os_get_current_thread(), is
+ * available in Lisp, but sometimes we need to be one step earlier in
+ * the pointer chain. It's possible to get TEB flat-memory pointer and
+ * close-to-current EBP value with preexisting SBCL Lisp facilities,
+ * but ALIEN-FUNCALL is easier (NB Fibers are deceptive
+ * w.r.t. thread-control-stack-end).
+ */
 
 void *UL_GetCurrentTeb() { return NtCurrentTeb(); };
 void *UL_GetCurrentFrame() { return __builtin_frame_address(0); }
@@ -320,12 +400,40 @@ inline static void *get_stack_frame(void)
 #endif
 
 #if defined(LISP_FEATURE_SB_THREAD)
+/* Allocate (reserve+commit) a page so that each thread running Lisp
+ * code will never iterate in a loop without a single Load from it.
+ *
+ * GC stops threads running Lisp code by revoking read permission for
+ * this page: then sooner or later all running Lisp threads will
+ * trap. Read thread.c for further details.
+ */
 void alloc_gc_page()
 {
     AVER(VirtualAlloc(GC_SAFEPOINT_PAGE_ADDR, 4,
                       MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
 }
 
+/* Permit loads from GC_SAFEPOINT_PAGE_ADDR (NB page state change is
+ * "synchronized" with the memory region content/availability --
+ * e.g. you won't see other CPU flushing buffered writes after WP --
+ * but there is some window when other thread _seem_ to trap AFTER
+ * access is granted. You may think of it something like "OS enters
+ * SEH handler too slowly" -- what's important is there's no implicit
+ * synchronization between VirtualProtect caller and other thread's
+ * SEH handler, hence no ordering of events. VirtualProtect is
+ * implicitly synchronized with protected memory contents (only).
+ *
+ * The last fact may be potentially used with many benefits e.g. for
+ * foreign call speed, but we don't use it for now: almost the only
+ * fact relevant to the current signalling protocol is "sooner or
+ * later everyone will trap [everyone will stop trapping]".
+ *
+ * An interesting source on page-protection-based inter-thread
+ * communication is a well-known paper by Dave Dice, Hui Huang,
+ * Mingyao Yang: ``Asymmetric Dekker Synchronization''. Last time
+ * I checked it was available at
+ * http://home.comcast.net/~pjbishop/Dave/Asymmetric-Dekker-Synchronization.txt
+ */
 void map_gc_page()
 {
     DWORD oldProt;
@@ -333,6 +441,47 @@ void map_gc_page()
                         PAGE_READWRITE, &oldProt));
 }
 
+
+/* This one is unused yet. Loads from memory page don't synchronize
+ * threads; even on X86 systems -- that are probably the most
+ * "user-friendly" w.r.t. memory ordering -- CPU itself normally
+ * "doesn't know _when_ a Load happened" (yes, I know there is no
+ * "when" in superscalar arch; this is the problem).
+ *
+ * Stores are different in this respect. IA-32 is not the only
+ * architecture guaranting that (normal) Stores from a single CPU _are
+ * not observable_ to be done in some other order than the
+ * program-specified one.
+ *
+ * However, storing something to the same word at
+ * GC_SAFEPOINT_PAGE_ADDR would (1) be useless it itself (2)
+ * constantly ping-pong the cache line, normally being in a nice
+ * Shared state when we use Loads.
+ *
+ * Anyway, Lisp threads may left to be trapped "sooner or later" as
+ * they are now. However, there _is_ a kind of threads that is
+ * important to synchronize with GC: threads /entering/ or /leaving/ a
+ * foreign function call. The next steps seems reasonable: (1) let
+ * such threads _store_ to gc page, (2) give each of them an unique
+ * range in it (better a cache line per thread), (3) let them store
+ * their sensible context information, like current
+ * th->csp_around_foreign_call that is currently, simultaneously, our
+ * "in foreign code" flag and a half of our context needed for
+ * conservative GC if we are doing a foreign call.
+ *
+ * NB (1) entails two separate semantics for Load and Store GC-page
+ * permission: ``Load prohibited'' means ``hey Lispers, it's time to
+ * sleep'' (we all know how it happens: sooner or later it will, but
+ * when exactly...), and ``Store prohibited'' means ``Anyone entering
+ * or leaving the CL community MUST consult [his SEH handler] first''.
+ * It's probably better to use separate page, removing an accidental
+ * dependency (as I remember, ``write-only'' flag can't be relied to
+ * prevent reading on some Windows versions; happy to be corrected,
+ * but if it's true, we'd have a hard time using a single page for
+ * both signals).
+ *
+ * To be implemented...
+ */
 void map_gc_page_readonly()
 {
     DWORD oldProt;
@@ -350,6 +499,193 @@ void unmap_gc_page()
 #endif
 
 #if defined(LISP_FEATURE_SB_DYNAMIC_CORE)
+/*
+ *    #|
+ *    
+ *        Kovalenko: I'll eventually move all huge comments, like this
+ *        one, into a separate document, but now let them hang around
+ *        related code for a while. Such comment-monsters inspire me
+ *        to keep them in sync when I update code, and occasionally
+ *        reward me with reminding of something useful, like a
+ *        long-planned feature becoming impossible after a change I'm
+ *        going to make, an error I'm going to repeat, etc. etc.
+ *        
+ *    |#
+ *    
+ * This feature has already saved me more development time than it
+ * took to implement.  In its current state, ``dynamic RT<->core
+ * linking'' is a protocol of initialization of C runtime and Lisp
+ * core, populating SBCL linkage table with entries for runtime
+ * "foreign" symbols that were referenced in cross-compiled code.
+ *
+ * How it works: a sketch
+ * 
+ * Last Genesis (resulting in cold-sbcl.core) binds foreign fixups in
+ * x-compiled lisp-objs to sequential addresses from the beginning of
+ * linkage-table space; that's how it ``resolves'' foreign references.
+ * Obviously, this process doesn't require pre-built runtime presence.
+ *
+ * When the runtime loads the core (cold-sbcl.core initially,
+ * sbcl.core later), runtime should do its part of the protocol by (1)
+ * traversing a list of ``runtime symbols'' prepared by Genesis and
+ * dumped as a static symbol value, (2) resolving each name from this
+ * list to an address (stubbing unresolved ones with
+ * undefined_alien_address or undefined_alien_function), (3) adding an
+ * entry for each symbol somewhere near the beginning of linkage table
+ * space (location is provided by the core).
+ *
+ * The implementation of the part described in the last paragraph
+ * follows. C side is currently more ``hackish'' and less clear than
+ * the Lisp code; OTOH, related Lisp changes are scattered, and some
+ * of them play part in complex interrelations -- beautiful but taking
+ * much time to understand --- but my subset of PE-i386 parser below
+ * is in one place (here) and doesn't have _any_ non-trivial coupling
+ * with the rest of the Runtime.
+ *
+ * What do we gain with this feature, after all?
+ *
+ * One things that I have to do rather frequently: recompile and
+ * replace runtime without rebuilding the core. Doubtlessly, slam.sh
+ * was a great time-saver here, but relinking ``cold'' core and bake a
+ * ``warm'' one takes, as it seems, more than 10x times of bare
+ * SBCL.EXE build time -- even if everything is recompiled, which is
+ * now unnecessary. Today, if I have a new idea for the runtime,
+ * getting from C-x C-s M-x ``compile'' to fully loaded SBCL
+ * installation takes 5-15 seconds.
+ *
+ * Another thing (that I'm not currently using, but obviously
+ * possible) is delivering software patches to remote system on
+ * customer site. As you are doing minor additions or corrections in
+ * Lisp code, it doesn't take much effort to prepare a tiny ``FASL
+ * bundle'' that rolls up your patch, redumps and -- presto -- 100MiB
+ * program is fixed by sending and loading a 50KiB thingie.
+ *
+ * However, until LISP_FEATURE_SB_DYNAMIC_CORE, if your bug were fixed
+ * by modifying two lines of _C_ sources, a customer described above
+ * had to be ready to receive and reinstall a new 100MiB
+ * executable. With the aid of code below, deploying such a fix
+ * requires only sending ~300KiB (when stripped) of SBCL.EXE.
+ *
+ * But there is more to it: as the common linkage-table is used for
+ * DLLs and core, its entries may be overridden almost without a look
+ * into SBCL internals. Therefore, ``patching'' C runtime _without_
+ * restarting target systems is also possible in many situations
+ * (it's not as trivial as loading FASLs into a running daemon, but
+ * easy enough to be a viable alternative if any downtime is highly
+ * undesirable).
+ *
+ * During my (rather limited) commercial Lisp development experience
+ * I've already been through a couple of situations where such
+ * ``deployment'' issues were important; from my _total_ programming
+ * experience I know -- _sometimes_ they are a two orders of magnitude
+ * more important than those I observed.
+ *
+ * The possibility of entire runtime ``hot-swapping'' in running
+ * process is not purely theoretical, as it could seem. There are 2-3
+ * problems whose solution is not obvious (call stack patching, for
+ * instance), but it's literally _nothing_ if compared with
+ * e.g. LISP_FEATURE_SB_AUTO_FPU_SWITCH.  By the way, one of the
+ * problems with ``hot-swapping'', that could become a major one in
+ * many other environments, is nonexistent in SBCL: we already have a
+ * ``global quiesce point'' that is generally required for this kind
+ * of worldwide revolution -- around collect_garbage. 
+ *
+ * What's almost unnoticeable from the C side (where you are now, dear
+ * reader): using the same style for all linking is beautiful. I tried
+ * to leave old-style linking code in place for the sake of
+ * _non-linkage-table_ platforms (they probably don't have -ldl or its
+ * equivalent, like LL/GPA, at all) -- but i did it usually by moving
+ * the entire `old style' code under #!-sb-dynamic-core and
+ * refactoring the `new style' branch, instead of cutting the tail
+ * piecemeal and increasing #!+-ifdeffery amount & the world enthropy.
+ *
+ * If we look at the majority of the ``new style'' code units, it's a
+ * common thing to observe how #!+-ifdeffery _vanishes_ instead of
+ * multiplying: #!-sb-xc, #!+sb-xc-host and #!-sb-xc-host end up
+ * needing the same code. Runtime checks of static v. dynamic symbol
+ * disappear even faster. STDCALL mangling and leading underscores go
+ * out of scope (and GCed, hopefully) instead of surfacing here and
+ * there as a ``special case for core static symbols''. What I like
+ * the most about CL development in general is a frequency of solving
+ * problems and fixing bugs by simplifying code and dropping special
+ * cases.
+ *
+ * Last important thing about the following code: besides resolving
+ * symbols provided by the core itself, it detects runtime's own
+ * build-time prerequisite DLLs. Any symbol that is unresolved against
+ * the core is looked up in those DLLs (normally kernel32, msvcrt,
+ * ws2_32... I could forget something). This action (1) resembles
+ * implementation of foreign symbol lookup in SBCL itself, (2)
+ * emulates shared library d.l. facilities of OSes that use flat
+ * dynamic symbol namespace (or default to it). Anyone concerned with
+ * portability problems of this PE-i386 stuff below will be glad to
+ * hear that it could be ported to most modern Unices _by deletion_:
+ * raw dlsym() with null handle usually does the same thing that i'm
+ * trying to squeeze out of MS Windows by the brute force.
+ *
+ * My reason for _desiring_ flat symbol namespace, populated from
+ * link-time dependencies, is avoiding any kind of ``requested-by-Lisp
+ * symbol lists to be linked statically'', providing core v. runtime
+ * independence in both directions. Minimizing future maintenance
+ * effort is very important; I had gone for it consistently, starting
+ * by turning "CloseHandle@4" into a simple "CloseHandle", continuing
+ * by adding intermediate Genesis resulting in autogenerated symbol
+ * list (farewell, void scratch(); good riddance), going to take
+ * another great step for core/runtime independence... and _without_
+ * flat namespace emulation, the ghosts and spirits exiled at the
+ * first steps would come and take revenge: well, here are the symbols
+ * that are really in msvcrt.dll.. hmm, let's link statically against
+ * them, so the entry is pulled from the import library.. and those
+ * entry has mangled names that we have to map.. ENOUGH, I though
+ * here: fed up with stuff like that.
+ *
+ * Now here we are, without import libraries, without mangled symbols,
+ * and without nm-generated symbol tables. Every symbol exported by
+ * the runtime is added to SBCL.EXE export directory; every symbol
+ * requested by the core is looked up by GetProcAddress for SBCL.EXE,
+ * falling back to GetProcAddress for MSVCRT.dll, etc etc.. All ties
+ * between SBCL's foreign symbols with object file symbol tables,
+ * import libraries and other pre-linking symbol-resolving entities
+ * _having no representation in SBCL.EXE_ were teared.
+ *
+ * This simplistic approach proved to work well; there is only one
+ * problem introduced by it, and rather minor: in real MSVCRT.dll,
+ * what's used to be available as open() is now called _open();
+ * similar thing happened to many other `lowio' functions, though not
+ * every one, so it's not a kind of name mangling but rather someone's
+ * evil creative mind in action.
+ *
+ * When we look up any of those poor `uglified' functions in CRT
+ * reference on MSDN, we can see a notice resembling this one:
+ *
+ * `unixishname()' is obsolete and provided for backward
+ * compatibility; new standard-compliant function, `_unixishname()',
+ * should be used instead.  Sentences of that kind were there for
+ * several years, probably even for a decade or more (a propos,
+ * MSVCRT.dll, as the name to link against, predates year 2000, so
+ * it's actually possible). Reasoning behing it (what MS people had in
+ * mind) always seemed strange to me: if everyone uses open() and that
+ * `everyone' is important to you, why rename the function?  If no one
+ * uses open(), why provide or retain _open() at all? <kidding>After
+ * all, names like _open() are entirely non-informative and just plain
+ * ugly; compare that with CreateFileW() or InitCommonControlSEX(),
+ * the real examples of beauty and clarity.</kidding>
+ * 
+ * Anyway, if the /standard/ name on Windows is _open() (I start to
+ * recall, vaguely, that it's because of _underscore names being
+ * `reserved to system' and all other ones `available for user', per
+ * ANSI/ISO C89) -- well, if the /standard/ name is _open, SBCL should
+ * use it when it uses MSVCRT and not some ``backward-compatible''
+ * stuff. Deciding this way, I added a hack to SBCL's syscall macros,
+ * so "[_]open" as a syscall name is interpreted as a request to link
+ * agains "_open" on win32 and "open" on every other system.
+ *
+ * Of course, this name-parsing trick lacks conceptual clarity; I'm
+ * going to get rid of it eventually.  Maybe I will drop the whole
+ * ``lowio'' stuff from win32 builds _before_ getting back to syscall
+ * macros (going for kernel32/ntdll handles, after Alastair
+ * Bridgewater's advice; or rolling my own ``lowio'' layer; or
+ * inventing some other interface -- who knows?). */
 
 u32 os_get_build_time_shared_libraries(u32 excl_maximum,
                                        void* opt_root,
@@ -357,8 +693,14 @@ u32 os_get_build_time_shared_libraries(u32 excl_maximum,
                                        const char *opt_store_names[])
 {
     void* base = opt_root ? opt_root : (void*)GetModuleHandle(NULL);
+    /* base defaults to 0x400000 with GCC/mingw32. If you dereference
+     * that location, you'll see 'MZ' bytes */
     void* base_magic_location =
         base + ((IMAGE_DOS_HEADER*)base)->e_lfanew;
+
+    /* dos header provided the offset from `base' to
+     * IMAGE_FILE_HEADER where PE-i386 really starts */
+
     void* check_duplicates[excl_maximum];
 
     if ((*(u32*)base_magic_location)!=0x4550) {
@@ -367,6 +709,12 @@ u32 os_get_build_time_shared_libraries(u32 excl_maximum,
          * silently return `no libraries detected'. */
         return 0;
     } else {
+	/* We traverse PE-i386 structures of SBCL.EXE in memory (not
+	 * in the file). File and memory layout _surely_ differ in
+	 * some places and _may_ differ in some other places, but
+	 * fortunately, those places are irrelevant to the task at
+	 * hand. */
+	
         IMAGE_FILE_HEADER* image_file_header = (base_magic_location + 4);
         IMAGE_OPTIONAL_HEADER* image_optional_header =
             (void*)(image_file_header + 1);
@@ -385,17 +733,66 @@ u32 os_get_build_time_shared_libraries(u32 excl_maximum,
                 fprintf(dyndebug_output,"Now should know DLL: %s\n",
                         (char*)(base + image_import_descriptor->Name));
             }
+	    /* A TRICK but not exactly a KLUDGE (win32 is a cruel
+	     * world). Since Windows XP, if we want to know which DLL
+	     * contains an address, we have GetModuleHandleEx.
+	     *
+	     * But I need a more compelling reason to drop Win2k
+	     * support; besides a personal opinion on Win2k (the best
+	     * product in NT line, IMHO), I have a favourite (generic)
+	     * method of choosing the low bound of version range that
+	     * worth support:
+	     *
+	     * A version of OS/platform/kernel where your project
+	     * usually works despite the absence of any testing,
+	     * porting or compatibility effort on your side
+	     * 
+	     * deserves to be supported, even when _some_ amount of
+	     * effort is apparently needed later.
+	     *
+	     * ... So instead of depending on GetModuleHandleEx, I
+	     * query an address range of file mapping object that
+	     * contains the address I found. DLLs and EXEs are similar
+	     * in many respects to ``normal'' memory-mapped files; in
+	     * fact, SEC_IMAGE mapping attribute is (approximately)
+	     * the only ``special'' property of EXE/DLL mapping,
+	     * allowing section rearrangement, automatic memory
+	     * protection adjustment, etc.
+	     *
+	     * That's all: mapped region base _is_ a DLL's image base
+	     * and also its module handle (these 3 things are always
+	     * the same on win32). */
             if (VirtualQuery
                 (*(LPCVOID**)
                  ((LPCVOID)base + image_import_descriptor->FirstThunk),
                  &moduleMapping, sizeof (moduleMapping)))
             {
+		/* We may encouncer some module more than once while
+		   traversing import descriptors (it's usually a
+		   result of non-trivial linking process, like doing
+		   ld -r on some groups of files before linking
+		   everything together.
+
+		   Anyway: using a module handle more than once will
+		   do no harm, but it slows down the startup (even
+		   now, our startup time is not a pleasant topic to
+		   discuss when it comes to :sb-dynamic-core; there is
+		   an obvious direction to go for speed, though --
+		   instead of resolving symbols one-by-one, locate PE
+		   export directories -- they are sorted by symbol
+		   name -- and merge them, at one pass, with sorted
+		   list of required symbols (the best time to sort the
+		   latter list is during Genesis -- that's why I don't
+		   proceed with memory copying, qsort() and merge
+		   right here)). */
+
                 for (j=0; j<nlibrary; ++j)
                 {
                     if(check_duplicates[j] == moduleMapping.AllocationBase)
                         break;
                 }
-                if (j<nlibrary) continue;
+                if (j<nlibrary) continue; /* duplicate => skip it in
+					   * outer loop */
 
                 check_duplicates[nlibrary] = moduleMapping.AllocationBase;
                 if (opt_store_handles) {
@@ -417,9 +814,15 @@ u32 os_get_build_time_shared_libraries(u32 excl_maximum,
     }
 }
 
+/* Have you seen a Greenspun's Tenth Rule in action when it manifests
+ * itself in C code which is a part of a Lisp implementation? */
+
+/* Object tagged? (dereference (cast (untag (obj)))) */
 
 #define FOLLOW(obj,lowtagtype,ctype)            \
     (*(struct ctype*)(obj - lowtagtype##_LOWTAG))
+
+/* For all types sharing OTHER_POINTER_LOWTAG: */
 
 #define FOTHERPTR(obj,ctype)                    \
     FOLLOW(obj,OTHER_POINTER,ctype)
@@ -435,6 +838,7 @@ static inline lispobj cdr(lispobj conscell)
 }
 
 extern void undefined_alien_function(); /* see interrupt.c */
+
 void os_link_runtime()
 {
     lispobj head;
@@ -442,9 +846,6 @@ void os_link_runtime()
     u32 nsymbol;
     lispobj symbol_name;
     char *namechars;
-    char namecopy[256];
-    u32 namelength;
-    char *at;
     void *myself = GetModuleHandleW(NULL);
     HMODULE buildTimeImages[16] = {myself};
     boolean datap;
@@ -477,24 +878,15 @@ void os_link_runtime()
 	}
         symbol_name = car(item);
 	datap = (NIL!=(cdr(item)));
-	
         namechars = (void*)(intptr_t)FOTHERPTR(symbol_name,vector).data;
-        namelength = fixnum_value(FOTHERPTR(symbol_name,vector).length);
-        AVERLAX(namelength<(sizeof(namecopy))) ||
-            (namelength = (sizeof(namecopy))-1);
-        memcpy(namecopy, namechars, namelength);
-        namecopy[namelength] = 0;
-
-        /* no stdcall mangling when ll/gpa */
-        if ((at = strrchr(namecopy,'@'))) { (*at) = 0; }
 
         for (i=0u; i<nlibraries; ++i) {
-            void* result = GetProcAddress(buildTimeImages[i], namecopy);
+            void* result = GetProcAddress(buildTimeImages[i], namechars);
             if (result) {
                 if (dyndebug_runtime_link) {
                     fprintf(dyndebug_output,
                             "Core requests linking [0x%p] <= [%s]: => [0x%p]\n",
-                            link_target, namecopy, result);
+                            link_target, namechars, result);
                 }
 		if (datap) 
 		    arch_write_linkage_table_ref(link_target,result);
@@ -507,7 +899,7 @@ void os_link_runtime()
         {
             if (dyndebug_runtime_link) {
                 fprintf(stderr,"Core requests linking [0x%p] <= [%s]: failed\n",
-			link_target, namecopy);
+			link_target, namechars);
             }
 	    if (datap)
 		arch_write_linkage_table_ref(link_target,undefined_alien_address);
