@@ -312,8 +312,54 @@ triggers."
             (incf (%timer-expire-time timer) (%timer-repeat-interval timer))
             (%schedule-timer timer))))))
 
-;;; Expiring timers
+;;; setitimer is unavailable for win32, but we can emulate it when
+;;; threads are available.
+#!+(and sb-thread win32)
+(progn
+;;; scheduler lock already protects us
 
+  (defvar *waitable-timer-handle* nil)
+
+  (defvar *timer-thread* nil)
+
+  (defun get-waitable-timer ()
+    (assert (under-scheduler-lock-p))
+    (or *waitable-timer-handle*
+        (prog1
+            (setf *waitable-timer-handle*
+                  (sb!win32:create-waitable-timer nil 0 nil))
+          (setf *timer-thread*
+                (sb!thread:make-thread
+                 (lambda ()
+                   (loop while
+                         (or (zerop
+                               (sb!win32:wait-object-or-signal
+                                *waitable-timer-handle*))
+                             *waitable-timer-handle*)
+                         doing (run-expired-timers)))
+                 :name "System timer watchdog thread")))))
+
+  (defun win32-itimer-deinit ()
+    (with-scheduler-lock ()
+      (when *timer-thread*
+        (sb!thread:terminate-thread *timer-thread*)
+        (sb!thread:join-thread *timer-thread* :default nil))
+      (when *waitable-timer-handle*
+        (sb!win32:close-handle *waitable-timer-handle*)
+        (setf *waitable-timer-handle* nil))))
+
+  (defun win32-itimer-cancel ()
+    (sb!win32:cancel-waitable-timer
+     (get-waitable-timer)))
+
+  (defun win32-itimer-schedule (timer-type p-sec p-usec sec usec)
+    (declare (ignore timer-type p-sec p-usec))
+    (sb!win32:set-waitable-timer
+     (get-waitable-timer)
+     (- (* 10 (+ usec (* sec 1000000))))
+     0 nil nil 0)))
+
+;;; Expiring timers
 (defun real-time->sec-and-usec (time)
   ;; KLUDGE: Always leave 0.0001 second for other stuff in order to
   ;; avoid starvation.
@@ -334,9 +380,13 @@ triggers."
     (if next-timer
         (let ((delta (- (%timer-expire-time next-timer)
                         (get-internal-real-time))))
-          (apply #'sb!unix:unix-setitimer
+          (apply #!-(and sb-thread win32) #'sb!unix:unix-setitimer
+                 #!+(and sb-thread win32) #'win32-itimer-schedule
                  :real 0 0 (real-time->sec-and-usec delta)))
-        (sb!unix:unix-setitimer :real 0 0 0 0))))
+        #!-(and sb-thread win32)
+        (sb!unix:unix-setitimer :real 0 0 0 0)
+        #!+(and sb-thread win32)
+        (win32-itimer-cancel))))
 
 (defun run-timer (timer)
   (let ((function (%timer-interrupt-function timer))

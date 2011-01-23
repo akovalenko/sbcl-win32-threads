@@ -44,7 +44,8 @@
     sb!di::handle-breakpoint
     sb!di::handle-single-step-trap
     fdefinition-object
-    #!+win32 sb!kernel::handle-win32-exception))
+    #!+win32 sb!kernel::handle-win32-exception
+    #!+sb-thread sb!thread::run-interruption))
 
 (defparameter *common-static-symbols*
   '(t
@@ -81,12 +82,18 @@
     *gc-pending*
     #!-sb-thread
     *stepping*
+    #!+(and win32 sb-thread) sb!impl::*gc-safe*
+    #!+(and win32 sb-thread) sb!impl::*in-safepoint*
+    #!+(and win32 sb-thread) sb!impl::*disable-safepoints*
 
     ;; threading support
     #!+sb-thread *stop-for-gc-pending*
     #!+sb-thread *free-tls-index*
     #!+sb-thread *tls-index-lock*
 
+    ;; dynamic runtime linking support
+    #!+sb-dynamic-core
+    *required-runtime-c-symbols*
     ;; Dispatch tables for generic array access
     sb!impl::%%data-vector-reffers%%
     sb!impl::%%data-vector-reffers/check-bounds%%

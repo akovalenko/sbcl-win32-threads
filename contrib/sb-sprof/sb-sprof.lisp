@@ -508,6 +508,7 @@ profiling")
   (defvar *profiler-lock* (sb-thread:make-mutex :name "Statistical Profiler"))
   (defvar *distribution-lock* (sb-thread:make-mutex :name "Wallclock profiling lock"))
 
+  #-win32
   (define-alien-routine pthread-kill int (signal int) (os-thread unsigned-long))
 
   ;;; A random thread will call this in response to either a timer firing,

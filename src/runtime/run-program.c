@@ -20,7 +20,7 @@
 #include <stdlib.h>
 #include <sys/file.h>
 #include <sys/types.h>
-#include <signal.h>
+#include "runtime.h"
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -196,9 +196,9 @@ HANDLE spawn (
 
     /* Spawn process given on the command line*/
     if (search)
-        hProcess = (HANDLE) spawnvp ( wait_mode, program, argv );
+        hProcess = (HANDLE) spawnvp ( wait_mode, program, (char* const* )argv );
     else
-        hProcess = (HANDLE) spawnv ( wait_mode, program, argv );
+        hProcess = (HANDLE) spawnv ( wait_mode, program, (char* const* )argv );
 
     /* Now that the process is launched, replace the original
      * in/out/err handles and close the backups. */

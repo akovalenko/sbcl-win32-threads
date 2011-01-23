@@ -26,9 +26,13 @@
  */
 
 #include <stdio.h>
-#include <signal.h>
 #include <string.h>
 #include "sbcl.h"
+#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
+#include "pthreads_win32.h"
+#else
+#include <signal.h>
+#endif
 #include "runtime.h"
 #include "os.h"
 #include "interr.h"
@@ -2403,6 +2407,8 @@ gc_search_space(lispobj *start, size_t words, lispobj *pointer)
     return (NULL);
 }
 
+#include "dynbind.h"
+
 boolean
 maybe_gc(os_context_t *context)
 {
@@ -2432,7 +2438,7 @@ maybe_gc(os_context_t *context)
      * A kludgy alternative is to propagate the sigmask change to the
      * outer context.
      */
-#ifndef LISP_FEATURE_WIN32
+#if !defined(LISP_FEATURE_WIN32) || defined(LISP_FEATURE_SB_THREAD)
     check_gc_signals_unblocked_or_lose(os_context_sigmask_addr(context));
     unblock_gc_signals(0, 0);
 #endif
@@ -2453,7 +2459,7 @@ maybe_gc(os_context_t *context)
          * here. */
         ((SymbolValue(INTERRUPTS_ENABLED,thread) != NIL) ||
          (SymbolValue(ALLOW_WITH_INTERRUPTS,thread) != NIL))) {
-#ifndef LISP_FEATURE_WIN32
+#if !defined(LISP_FEATURE_WIN32) || defined(LISP_FEATURE_SB_THREAD)
         sigset_t *context_sigmask = os_context_sigmask_addr(context);
         if (!deferrables_blocked_p(context_sigmask)) {
             thread_sigmask(SIG_SETMASK, context_sigmask, 0);
@@ -2461,7 +2467,7 @@ maybe_gc(os_context_t *context)
 #endif
             FSHOW((stderr, "/maybe_gc: calling POST_GC\n"));
             funcall0(StaticSymbolFunction(POST_GC));
-#ifndef LISP_FEATURE_WIN32
+#if !defined(LISP_FEATURE_WIN32) || defined(LISP_FEATURE_SB_THREAD)
         } else {
             FSHOW((stderr, "/maybe_gc: punting on POST_GC due to blockage\n"));
         }

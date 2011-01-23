@@ -173,10 +173,10 @@
   (:timeouts . 0))
 
 (deftest mailbox.multiple-producers-multiple-consumers
-    (test-mailbox-producers-consumers :n-senders 100
-                                      :n-receivers 100
+    (test-mailbox-producers-consumers :n-senders 50
+                                      :n-receivers 50
                                       :n-messages 1000)
-  (:received . 100000)
+  (:received . 50000)
   (:garbage  . 0)
   (:errors   . 0)
   (:timeouts . 0))
@@ -184,8 +184,8 @@
 (deftest mailbox.interrupts-safety.1
     (multiple-value-bind (received garbage errors timeouts)
         (test-mailbox-producers-consumers
-         :n-senders 100
-         :n-receivers 100
+         :n-senders 50
+         :n-receivers 50
          :n-messages 1000
          :interruptor #'(lambda (threads &aux (n (length threads)))
                           ;; 99 so even in the unlikely case that only
@@ -199,7 +199,7 @@
       (values
        ;; We may have killed a receiver before it got to incrementing
        ;; the counter.
-       (if (<= (cdr received) 1000000)
+       (if (<= (cdr received) 500000)
            `(:received . :ok)
            received)
        garbage

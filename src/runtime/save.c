@@ -16,10 +16,14 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <signal.h>
 #include <sys/file.h>
 
 #include "sbcl.h"
+#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
+#include "pthreads_win32.h"
+#else
+#include <signal.h>
+#endif
 #include "runtime.h"
 #include "os.h"
 #include "core.h"
@@ -30,7 +34,7 @@
 #include "validate.h"
 #include "gc-internal.h"
 #include "thread.h"
-
+#include "cpputil.h"
 #include "genesis/static-symbols.h"
 #include "genesis/symbol.h"
 
@@ -73,21 +77,21 @@ write_lispobj(lispobj obj, FILE *file)
 static long
 write_bytes(FILE *file, char *addr, long bytes, os_vm_offset_t file_offset)
 {
-    long count, here, data;
+    long count, here, data, pad_bytes;
 
-    bytes = (bytes+os_vm_page_size-1)&~(os_vm_page_size-1);
-
+    bytes = ALIGN_UP(bytes,os_vm_page_size);
 #ifdef LISP_FEATURE_WIN32
     /* touch every single page in the space to force it to be mapped. */
     for (count = 0; count < bytes; count += 0x1000) {
         volatile int temp = addr[count];
     }
 #endif
+    pad_bytes = ALIGN_UP(bytes,os_vm_mmap_unit_size) - bytes;
 
     fflush(file);
     here = ftell(file);
     fseek(file, 0, SEEK_END);
-    data = (ftell(file)+os_vm_page_size-1)&~(os_vm_page_size-1);
+    data = ALIGN_UP(ftell(file),os_vm_mmap_unit_size);
     fseek(file, data, SEEK_SET);
 
     while (bytes > 0) {
@@ -101,6 +105,8 @@ write_bytes(FILE *file, char *addr, long bytes, os_vm_offset_t file_offset)
             bytes = 0;
         }
     }
+    fseek(file, pad_bytes-1, SEEK_CUR);
+    fwrite("",1,1,file);
     fflush(file);
     fseek(file, here, SEEK_SET);
     return ((data - file_offset) / os_vm_page_size) - 1;
@@ -380,6 +386,7 @@ save_to_filehandle(FILE *file, char *filename, lispobj init_function,
 #endif
 
     printf("done]\n");
+
     exit(0);
 }
 
@@ -391,7 +398,7 @@ check_runtime_build_id(void *buf, size_t size)
     size_t idlen;
     char *pos;
 
-    idlen = strlen(build_id) - 1;
+    idlen = strlen((char*)build_id) - 1;
     while ((pos = memchr(buf, build_id[0], size)) != NULL) {
         size -= (pos + 1) - (char *)buf;
         buf = (pos + 1);
@@ -415,7 +422,7 @@ load_runtime(char *runtime_path, size_t *size_out)
     os_vm_offset_t core_offset;
 
     core_offset = search_for_embedded_core (runtime_path);
-    if ((input = fopen(runtime_path, "rb")) == NULL) {
+    if ((input = os_fopen_runtime(runtime_path, "rb")) == NULL) {
         fprintf(stderr, "Unable to open runtime: %s\n", runtime_path);
         goto lose;
     }
@@ -424,7 +431,8 @@ load_runtime(char *runtime_path, size_t *size_out)
     size = (size_t) ftell(input);
     fseek(input, 0, SEEK_SET);
 
-    if (core_offset != -1 && size > core_offset)
+    if (core_offset >= 0 &&
+	size > (size_t)core_offset)
         size = core_offset;
 
     buf = successful_malloc(size);
@@ -509,7 +517,6 @@ prepare_to_save(char *filename, boolean prepend_runtime, void **runtime_bytes,
         perror(filename);
         return NULL;
     }
-
     return file;
 }
 

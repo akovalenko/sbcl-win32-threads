@@ -29,7 +29,7 @@
 #include <sys/file.h>
 #include <sys/param.h>
 #include <sys/stat.h>
-#include <signal.h>
+#include "runtime.h"
 #ifndef LISP_FEATURE_WIN32
 #include <sched.h>
 #endif
@@ -41,7 +41,9 @@
 #include <time.h>
 #endif
 
+#if !(defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD))
 #include "signal.h"
+#endif
 
 #include "runtime.h"
 #include "vars.h"
@@ -218,7 +220,31 @@ search_for_core ()
     char *sbcl_home = getenv("SBCL_HOME");
     char *lookhere;
     char *stem = "/sbcl.core";
-    char *core;
+    char *core = NULL;
+
+#ifdef LISP_FEATURE_WIN32
+    /* Fixed prefixes is movais tone here.  Better to _begin_ with
+       searching core somewhere around the runtime.
+
+       Of course, if the user _wants_ explicit SBCL_HOME, don't
+       bother. */
+    if (!core && !(sbcl_home && *sbcl_home)) {
+        CHAR exe_path[MAX_PATH];
+        DWORD length;
+        length = GetModuleFileNameA(NULL, exe_path, sizeof exe_path);
+        if (length &&
+            length < (MAX_PATH-1) &&
+            exe_path[length] == '\0') {
+            CHAR* dotPointer = strrchr(exe_path,'.');
+            if (((dotPointer-exe_path)+5)<MAX_PATH) {
+                strcpy(dotPointer,".core");
+                lookhere = exe_path;
+                core = copied_existing_filename_or_null(lookhere);
+		return core;
+            }
+        }
+    }
+#endif /*  LISP_FEATURE_WIN32 */
 
     if (!(sbcl_home && *sbcl_home)) sbcl_home = SBCL_HOME;
     lookhere = (char *) calloc(strlen(sbcl_home) +
@@ -289,6 +315,10 @@ char *core_string;
 struct runtime_options *runtime_options;
 
 char *saved_runtime_path = NULL;
+#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
+void pthreads_win32_init();
+#endif
+
 
 int
 main(int argc, char *argv[], char *envp[])
@@ -312,6 +342,11 @@ main(int argc, char *argv[], char *envp[])
 
     lispobj initial_function;
     const char *sbcl_home = getenv("SBCL_HOME");
+
+#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
+    os_preinit();
+    pthreads_win32_init();
+#endif
 
     interrupt_init();
     block_blockable_signals(0, 0);
@@ -530,6 +565,9 @@ main(int argc, char *argv[], char *envp[])
     if (initial_function == NIL) {
         lose("couldn't find initial function\n");
     }
+#ifdef LISP_FEATURE_SB_DYNAMIC_CORE
+    os_link_runtime();
+#endif
 #ifdef LISP_FEATURE_HPUX
     /* -1 = CLOSURE_FUN_OFFSET, 23 = SIMPLE_FUN_CODE_OFFSET, we are
      * not in LANGUAGE_ASSEMBLY so we cant reach them. */
@@ -556,11 +594,13 @@ main(int argc, char *argv[], char *envp[])
     FSHOW((stderr, "/funcalling initial_function=0x%lx\n",
           (unsigned long)initial_function));
 #ifdef LISP_FEATURE_WIN32
+    if (!noinform && embedded_core_offset == 0) {
     fprintf(stderr, "\n\
 This is experimental prerelease support for the Windows platform: use\n\
 at your own risk.  \"Your Kitten of Death awaits!\"\n");
     fflush(stdout);
     fflush(stderr);
+    }
 #endif
     create_initial_thread(initial_function);
     lose("CATS.  CATS ARE NICE.\n");

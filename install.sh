@@ -13,7 +13,7 @@ ensure_dirs ()
 . output/prefix.def
 DEFAULT_INSTALL_ROOT=$SBCL_PREFIX
 
-if [ "$OSTYPE" = "cygwin" -o "$OSTYPE" = "msys" ] ; then
+if [ "$OSTYPE" = "cygwin" -o "$OSTYPE" = "msys" -o "$OSTYPE" = "wine" ] ; then
     RUNTIME=sbcl.exe
     OLD_RUNTIME=sbcl.exe.old
 else
@@ -21,6 +21,10 @@ else
     OLD_RUNTIME=sbcl.old
 fi
 INSTALL_ROOT=${INSTALL_ROOT-$DEFAULT_INSTALL_ROOT}
+if [ "$OSTYPE" = "wine" ] ; then
+    find contrib/ -name \*.FASL |xargs rename y/A-Z/a-z/
+fi
+
 MAN_DIR=${MAN_DIR-"$INSTALL_ROOT"/share/man}
 INFO_DIR=${INFO_DIR-"$INSTALL_ROOT"/share/info}
 DOC_DIR=${DOC_DIR-"$INSTALL_ROOT"/share/doc/sbcl}

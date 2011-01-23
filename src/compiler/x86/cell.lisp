@@ -56,7 +56,7 @@
          (new :scs (descriptor-reg any-reg)))
   (:temporary (:sc descriptor-reg :offset eax-offset) eax)
   #!+sb-thread
-  (:temporary (:sc descriptor-reg) tls)
+  (:temporary (:sc descriptor-reg) tls #!+win32 tmp)
   (:results (result :scs (descriptor-reg any-reg)))
   (:policy :fast-safe)
   (:vop-var vop)
@@ -71,6 +71,11 @@
       (progn
         (loadw tls symbol symbol-tls-index-slot other-pointer-lowtag)
         ;; Thread-local area, no LOCK needed.
+        #!+win32
+        (progn
+          (inst mov tmp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
+          (inst cmpxchg (make-ea :dword :base tmp :index tls) new))
+        #!-win32
         (inst cmpxchg (make-ea :dword :base tls) new :fs)
         (inst cmp eax no-tls-value-marker-widetag)
         (inst jmp :ne check)
@@ -110,13 +115,21 @@
   (define-vop (set)
     (:args (symbol :scs (descriptor-reg))
            (value :scs (descriptor-reg any-reg)))
-    (:temporary (:sc descriptor-reg) tls)
+    (:temporary (:sc descriptor-reg) tls #!+win32 tmp)
     (:generator 4
       (let ((global-val (gen-label))
             (done (gen-label)))
         (loadw tls symbol symbol-tls-index-slot other-pointer-lowtag)
+        #!+win32
+        (progn
+          (inst mov tmp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
+          (inst cmp (make-ea :dword :base tmp :index tls) no-tls-value-marker-widetag))
+        #!-win32
         (inst cmp (make-ea :dword :base tls) no-tls-value-marker-widetag :fs)
         (inst jmp :z global-val)
+        #!+win32
+        (inst mov (make-ea :dword :base tmp :index tls) value)
+        #!-win32
         (inst mov (make-ea :dword :base tls) value :fs)
         (inst jmp done)
         (emit-label global-val)
@@ -130,6 +143,8 @@
     (:policy :fast-safe)
     (:args (object :scs (descriptor-reg) :to (:result 1)))
     (:results (value :scs (descriptor-reg any-reg)))
+    #!+win32
+    (:temporary (:sc descriptor-reg) tmp)
     (:vop-var vop)
     (:save-p :compute-only)
     (:generator 9
@@ -137,6 +152,11 @@
              (err-lab (generate-error-code vop 'unbound-symbol-error object))
              (ret-lab (gen-label)))
         (loadw value object symbol-tls-index-slot other-pointer-lowtag)
+        #!+win32
+        (progn
+          (inst mov tmp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
+          (inst mov value (make-ea :dword :base tmp :index value)))
+        #!-win32
         (inst mov value (make-ea :dword :base value) :fs)
         (inst cmp value no-tls-value-marker-widetag)
         (inst jmp :ne check-unbound-label)
@@ -152,11 +172,18 @@
     ;; the meaning of FAST-SYMBOL-VALUE is "do not signal an error if
     ;; unbound", which is used in the implementation of COPY-SYMBOL.  --
     ;; CSR, 2003-04-22
+    #!+win32
+    (:temporary (:sc descriptor-reg) tmp)
     (:policy :fast)
     (:translate symbol-value)
     (:generator 8
       (let ((ret-lab (gen-label)))
         (loadw value object symbol-tls-index-slot other-pointer-lowtag)
+        #!+win32
+        (progn
+          (inst mov tmp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
+          (inst mov value (make-ea :dword :base tmp :index value)))
+        #!-win32
         (inst mov value (make-ea :dword :base value) :fs)
         (inst cmp value no-tls-value-marker-widetag)
         (inst jmp :ne ret-lab)
@@ -178,9 +205,16 @@
   (:args (object :scs (descriptor-reg)))
   (:conditional :ne)
   (:temporary (:sc descriptor-reg #+nil(:from (:argument 0))) value)
+  #!+win32
+  (:temporary (:sc descriptor-reg) tmp)
   (:generator 9
     (let ((check-unbound-label (gen-label)))
       (loadw value object symbol-tls-index-slot other-pointer-lowtag)
+      #!+win32
+      (progn
+        (inst mov tmp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
+        (inst mov value (make-ea :dword :base tmp :index value)))
+      #!-win32
       (inst mov value (make-ea :dword :base value) :fs)
       (inst cmp value no-tls-value-marker-widetag)
       (inst jmp :ne check-unbound-label)
@@ -278,6 +312,8 @@
   (:args (val :scs (any-reg descriptor-reg))
          (symbol :scs (descriptor-reg)))
   (:temporary (:sc unsigned-reg) tls-index bsp)
+  #!+win32
+  (:temporary (:sc descriptor-reg) tmp)
   (:generator 10
     (let ((tls-index-valid (gen-label)))
       (load-binding-stack-pointer bsp)
@@ -297,9 +333,17 @@
                     (#.esi-offset 'alloc-tls-index-in-esi))
                   :assembly-routine))
       (emit-label tls-index-valid)
+      #!+win32
+      (progn
+        (inst mov tmp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
+        (inst push (make-ea :dword :base tmp :index tls-index)))
+      #!-win32
       (inst push (make-ea :dword :base tls-index) :fs)
       (popw bsp (- binding-value-slot binding-size))
       (storew symbol bsp (- binding-symbol-slot binding-size))
+      #!+win32
+      (inst mov (make-ea :dword :base tmp :index tls-index) val)
+      #!-win32
       (inst mov (make-ea :dword :base tls-index) val :fs))))
 
 #!-sb-thread
@@ -319,6 +363,8 @@
 #!+sb-thread
 (define-vop (unbind)
   (:temporary (:sc unsigned-reg) temp bsp tls-index)
+  #!+win32
+  (:temporary (:sc descriptor-reg) tmp)
   (:generator 0
     (load-binding-stack-pointer bsp)
     ;; Load SYMBOL from stack, and get the TLS-INDEX.
@@ -326,6 +372,11 @@
     (loadw tls-index temp symbol-tls-index-slot other-pointer-lowtag)
     ;; Load VALUE from stack, then restore it to the TLS area.
     (loadw temp bsp (- binding-value-slot binding-size))
+    #!+win32
+    (progn
+      (inst mov tmp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
+      (inst mov (make-ea :dword :base tmp :index tls-index) temp))
+    #!-win32
     (inst mov (make-ea :dword :base tls-index) temp :fs)
     ;; Zero out the stack.
     (storew 0 bsp (- binding-symbol-slot binding-size))
@@ -350,6 +401,8 @@
 (define-vop (unbind-to-here)
   (:args (where :scs (descriptor-reg any-reg)))
   (:temporary (:sc unsigned-reg) symbol value bsp #!+sb-thread tls-index)
+  #!+(and sb-thread win32)
+  (:temporary (:sc descriptor-reg) tmp)
   (:generator 0
     (load-binding-stack-pointer bsp)
     (inst cmp where bsp)
@@ -367,7 +420,12 @@
 
     #!+sb-thread (loadw
                   tls-index symbol symbol-tls-index-slot other-pointer-lowtag)
-    #!+sb-thread (inst mov (make-ea :dword :base tls-index) value :fs)
+    #!+(and sb-thread win32)
+    (progn
+      (inst mov tmp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
+      (inst mov (make-ea :dword :base tmp :index tls-index) value))
+    #!+(and sb-thread (not win32))
+    (inst mov (make-ea :dword :base tls-index) value :fs)
     (storew 0 bsp (- binding-symbol-slot binding-size))
 
     SKIP

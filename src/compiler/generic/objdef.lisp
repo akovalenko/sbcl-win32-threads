@@ -404,6 +404,7 @@
   (alien-stack-start :c-type "lispobj *" :length #!+alpha 2 #!-alpha 1)
   (alien-stack-pointer :c-type "lispobj *" :length #!+alpha 2 #!-alpha 1)
   #!+gencgc (alloc-region :c-type "struct alloc_region" :length 5)
+  #!+win32 (private-events :c-type "struct private_events" :length 2)
   (this :c-type "struct thread *" :length #!+alpha 2 #!-alpha 1)
   (prev :c-type "struct thread *" :length #!+alpha 2 #!-alpha 1)
   (next :c-type "struct thread *" :length #!+alpha 2 #!-alpha 1)
@@ -434,4 +435,18 @@
   ;; be handled by DEFINE-PRIMITIVE-OBJECT.
   #!+alpha
   (padding)
+  #!+sb-auto-fpu-switch
+  (in-lisp-fpu-mode :c-type "unsigned int" :length 1)
+  #!+sb-auto-fpu-switch
+  (saved-c-fpu-mode :c-type "unsigned int" :length 1)
+  #!+sb-auto-fpu-switch
+  (saved-lisp-fpu-mode :c-type "unsigned int" :length 1)
+  #!+sb-gc-safepoint
+  (csp-around-foreign-call :c-type "lispobj *" :length 1)
+  #!+sb-gc-safepoint
+  (pc-around-foreign-call :c-type "lispobj *" :length 1)
+  #!+sb-gc-safepoint
+  (gc-safepoint-context :c-type "os_context_t *" :length 1)
+  #!+(and win32 sb-gc-safepoint)
+  (foreign-context-lasterror :c-type "lispobj" :length 1)
   (interrupt-contexts :c-type "os_context_t *" :rest-p t))

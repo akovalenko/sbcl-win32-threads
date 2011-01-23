@@ -321,6 +321,7 @@
   ;; This section copied from VOP CALL-OUT.
   ;; Setup the NPX for C; all the FP registers need to be
   ;; empty; pop them all.
+  #!-sb-auto-fpu-switch
   (dotimes (i 8)
     (inst fstp fr0-tn))
 
@@ -338,7 +339,7 @@
   (inst push 0)
   (inst push 0)
   (inst push ecx-tn)
-  (inst call (make-fixup "RtlUnwind@16" :foreign)))
+  (inst call (make-fixup "RtlUnwind" :foreign)))
 
 ;; We want no VOP for this one and for it to only happen on Win32
 ;; targets.  Hence the following disaster.
@@ -356,6 +357,7 @@
 
   ;; This section based on VOP CALL-OUT.
   ;; Restore the NPX for lisp; ensure no regs are empty
+  #!-sb-auto-fpu-switch
   (dotimes (i 8)
     (inst fldz))
 
@@ -375,7 +377,12 @@
 
 ;; We want no VOP for this one and for it to only happen on Win32
 ;; targets.  Hence the following disaster.
-#!+#.(cl:if (cl:member sb-assembling cl:*features*) win32 '(or))
+
+;; Kovalenko: I had to reimplement it in x86-assem.S anyway, in order
+;; to satisfy DEP restriction on SEH handler location. 
+;; 
+;; #!+#.(cl:if (cl:member sb-assembling cl:*features*) win32 '(or))
+#|
 (define-assembly-routine
     (uwp-seh-handler (:return-style :none))
     ((:temp block unsigned-reg eax-offset))
@@ -429,6 +436,7 @@
 
   ;; This section based on VOP CALL-OUT.
   ;; Restore the NPX for lisp; ensure no regs are empty
+  #!-sb-auto-fpu-switch
   (dotimes (i 8)
     (inst fldz))
 
@@ -453,6 +461,7 @@
   (inst mov ebx-tn ebp-tn)
   (loadw ebp-tn block unwind-block-current-cont-slot)
   (inst jmp (make-ea-for-object-slot block unwind-block-entry-pc-slot 0)))
+|#
 
 #!+win32
 (define-assembly-routine (continue-unwind
@@ -478,6 +487,7 @@
   ;; This section copied from VOP CALL-OUT.
   ;; Setup the NPX for C; all the FP registers need to be
   ;; empty; pop them all.
+  #!-sb-auto-fpu-switch
   (dotimes (i 8)
     (inst fstp fr0-tn))
 

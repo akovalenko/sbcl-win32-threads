@@ -39,7 +39,7 @@
  *   void* third argument of a handler */
 
 #include "target-os.h"
-
+#include "os-default.h"
 
 #define OS_VM_PROT_ALL \
   (OS_VM_PROT_READ | OS_VM_PROT_WRITE | OS_VM_PROT_EXECUTE)

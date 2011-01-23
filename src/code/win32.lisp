@@ -21,6 +21,9 @@
 ;;; but groveling HANDLE makes it unsigned, which currently breaks the
 ;;; build. --NS 2006-06-18
 (define-alien-type handle int-ptr)
+
+(define-alien-type lispbool (boolean 32))
+
 (define-alien-type system-string
                    #!-sb-unicode c-string
                    #!+sb-unicode (c-string :external-format :ucs-2))
@@ -35,7 +38,16 @@
 
 ;;; Retrieve the calling thread's last-error code value.  The
 ;;; last-error code is maintained on a per-thread basis.
-(define-alien-routine ("GetLastError@0" get-last-error) dword)
+#!-sb-gc-safepoint
+(define-alien-routine ("GetLastError" get-last-error) dword)
+#!+sb-gc-safepoint
+(declaim (inline get-last-error))
+#!+sb-gc-safepoint
+(defun get-last-error ()
+  (declare (optimize (speed 3) (safety 0) (debug 0)))
+  (sap-int
+   (sb!vm::current-thread-offset-sap
+    sb!vm::thread-foreign-context-lasterror-slot)))
 
 ;;; Flag constants for FORMAT-MESSAGE.
 (defconstant format-message-from-system #x1000)
@@ -43,7 +55,7 @@
 ;;; Format an error message based on a lookup table.  See MSDN for the
 ;;; full meaning of the all options---most are not used when getting
 ;;; system error codes.
-(define-alien-routine ("FormatMessageA@28" format-message) dword
+(define-alien-routine ("FormatMessageA" format-message) dword
   (flags dword)
   (source (* t))
   (message-id dword)
@@ -61,7 +73,7 @@
 
 ;;; Read data from a file handle into a buffer.  This may be used
 ;;; synchronously or with "overlapped" (asynchronous) I/O.
-(define-alien-routine ("ReadFile@20" read-file) bool
+(define-alien-routine ("ReadFile" read-file) lispbool
   (file handle)
   (buffer (* t))
   (bytes-to-read dword)
@@ -70,7 +82,7 @@
 
 ;;; Write data from a buffer to a file handle.  This may be used
 ;;; synchronously  or with "overlapped" (asynchronous) I/O.
-(define-alien-routine ("WriteFile@20" write-file) bool
+(define-alien-routine ("WriteFile" write-file) lispbool
   (file handle)
   (buffer (* t))
   (bytes-to-write dword)
@@ -81,7 +93,7 @@
 ;;; removing it from the pipe.  BUFFER, BYTES-READ, BYTES-AVAIL, and
 ;;; BYTES-LEFT-THIS-MESSAGE may be NULL if no data is to be read.
 ;;; Return TRUE on success, FALSE on failure.
-(define-alien-routine ("PeekNamedPipe@24" peek-named-pipe) bool
+(define-alien-routine ("PeekNamedPipe" peek-named-pipe) lispbool
   (pipe handle)
   (buffer (* t))
   (buffer-size dword)
@@ -92,17 +104,83 @@
 ;;; Flush the console input buffer if HANDLE is a console handle.
 ;;; Returns true on success, false if the handle does not refer to a
 ;;; console.
-(define-alien-routine ("FlushConsoleInputBuffer@4" flush-console-input-buffer) bool
+(define-alien-routine ("FlushConsoleInputBuffer" flush-console-input-buffer) lispbool
   (handle handle))
 
 ;;; Read data from the console input buffer without removing it,
 ;;; without blocking.  Buffer should be large enough for LENGTH *
 ;;; INPUT-RECORD-SIZE bytes.
-(define-alien-routine ("PeekConsoleInputA@16" peek-console-input) bool
+(define-alien-routine ("PeekConsoleInputA" peek-console-input) lispbool
   (handle handle)
   (buffer (* t))
   (length dword)
   (nevents (* dword)))
+
+(define-alien-routine ("socket_input_available" socket-input-available) int
+  (socket handle))
+
+;;; There is one more widely-used file handle type, along with pipes,
+;;; consoles and sockets: communication resources (serial ports).
+(define-alien-type comm-timeouts
+    (struct comm-timeouts
+      (read-interval dword)
+      (read-total-multiplier dword)
+      (read-total-constant dword)
+      (write-total-multiplier dword)
+      (write-total-constant dword)))
+
+(define-alien-type comstat
+    (struct comstat
+      (flags dword)
+      (in-queue dword)
+      (out-queue dword)))
+
+(define-alien-routine ("SetCommTimeouts" set-comm-timeouts)
+    bool
+  (handle handle)
+  (comm-timeouts (* comm-timeouts)))
+
+(define-alien-routine ("GetCommTimeouts" get-comm-timeouts)
+    bool
+  (handle handle)
+  (comm-timeouts (* comm-timeouts)))
+
+(define-alien-routine ("ClearCommError" clear-comm-error)
+    bool
+  (handle handle)
+  (errors dword :out)
+  (comstat (* comstat)))
+
+;;; For SBCL buffered input to work, ReadFile must have unix-like
+;;; "short read" semantics: wait indefinitely until there is something
+;;; in the input buffer, then return everything buffered without
+;;; waiting further. It is imitated on win32 with read-interval
+;;; timeout of 1 and all other timeouts set to 0.
+(defun initialize-comm-timeouts (handle)
+  (with-alien ((comm-timeouts comm-timeouts))
+    (macrolet ((frob (&rest pairs)
+                 `(setf ,@(loop for (slot value) on pairs by #'cddr
+                                collect `(slot comm-timeouts ',slot)
+                                collect value))))
+
+      (frob read-interval 1
+            read-total-constant 0
+            read-total-multiplier 0
+            write-total-constant 0
+            write-total-multiplier 0))
+    (set-comm-timeouts handle (addr comm-timeouts))))
+
+;;; ClearCommError is used here to query a number of characters in the
+;;; input buffer. Unfortunately, it has an obvious 'side-effect' of
+;;; resetting error flags. Fortunately, fd-stream I/O code on windows doesn't
+;;; normally call handle-listen under the hood.
+(defun comm-input-available (handle)
+  (with-alien ((comstat (struct comstat)))
+    (let ((done (clear-comm-error handle (addr comstat))))
+      (if (zerop done) 0
+          (symbol-macrolet ((in-queue (slot comstat 'in-queue)))
+            (if (zerop in-queue) 2
+                (values 1 in-queue)))))))
 
 ;;; Listen for input on a Windows file handle.  Unlike UNIX, there
 ;;; isn't a unified interface to do this---we have to know what sort
@@ -113,16 +191,22 @@
 (defun handle-listen (handle)
   (with-alien ((avail dword)
                (buf (array char #.input-record-size)))
-    (unless (zerop (peek-named-pipe handle nil 0 nil (addr avail) nil))
+    (when (and (= 3 (logand 3 handle))
+	   (peek-console-input handle
+			       (cast buf (* t))
+			       1 (addr avail)))
       (return-from handle-listen (plusp avail)))
-
-    (unless (zerop (peek-console-input handle
-                                       (cast buf (* t))
-                                       1 (addr avail)))
+    (when (peek-named-pipe handle nil 0 nil (addr avail) nil)
       (return-from handle-listen (plusp avail)))
+    (let ((res (comm-input-available handle)))
+      (unless (zerop res)
+        (return-from handle-listen (= res 1))))
 
-    ;; FIXME-SOCKETS: Try again here with WSAEventSelect in case
-    ;; HANDLE is a socket.
+
+    (let ((res (socket-input-available handle)))
+      (unless (zerop res)
+        (return-from handle-listen (= res 1))))
+
     t))
 
 ;;; Listen for input on a C runtime file handle.  Returns true if
@@ -141,7 +225,7 @@
     (loop
      (unless (handle-listen handle)
        (return))
-     (when (zerop (read-file handle (cast buf (* t)) 1024 (addr count) nil))
+     (unless (read-file handle (cast buf (* t)) 1024 (addr count) nil)
        (return))
      (when (< count 1024)
        (return)))))
@@ -154,9 +238,42 @@
 
 ;;;; System Functions
 
-;;; Sleep for MILLISECONDS milliseconds.
-(define-alien-routine ("Sleep@4" millisleep) void
-  (milliseconds dword))
+(define-alien-routine ("win32_wait_object_or_signal" wait-object-or-signal) (signed 16)
+  (handle handle))
+
+(define-alien-type signed-filetime (signed 64))
+
+(define-alien-routine ("CloseHandle" close-handle) lispbool
+  (handle handle))
+
+(define-alien-routine ("CreateWaitableTimerA" create-waitable-timer) handle
+  (security-attributes (* t))
+  (manual-reset bool)
+  (name (* t)))
+
+(define-alien-routine ("SetWaitableTimer" set-waitable-timer) lispbool
+  (handle handle)
+  (due-time signed-filetime :in-out)
+  (period dword)
+  (completion-routine (* t))
+  (arg-to-completion-routine (* t))
+  (resume bool))
+
+(define-alien-routine ("CancelWaitableTimer" cancel-waitable-timer) lispbool
+  (handle handle))
+
+(defun microsleep (microseconds)
+  (let ((*allow-with-interrupts* *interrupts-enabled*))
+    (without-interrupts
+      (let ((timer (create-waitable-timer nil 0 nil)))
+        (set-waitable-timer timer (- (* 10 microseconds)) 0 nil nil 0)
+        (unwind-protect
+             (do () ((with-local-interrupts
+                       (zerop (wait-object-or-signal timer)))))
+          (close-handle timer))))))
+
+(defun sb!unix:nanosleep (sec nsec)
+  (microsleep (+ (* sec 1000000) (* nsec 1000))))
 
 #!+sb-unicode
 (progn
@@ -326,7 +443,7 @@
   (defun ansi-codepage ()
     (or *ansi-codepage*
         (setq *ansi-codepage*
-              (gethash (alien-funcall (extern-alien "GetACP@0" (function UINT)))
+              (gethash (alien-funcall (extern-alien "GetACP" (function UINT)))
                        *codepage-to-external-format*
                        :latin-1))))
 
@@ -334,7 +451,7 @@
   (defun oem-codepage ()
     (or *oem-codepage*
         (setq *oem-codepage*
-            (gethash (alien-funcall (extern-alien "GetOEMCP@0" (function UINT)))
+            (gethash (alien-funcall (extern-alien "GetOEMCP" (function UINT)))
                      *codepage-to-external-format*
                      :latin-1)))))
 
@@ -342,7 +459,7 @@
 (declaim (ftype (function () keyword) console-input-codepage))
 (defun console-input-codepage ()
   (or #!+sb-unicode
-      (gethash (alien-funcall (extern-alien "GetConsoleCP@0" (function UINT)))
+      (gethash (alien-funcall (extern-alien "GetConsoleCP" (function UINT)))
                *codepage-to-external-format*)
       :latin-1))
 
@@ -351,11 +468,11 @@
 (defun console-output-codepage ()
   (or #!+sb-unicode
       (gethash (alien-funcall
-                (extern-alien "GetConsoleOutputCP@0" (function UINT)))
+                (extern-alien "GetConsoleOutputCP" (function UINT)))
                *codepage-to-external-format*)
       :latin-1))
 
-(define-alien-routine ("LocalFree@4" local-free) void
+(define-alien-routine ("LocalFree" local-free) void
   (lptr (* t)))
 
 (defmacro cast-and-free (value &key (type 'system-string)
@@ -368,14 +485,20 @@
   `(let
      ((,name (etypecase ,description
                (string ,description)
-               (cons (destructuring-bind (s &optional (l 0) c) ,description
-                       (format nil "~A~A~A" s
-                               (if c #!-sb-unicode "A@" #!+sb-unicode "W@" "@")
-                               l))))))
+               (cons
+		  (destructuring-bind (s c) ,description
+		    (format nil "~A~A" s
+			    (if c #!-sb-unicode "A" #!+sb-unicode "W" "")))))))
      ,@body)))
 
 (defmacro make-system-buffer (x)
  `(make-alien char #!+sb-unicode (ash ,x 1) #!-sb-unicode ,x))
+
+(define-alien-type pathname-buffer
+    (array char #.(ash (1+ max_path) #!+sb-unicode 1 #!-sb-unicode 0)))
+
+(defmacro decode-system-string (alien)
+  `(cast (cast ,alien (* char)) system-string))
 
 ;;; FIXME: The various FOO-SYSCALL-BAR macros, and perhaps some other
 ;;; macros in this file, are only used in this file, and could be
@@ -400,8 +523,8 @@
     `(locally
        (declare (optimize (sb!c::float-accuracy 0)))
        (let ((result (alien-funcall
-                       (extern-alien ,sname (function bool ,@arg-types))
-                       ,@args)))
+                      (extern-alien ,sname (function bool ,@arg-types))
+                      ,@args)))
          (when (zerop result)
            (win32-error ,sname))
          ,success-form))))
@@ -417,12 +540,21 @@
 
 (defun get-last-error-message (err)
   "http://msdn.microsoft.com/library/default.asp?url=/library/en-us/debug/base/retrieving_the_last_error_code.asp"
+  (let ((message
   (with-alien ((amsg (* char)))
-    (syscall (("FormatMessage" 28 t)
+    (syscall (("FormatMessage" t)
               dword dword dword dword dword (* (* char)) dword dword)
              (cast-and-free amsg :free-function local-free)
              (logior FORMAT_MESSAGE_ALLOCATE_BUFFER FORMAT_MESSAGE_FROM_SYSTEM)
-             0 err 0 (addr amsg) 0 0)))
+                    0 err 0 (addr amsg) 0 0))))
+    (and message
+         ;; KLUDGE: not string-trim, because #\Return character is
+         ;; unavailable while cross-compiling.
+         (subseq message 0
+                 (or (position-if-not
+                      (lambda (character)
+                        (member (char-code character) '(10 13 32)))
+                      message :from-end t) 0)))))
 
 (defmacro win32-error (func-name &optional err)
   `(let ((err-code ,(or err `(get-last-error))))
@@ -434,40 +566,40 @@
 
 (defun get-folder-namestring (csidl)
   "http://msdn.microsoft.com/library/en-us/shellcc/platform/shell/reference/functions/shgetfolderpath.asp"
-  (with-alien ((apath (* char) (make-system-buffer (1+ max_path))))
-    (syscall (("SHGetFolderPath" 20 t) int handle int handle dword (* char))
-             (concatenate 'string (cast-and-free apath) "\\")
-             0 csidl 0 0 apath)))
+  (with-alien ((apath pathname-buffer))
+    (syscall (("SHGetFolderPath" t) int handle int handle dword (* char))
+             (concatenate 'string (decode-system-string apath) "\\")
+             0 csidl 0 0 (cast apath (* char)))))
 
 (defun get-folder-pathname (csidl)
   (parse-native-namestring (get-folder-namestring csidl)))
 
 (defun sb!unix:posix-getcwd ()
-  (with-alien ((apath (* char) (make-system-buffer (1+ max_path))))
-    (with-sysfun (afunc ("GetCurrentDirectory" 8 t) dword dword (* char))
-      (let ((ret (alien-funcall afunc (1+ max_path) apath)))
+  (with-alien ((apath pathname-buffer))
+    (with-sysfun (afunc ("GetCurrentDirectory" t) dword dword (* char))
+      (let ((ret (alien-funcall afunc (1+ max_path) (cast apath (* char)))))
         (when (zerop ret)
           (win32-error "GetCurrentDirectory"))
-        (when (> ret (1+ max_path))
-          (free-alien apath)
-          (setf apath (make-system-buffer ret))
-          (alien-funcall afunc ret apath))
-        (cast-and-free apath)))))
+        (if (> ret (1+ max_path))
+	    (with-alien ((apath (* char) (make-system-buffer ret)))
+	      (alien-funcall afunc ret apath)
+	      (cast-and-free apath))
+	    (decode-system-string apath))))))
 
 (defun sb!unix:unix-mkdir (name mode)
   (declare (type sb!unix:unix-pathname name)
            (type sb!unix:unix-file-mode mode)
            (ignore mode))
-  (void-syscall* (("CreateDirectory" 8 t) system-string dword) name 0))
+  (void-syscall* (("CreateDirectory" t) system-string dword) name 0))
 
 (defun sb!unix:unix-rename (name1 name2)
   (declare (type sb!unix:unix-pathname name1 name2))
-  (void-syscall* (("MoveFile" 8 t) system-string system-string) name1 name2))
+  (void-syscall* (("MoveFile" t) system-string system-string) name1 name2))
 
 (defun sb!unix::posix-getenv (name)
   (declare (type simple-string name))
   (with-alien ((aenv (* char) (make-system-buffer default-environment-length)))
-    (with-sysfun (afunc ("GetEnvironmentVariable" 12 t)
+    (with-sysfun (afunc ("GetEnvironmentVariable" t)
                         dword system-string (* char) dword)
       (let ((ret (alien-funcall afunc name aenv default-environment-length)))
         (when (> ret default-environment-length)
@@ -484,7 +616,7 @@
 ;;
 ;; http://msdn.microsoft.com/library/en-us/dllproc/base/getcurrentprocess.asp
 (declaim (inline get-current-process))
-(define-alien-routine ("GetCurrentProcess@0" get-current-process) handle)
+(define-alien-routine ("GetCurrentProcess" get-current-process) handle)
 
 ;;;; Process time information
 
@@ -504,7 +636,7 @@
                 (,exit-time filetime)
                 (,kernel-time filetime)
                 (,user-time filetime))
-     (syscall* (("GetProcessTimes" 20) handle (* filetime) (* filetime)
+     (syscall* ("GetProcessTimes" handle (* filetime) (* filetime)
                 (* filetime) (* filetime))
                (progn ,@forms)
                (get-current-process)
@@ -523,7 +655,7 @@
           epoch (get-internal-real-time)))
   (defun get-internal-real-time ()
     (- (with-alien ((system-time filetime))
-         (syscall (("GetSystemTimeAsFileTime" 4) void (* filetime))
+         (syscall ("GetSystemTimeAsFileTime" void (* filetime))
                   (values (floor system-time 100ns-per-internal-time-unit))
                   (addr system-time)))
        epoch)))
@@ -569,7 +701,7 @@
   "Return the number of seconds and microseconds since the beginning of the
 UNIX epoch: January 1st 1970."
   (with-alien ((system-time filetime))
-    (syscall (("GetSystemTimeAsFileTime" 4) void (* filetime))
+    (syscall ("GetSystemTimeAsFileTime" void (* filetime))
              (multiple-value-bind (sec 100ns)
                  (floor (- system-time +unix-epoch-filetime+)
                         (* 100ns-per-internal-time-unit
@@ -584,8 +716,17 @@ UNIX epoch: January 1st 1970."
 ;; http://msdn.microsoft.com/library/en-us/dllproc/base/setenvironmentvariable.asp
 (defun setenv (name value)
   (declare (type simple-string name value))
-  (void-syscall* (("SetEnvironmentVariable" 8 t) system-string system-string)
-                 name value))
+  (if value
+      (void-syscall* (("SetEnvironmentVariable" t) system-string system-string)
+                     name value)
+      (void-syscall* (("SetEnvironmentVariable" t) system-string int-ptr)
+                     name 0)))
+
+;; Let SETENV be an accessor for POSIX-GETENV. Just for fun.
+(defun (setf sb!unix::posix-getenv) (new-value name)
+  (if (setenv name new-value)
+      new-value
+      (posix-getenv name)))
 
 (defmacro c-sizeof (s)
   "translate alien size (in bits) to c-size (in bytes)"
@@ -610,7 +751,7 @@ UNIX epoch: January 1st 1970."
 (defun get-version-ex ()
   (with-alien ((info (struct OSVERSIONINFO)))
     (setf (slot info 'dwOSVersionInfoSize) (c-sizeof (struct OSVERSIONINFO)))
-    (syscall* (("GetVersionEx" 4 t) (* (struct OSVERSIONINFO)))
+    (syscall* (("GetVersionEx" t) (* (struct OSVERSIONINFO)))
               (values (slot info 'dwMajorVersion)
                       (slot info 'dwMinorVersion)
                       (slot info 'dwBuildNumber)
@@ -628,7 +769,7 @@ UNIX epoch: January 1st 1970."
 (defun get-computer-name ()
   (with-alien ((aname (* char) (make-system-buffer (1+ MAX_COMPUTERNAME_LENGTH)))
                (length dword (1+ MAX_COMPUTERNAME_LENGTH)))
-    (with-sysfun (afunc ("GetComputerName" 8 t) bool (* char) (* dword))
+    (with-sysfun (afunc ("GetComputerName" t) bool (* char) (* dword))
       (when (zerop (alien-funcall afunc aname (addr length)))
         (let ((err (get-last-error)))
           (unless (= err ERROR_BUFFER_OVERFLOW)
@@ -637,3 +778,259 @@ UNIX epoch: January 1st 1970."
           (setf aname (make-system-buffer length))
           (alien-funcall afunc aname (addr length))))
       (cast-and-free aname))))
+
+;; 64-bit file positioning
+(define-alien-routine ("_lseeki64" lseeki64)
+    (signed 64)
+  (fd int)
+  (position (signed 64))
+  (whence int))
+
+;;; File mapping support routines
+
+;; CreateFileMapping + MapViewOfFile are like mmap() together.
+(define-alien-routine ( #!+sb-unicode "CreateFileMappingW" #!-sb-unicode
+                                      "CreateFileMappingA"
+                                      create-file-mapping)
+    handle
+  (handle handle)
+  (security-attributes (* t))
+  (protection dword)
+  (maximum-size-high dword)
+  (maximum-size-low dword)
+  (name system-string))
+
+(define-alien-routine ("MapViewOfFile" map-view-of-file)
+    system-area-pointer
+  (file-mapping handle)
+  (desired-access dword)
+  (offset-high dword)
+  (offset-low dword)
+  (size dword))
+
+;; UnmapViewOfFile is like munmap(), but lacks length parameter.
+;; Therefore partial unmapping is not supported.
+(define-alien-routine ("UnmapViewOfFile" unmap-view-of-file) bool
+  (address (* t)))
+
+;; FlushViewOfFile is like msync()
+(define-alien-routine ("FlushViewOfFile" flush-view-of-file) bool
+  (address (* t))
+  (length dword))
+
+;; Constants for CreateFile `disposition'.
+(defconstant file-create-new 1)
+(defconstant file-create-always 2)
+(defconstant file-open-existing 3)
+(defconstant file-open-always 4)
+(defconstant file-truncate-existing 5)
+
+;; access rights
+(defconstant access-generic-read #x80000000)
+(defconstant access-generic-write #x40000000)
+(defconstant access-generic-execute #x20000000)
+(defconstant access-generic-all #x10000000)
+(defconstant access-file-append-data #x4)
+(defconstant access-delete #x00010000)
+
+;; share modes
+(defconstant file-share-delete #x04)
+(defconstant file-share-read #x01)
+(defconstant file-share-write #x02)
+
+;; CreateFile (the real file-opening workhorse)
+(define-alien-routine ( #!+sb-unicode
+                        "CreateFileW"
+                        #!-sb-unicode
+                        "CreateFileA"
+                        create-file)
+    handle
+  (name system-string)
+  (desired-access dword)
+  (share-mode dword)
+  (security-attributes (* t))
+  (creation-disposition dword)
+  (flags-and-attributes dword)
+  (template-file handle))
+
+(defconstant file-attribute-readonly #x1)
+(defconstant file-attribute-hidden #x2)
+(defconstant file-attribute-system #x4)
+(defconstant file-attribute-directory #x10)
+(defconstant file-attribute-archive #x20)
+(defconstant file-attribute-device #x40)
+(defconstant file-attribute-normal #x80)
+(defconstant file-attribute-temporary #x100)
+(defconstant file-attribute-sparse #x200)
+(defconstant file-attribute-reparse-point #x400)
+(defconstant file-attribute-reparse-compressed #x800)
+(defconstant file-attribute-reparse-offline #x1000)
+(defconstant file-attribute-not-content-indexed #x2000)
+(defconstant file-attribute-encrypted #x4000)
+
+(defconstant file-flag-overlapped #x40000000)
+(defconstant file-flag-sequential-scan #x8000000)
+
+
+;; GetFileAttribute is like a tiny subset of fstat(),
+;; enough to distinguish directories from anything else.
+(defconstant invalid-file-attributes (mod -1 (ash 1 32)))
+
+(define-alien-routine ( #!+sb-unicode
+                        "GetFileAttributesW"
+                        #!-sb-unicode
+                        "GetFileAttributesA"
+                        get-file-attributes)
+    dword
+  (name (c-string #!+sb-unicode #!+sb-unicode :external-format :ucs-2)))
+
+;; GetFileSizeEx doesn't work with block devices :[
+(define-alien-routine ("GetFileSizeEx" get-file-size-ex)
+    bool
+  (handle handle) (file-size (signed 64) :in-out))
+
+
+;; Possible results of GetFileType.
+(defconstant file-type-disk 1)
+(defconstant file-type-char 2)
+(defconstant file-type-pipe 3)
+(defconstant file-type-remote 4)
+(defconstant file-type-unknown 0)
+
+(define-alien-routine ("GetFileType" get-file-type)
+    dword
+  (handle handle))
+
+(define-alien-routine ("_open_osfhandle" open-osfhandle)
+    int
+  (handle handle)
+  (flags int))
+
+;; Intended to be an imitation of sb!unix:unix-open based on
+;; CreateFile, as complete as possibly.
+;; FILE_FLAG_OVERLAPPED is a must for decent I/O.
+
+(defun unixlike-open (path flags mode &optional revertable)
+  (declare (type sb!unix:unix-pathname path)
+           (type fixnum flags)
+           (type sb!unix:unix-file-mode mode)
+           (ignorable mode))
+  (let* ((disposition-flags
+          (logior
+           (if (zerop (logand sb!unix:o_creat flags)) 0 #b100)
+           (if (zerop (logand sb!unix:o_excl flags)) 0 #b010)
+           (if (zerop (logand sb!unix:o_trunc flags)) 0 #b001)))
+         (create-disposition
+          ;; there are 8 combinations of creat|excl|trunc, some of
+          ;; them are equivalent. Case stmt below maps them to 5
+          ;; dispositions (see CreateFile manual).
+          (case disposition-flags
+            ((#b110 #b111) file-create-new)
+            ((#b001 #b011) file-truncate-existing)
+            ((#b000 #b010) file-open-existing)
+            (#b100 file-open-always)
+            (#b101 file-create-always))))
+  (let ((handle
+         (create-file path
+                        (logior
+                         (if revertable #x10000 0)
+                      (if (plusp (logand sb!unix:o_append flags))
+                          access-file-append-data
+                             (ecase (logand 3 flags)
+                            (0 access-generic-read)
+                            (1 access-generic-write)
+                               ((2 3) (logior access-generic-write
+                                              access-generic-read)))))
+                      (logior file-share-read
+                              file-share-write)
+                      nil
+                        create-disposition
+                      (logior
+                       file-attribute-normal
+                       file-flag-overlapped
+                       file-flag-sequential-scan)
+                      0)))
+    (if (eql handle invalid-handle)
+        (values nil
+
+                (let ((error-code (get-last-error)))
+                  (case error-code
+                    (2 sb!unix:enoent)
+                    (183 sb!unix:eexist)
+                    (otherwise (- error-code)))))
+          (progn
+            (initialize-comm-timeouts handle)
+        (let ((fd (open-osfhandle handle (logior sb!unix::o_binary flags))))
+          (if (minusp fd)
+              (values nil (sb!unix::get-errno))
+                  (values fd 0))))))))
+
+(define-alien-routine ("closesocket" close-socket) int (handle handle))
+(define-alien-routine ("shutdown" shutdown-socket) int (handle handle)
+  (how int))
+
+(define-alien-routine ("DuplicateHandle" duplicate-handle) lispbool
+  (from-process handle)
+  (from-handle handle)
+  (to-process handle)
+  (to-handle handle :out)
+  (access dword)
+  (inheritp lispbool)
+  (options dword))
+
+(define-alien-routine ("SetHandleInformation" set-handle-information) lispbool
+  (handle handle)
+  (mask dword)
+  (flags dword))
+
+(defconstant ebadf 9)
+
+;;; For sockets, CloseHandle first and closesocket() afterwards is
+;;; legal: winsock tracks its handles separately (that's why we have
+;;; the problem with simple _close in the first place).
+;;;
+;;; ...Seems to be the problem on some OSes, though. We could
+;;; duplicate a handle and attempt close-socket on a duplicated one,
+;;; but it also have some problems...
+;;;
+;;; For now, we protect socket handle from close with SetHandleInformation,
+;;; then call CRT _close() that fails to close a handle but _gets rid of fd_,
+;;; and then we close a handle ourserves.
+
+(defun unixlike-close (fd)
+  (let ((handle (get-osfhandle fd)))
+    (if (= handle invalid-handle)
+	(values nil ebadf)
+        (let ((socketp
+               (and
+		(member (get-file-type handle) `(,file-type-pipe ,file-type-remote))
+		(zerop (shutdown-socket handle 2)))))
+	  (if (and socketp ; right answer from get-file-type AND shutdown succeeded
+		   (set-handle-information handle 2 2))	; protected from close => T
+	      (progn
+		(multiple-value-bind (falsehood code) (sb!unix:unix-close fd)
+		  (if falsehood ;; we protected the handle, but
+		      ;; unix-close reports success [never
+		      ;; seen it in real life].
+		      ;; return unix-close result without doing any more
+		      ;; to avoid double close. 
+		      (return-from unixlike-close (values falsehood code))
+		      (progn
+			;; unprotect:
+			(set-handle-information handle 2 0)
+			(if (or (zerop (close-socket handle)) ; as socket
+				(close-handle handle)) ; ws2 call failed => close as file
+			    (values t 0)	       ; success
+			    (values nil ebadf))))))
+	      ;; Either non-socket FD, or we couldn't protect the handle from close;
+	      ;; in the latter case, we'd better leak. Double close is much worse.
+	      (sb!unix:unix-close fd))))))
+
+
+(define-alien-routine ("GetExitCodeProcess" get-exit-code-process)
+    int
+  (handle unsigned) (exit-code unsigned :out))
+
+(define-alien-routine ("GetExitCodeThread" get-exit-code-thread)
+    int
+  (handle handle) (exit-code dword :out))

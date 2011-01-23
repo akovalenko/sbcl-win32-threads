@@ -254,6 +254,11 @@
   (:generator 1
     (inst break pending-interrupt-trap)))
 
+#!+sb-gc-safepoint
+(define-vop (insert-gc-safepoint)
+  (:generator 0
+    (inst test eax-tn (make-ea :dword :disp sb!vm::gc-safepoint-page-addr))))
+
 #!+sb-thread
 (defknown current-thread-offset-sap ((unsigned-byte 32))
   system-area-pointer (flushable))
@@ -264,9 +269,16 @@
   (:result-types system-area-pointer)
   (:translate current-thread-offset-sap)
   (:args (n :scs (unsigned-reg) :target sap))
+  #!+win32
+  (:temporary (:sc unsigned-reg) tmp)
   (:arg-types unsigned-num)
   (:policy :fast-safe)
   (:generator 2
+    #!+win32
+    (progn
+      (inst mov tmp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
+      (inst mov sap (make-ea :dword :base tmp :disp 0 :index n :scale 4)))
+    #!-win32
     (inst mov sap (make-ea :dword :disp 0 :index n :scale 4) :fs)))
 
 (define-vop (halt)
