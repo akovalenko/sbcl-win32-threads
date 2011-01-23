@@ -37,7 +37,10 @@ CFLAGS =  -g -W -Wall \
        -Wno-unused-variable -Wno-unused-function -Wno-unused-parameter \
        -O5 -march=i686 -mno-cygwin -DWINVER=0x0501
 
-#       -fomit-frame-pointer \
+# Don't use -fomit-frame-pointer; if C code calls back into Lisp, it
+# breaks backtraces to death. Understandable, though unfortunate.
+# There are some prospective workarounds to try, but for now - let EBP
+# be in place.
 
 ASFLAGS = $(CFLAGS)
 
@@ -65,6 +68,4 @@ ifndef LISP_FEATURE_SB_DYNAMIC_CORE
 
 OS_LATE_OBJS = win32-stub.o
 after-grovel-headers: mangled-stuff.nm
-else
-OS_LATE_OBJS = safepoint.o
 endif
