@@ -73,7 +73,18 @@
   `(sb!thread::with-system-spinlock (*available-buffers-spinlock*)
      ,@body))
 
-(defconstant +bytes-per-buffer+ (* 4 1024)
+(defconstant +bytes-per-buffer+
+  ;; Disk blocks today are usually 8K; as we move to larger memory
+  ;; pages, the reason to keep 4K buffer evades me.
+  #!-win32 (* 8 1024)
+
+  ;; On win32, alloc-buffer ends up in VirtualAlloc, whose allocation
+  ;; units are (normally) 64K. There are at least three reasonable
+  ;; choices: switch to malloc(), increase the size, arrange for some
+  ;; kind of sharing a single VA block among buffers. Throwing away
+  ;; 15/16 of the buffer seems extremely unwise; applies to 7/8 too. 
+  
+  #!+win32 (* 64 1024)
   #!+sb-doc
   "Default number of bytes per buffer.")
 
