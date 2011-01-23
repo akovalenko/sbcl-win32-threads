@@ -27,4 +27,11 @@
 ;;;
 ;;; versions, especially for internal versions off the main CVS
 ;;; branch, it gets hairier, e.g. "0.pre7.14.flaky4.13".)
-"1.0.45.wth.250"
+;;; Last merged upstream SBCL version is 1.0.45.13 (2011/01/23).
+;;; 
+;;; ... Well, let's write the upstream "subminor" as a Roman numeral,
+;;; like this: 1.0.45.XIII.251. Not bad.
+;;;
+;;; versions, especially for internal versions off the main CVS
+;;; branch, it gets hairier, e.g. "0.pre7.14.flaky4.13".)
+"1.0.45.XIII.251"
