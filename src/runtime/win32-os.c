@@ -92,6 +92,7 @@ int dyndebug_survive_aver = 0;
 int dyndebug_runtime_link = 0;
 int dyndebug_safepoints = 0;
 int dyndebug_pagefaults = 0;
+int dyndebug_io = 0;
 
 int dyndebug_to_filestream = 1;
 int dyndebug_to_odstring = 0;
@@ -117,6 +118,8 @@ void dyndebug_init()
         GetEnvironmentVariableA("SBCL_DYNDEBUG__SAFEPOINTS",NULL,0);
     dyndebug_pagefaults =
         GetEnvironmentVariableA("SBCL_DYNDEBUG__PAGEFAULTS",NULL,0);
+    dyndebug_io =
+        GetEnvironmentVariableA("SBCL_DYNDEBUG__IO",NULL,0);
 }
 
 /* wrappers for winapi calls that must be successful */
@@ -2211,6 +2214,8 @@ int win32_write_unicode_console(HANDLE handle, void * buf, int count)
             return 2*written;
         }
     } else {
+	DWORD err = GetLastError();
+	odxprint(io,"WriteConsole fails => %ul\n", err);
         errno = EIO;
         return -1;
     }
@@ -2233,6 +2238,8 @@ again:
     win32_end_console_input();
     if (ok) {
         if (!nread) {
+	    DWORD err = GetLastError();
+	    odxprint(io,"[EINTR] ReadConsole succeeds w/o nread => %ul\n", err);
             errno = EINTR;
             return -1;
         } else {
@@ -2242,8 +2249,7 @@ again:
                 if (ubuf[nch]==13) {
                     ++offset;
                 } else {
-                    if (offset)
-                        ubuf[nch-offset]=ubuf[nch];
+		    ubuf[nch-offset]=ubuf[nch];
                 }
             }
             nread-=offset;
@@ -2252,6 +2258,8 @@ again:
             return 2*nread;
         }
     } else {
+	DWORD err = GetLastError();
+	odxprint(io,"WriteConsole fails => %ul\n", err);
         errno = EIO;
         return -1;
     }

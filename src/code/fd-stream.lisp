@@ -2525,10 +2525,10 @@
       (aver (not (boundp '*available-buffers*)))
       (setf *available-buffers* nil)))
   (with-output-to-string (*error-output*)
-    (let ((ttyname #.(coerce #!+win32 "CON" #!-win32 "/dev/tty"
-			     'simple-base-string))
+    (let ((ttyname #.(coerce "/dev/tty" 'simple-base-string))
 	  (stdstream-vars '(*stdin* *stdout* *stderr* *tty*)))
-      (loop for fd in '(0 1 2 t)
+      #!+win32 (declare (ignorable ttyname))
+      (loop for fd in '(0 1 2 nil)
 	    and auto-close-p in '(nil nil nil t)
 	    and stream-var in stdstream-vars
 	    and direction in '(:input :output :output :io)
@@ -2539,15 +2539,25 @@
 	    do
 	 (let ((outputp (not (eq direction :input)))
 	       (inputp (not (eq direction :output))))
-	   (when (eq fd t)
-	     (setf fd
-		   (and #!+win32
-			(loop for fd in '(0 1)
-			      thereis
-			      (let ((handle (sb!win32:get-osfhandle fd)))
-				(or (= handle -1)
-				    (/= 3 (logand handle 3)))))			
-			(sb!unix:unix-open ttyname sb!unix:o_rdwr #o666))))
+	   (unless fd
+	     #!+win32
+	     (multiple-value-bind (keyboard screen)
+		 (sb!win32::make-console-fds)
+	       (make-two-way-stream
+		(if keyboard
+		    (make-fd-stream keyboard :name name :input t
+				    :element-type :default :buffering :line
+				    :auto-close auto-close-p
+				    :external-format :ucs-2)
+		    *stdin*)
+		(if screen
+		    (make-fd-stream screen :name name :output t
+				    :element-type :default :buffering :line
+				    :auto-close auto-close-p
+				    :external-format :ucs-2)
+		    *stdout*)))
+	     #!-win32
+	     (setf fd (sb!unix:unix-open ttyname sb!unix:o_rdwr 0)))
 	   (setf (symbol-value stream-var)
 		 (if fd
 		     (make-fd-stream fd

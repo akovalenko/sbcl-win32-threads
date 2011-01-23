@@ -1034,3 +1034,31 @@ UNIX epoch: January 1st 1970."
 (define-alien-routine ("GetExitCodeThread" get-exit-code-thread)
     int
   (handle handle) (exit-code dword :out))
+
+(defun make-console-fds (&optional (direction :io))
+  #!+sb-doc
+  "Reopen console input and/or output with CreateFile, wrap new
+handles into lowio descriptors and return those descriptors as two
+values, i.e. (values input-fd output-fd). Direction may restrict
+MAKE-CONSOLE-FD's behavior to opening only one FD corresponding to it;
+however, return convention is the same: even if output-fd is the only
+FD returned, it is returned as secondary value.
+
+If some of two operations fails, NIL is returned instead of FD.
+
+Handles are supposed to be wrapped into a two-way stream with two
+FD-STREAMs, when there are two of them, or into a FD-STREAM
+otherwise. Current runtime console support mandates :ucs-2 external
+format for such streams."
+  (values-list
+   (loop for this-direction in '(:input :output)
+	 and desired-access in `(,access-generic-read ,access-generic-write)
+	 and sharing in `(,file-share-read ,file-share-write)
+	 and name in `("CONIN$" "CONOUT$")
+	 and lowio-flags in `(,sb!unix:o_rdonly ,sb!unix:o_wronly)
+	 collect
+      (when (member direction `(:io ,this-direction))
+	(let ((handle (create-file name desired-access sharing nil
+				   file-open-existing 0 0)))
+	  (unless (eql handle invalid-handle)
+	    (open-osfhandle handle lowio-flags)))))))

@@ -23,14 +23,26 @@ then
     sbcl_arch=x86
     case "$OSTYPE" in
 	cygwin)
-	    targetpath=${SBCL_ENV_TARGETPATH:-"cygpath -w"}
+	    targetpath=${SBCL_ENV_TARGETPATH:-"env TERM=dumb cygpath -w"}
 	    hostpath=${SBCL_ENV_HOSTPATH:-"cygpath -u"}
 	    lncp="ln -s"
 	    ;;
 	wine)
-	    targetpath=${SBCL_ENV_TARGETPATH:-"winepath -w"}
-	    hostpath=${SBCL_ENV_HOSTPATH:-"winepath -u"}
+	    targetpath=${SBCL_ENV_TARGETPATH:-"env TERM=dumb winepath -w"}
+	    hostpath=${SBCL_ENV_HOSTPATH:-"env TERM=dumb winepath -u"}
 	    lncp="ln -s"
+	    # Temporary workaround for some "smart" change in
+	    # wine-1.3.12: "console subsystem" programs started to
+	    # output some terminal escape garbage before other output,
+	    # even if redirected to a pipe, file or socket. It breaks
+	    # "hello, world" -- surely there is an award for such
+	    # things!
+	    # 
+	    # What's fortunate and even convenient, though: wine
+	    # doesn't show its new talents when
+	    TERM=dumb
+	    # so we
+	    export TERM
 	    ;;
 	*)
 	    lncp="cp -r"
