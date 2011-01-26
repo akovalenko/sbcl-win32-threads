@@ -1664,7 +1664,14 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
 	
 
     if(!AVERLAX(VirtualAlloc(addr, len, (mem_info.State == MEM_RESERVE)?
-                             MEM_COMMIT: MEM_RESERVE|memWatch, PAGE_EXECUTE_READWRITE)))
+                             MEM_COMMIT: MEM_RESERVE|memWatch, PAGE_EXECUTE_READWRITE)
+		/* Win2k may pretend to have write watch support, but
+		 * fail here.  We revert to `no write watch' mode
+		 * (globally) as soon as possible. */
+		||(memWatch=0,mwwFlag=0,VirtualAlloc(addr, len,
+						     (mem_info.State == MEM_RESERVE)?
+						     MEM_COMMIT: MEM_RESERVE,
+						     PAGE_EXECUTE_READWRITE))))
         return 0;
 
     return addr;
@@ -1863,7 +1870,8 @@ os_protect(os_vm_address_t address, os_vm_size_t length, os_vm_prot_t prot)
                             &old_prot));
 #endif
     } else {
-	if (mwwFlag) return;
+	if (mwwFlag)
+	    return;
         AVER(VirtualProtect(address, length, os_protect_modes[prot], &old_prot)||
              (VirtualAlloc(address, length, MEM_COMMIT,os_protect_modes[prot]) &&
               VirtualProtect(address, length, os_protect_modes[prot], &old_prot)));
@@ -2800,11 +2808,18 @@ void win32_end_console_input()
     /* AVER(0==pthread_mutex_unlock(&console_input_data.lock)); */
 }
 
+/* Documented limit for ReadConsole/WriteConsole is 64K bytes.
+   Real limit observed on W2K-SP3 is somewhere in between 32KiB and 64Kib...
+*/
+#define MAX_CONSOLE_TCHARS 16384
 
 int win32_write_unicode_console(HANDLE handle, void * buf, int count)
 {
     DWORD written = 0;
-    count &= ~1;
+    DWORD nchars;
+    nchars = count>>1;
+    if (nchars>MAX_CONSOLE_TCHARS) nchars = MAX_CONSOLE_TCHARS;
+    
     if (WriteConsoleW(handle,buf,count>>1,&written,NULL)) {
         if (!written) {
             errno = EINTR;
@@ -2814,7 +2829,7 @@ int win32_write_unicode_console(HANDLE handle, void * buf, int count)
         }
     } else {
 	DWORD err = GetLastError();
-	odxprint(io,"WriteConsole fails => %ul\n", err);
+	odxprint(io,"WriteConsole fails => %u\n", err);
         errno = EIO;
         return -1;
     }
@@ -2825,20 +2840,23 @@ int win32_read_unicode_console(HANDLE handle, void* buf, int count)
     DWORD nread = 0;
     BOOL ok;
     HANDLE ownhandle;
-    count &= ~1;
+    DWORD nchars;
 again:
+    nchars = count>>1;
+    if (nchars>MAX_CONSOLE_TCHARS) nchars = MAX_CONSOLE_TCHARS;
+    
     win32_start_console_input(handle,&ownhandle);
     if (WaitForSingleObject(this_thread->private_events.events[1],
 			    0)!=WAIT_TIMEOUT) {
 	errno = EINTR;
 	return -1;
     }
-    ok = ReadConsoleW(ownhandle,buf,count>>1,&nread,NULL);
+    ok = ReadConsoleW(ownhandle,buf,nchars,&nread,NULL);
     win32_end_console_input();
     if (ok) {
         if (!nread) {
 	    DWORD err = GetLastError();
-	    odxprint(io,"[EINTR] ReadConsole succeeds w/o nread => %ul\n", err);
+	    odxprint(io,"[EINTR] ReadConsole succeeds w/o nread => %u\n", err);
             errno = EINTR;
             return -1;
         } else {
@@ -2858,7 +2876,7 @@ again:
         }
     } else {
 	DWORD err = GetLastError();
-	odxprint(io,"WriteConsole fails => %ul\n", err);
+	odxprint(io,"ReadConsole fails => %u\n", err);
         errno = EIO;
         return -1;
     }
