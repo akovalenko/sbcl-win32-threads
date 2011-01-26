@@ -87,6 +87,7 @@ void accept_post_mortem_startup();
 void win32_interrupt_console_input();
 void os_link_runtime();
 void establish_c_fpu_world();
+void os_commit_wp_violation_data(boolean call_gc);
 
 /* Temporal per-thread storage for non-lisp values, that I constantly
    need on Win32 to run code snippets injected by SEH handler and

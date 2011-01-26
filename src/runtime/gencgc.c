@@ -4323,6 +4323,10 @@ collect_garbage(generation_index_t last_gen)
 
     gc_active_p = 1;
 
+#ifdef LISP_FEATURE_WIN32
+    os_commit_wp_violation_data(1);
+#endif
+
     if (last_gen > HIGHEST_NORMAL_GENERATION+1) {
         FSHOW((stderr,
                "/collect_garbage: last_gen = %d, doing a level 0 GC\n",
@@ -4443,6 +4447,9 @@ collect_garbage(generation_index_t last_gen)
     }
 
     gc_active_p = 0;
+#ifdef LISP_FEATURE_WIN32
+    os_commit_wp_violation_data(0);
+#endif
 
     SHOW("returning from collect_garbage");
 }

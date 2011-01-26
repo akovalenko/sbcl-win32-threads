@@ -1153,12 +1153,12 @@ int check_pending_interrupts(os_context_t *ctx)
   pself->blocked_signal_set = deferrable_sigset;
 
   BEGIN_GC_UNSAFE_CODE;
-  if (ctx) fake_foreign_function_call(&ctx);
+  if (ctx) fake_foreign_function_call(ctx);
   if (ctx)
       access_control_stack_pointer(p) =
 	  (lispobj *)*os_context_sp_addr(ctx);
   funcall0(StaticSymbolFunction(RUN_INTERRUPTION));
-  if (ctx) undo_fake_foreign_function_call(&ctx);
+  if (ctx) undo_fake_foreign_function_call(ctx);
   END_GC_UNSAFE_CODE;
 
   pself->blocked_signal_set = oldset;

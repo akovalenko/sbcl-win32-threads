@@ -85,6 +85,24 @@ int linux_supports_futex=0;
  * problems, even if it's less effective. */
 #define EXTRA_CHECK_DOES_NOT_HURT
 
+/* Define if core mapping should be done in allocation unit
+ * chunks. */
+
+/* #define COMPOSITE_MAPPING 1 */
+#undef COMPOSITE_MAPPING
+
+/* As of non-mmapped dynamic space, we may use GetWriteWatch(...)
+ * where it's available to monitor ``WP violation'' without actually
+ * setting WP and handling exceptions.
+ *
+ * As of mmapped-space, we can't GetWriteWatch() on it; there is a
+ * couple of viable alternatives to actual WP + EH as well, but they
+ * require partial-unmapping of the core to be possible (and
+ * all-in-one mapping doesn't allow partial unmapping).
+ *
+ * For now, we resort to good old WP+EH for mmapped space, so the core
+ * may be mapped all at once.  */
+
 int dyndebug_lazy_fpu = 0;
 int dyndebug_lazy_fpu_careful = 0;
 int dyndebug_skip_averlax = 0;
@@ -398,6 +416,11 @@ inline static void *get_stack_frame(void)
     return retval;
 }
 #endif
+
+
+
+
+
 
 #if defined(LISP_FEATURE_SB_THREAD)
 /* Allocate (reserve+commit) a page so that each thread running Lisp
@@ -1302,7 +1325,55 @@ static void restore_lisp_tls()
 
 #endif  /* LISP_FEATURE_SB_THREAD */
 
+#ifdef COMPOSITE_MAPPING
+
+/* Our own `pagemaps' to track pages causing exceptions in mmapped
+ * core.  Once PAGE_WRITECOPY is dirty, we (may) decide to unmap it,
+ * allocate it in a normal way and get write watches in exchange.
+ *
+ * Unfortunately, one decision must be taken for the entire allocation
+ * unit. The best thing to do may be as well leaving mmapped core in
+ * its place, using real page protection and allowing SEH to be
+ * called. That's what the code currently does without
+ * COMPOSITE_MAPPING. Some real benchmarking is needed to tell what's
+ * approach is better.
+ */
+
+char mmap_faulted[(DYNAMIC_SPACE_END-DYNAMIC_SPACE_START)/BACKEND_PAGE_BYTES];
+char mmap_unshared[(DYNAMIC_SPACE_END-DYNAMIC_SPACE_START)/BACKEND_PAGE_BYTES];
+
+#define MMAP_OFF(addr) ((u64)addr - DYNAMIC_SPACE_START)
+
+#define MMAP_FAULTED_BIT(addr)				\
+    mmap_faulted[MMAP_OFF(addr)/os_vm_mmap_unit_size]
+
+#define SET_MMAP_FAULTED_BIT(addr)					\
+    do {								\
+	mmap_faulted[MMAP_OFF(addr)/os_vm_mmap_unit_size] = 1;		\
+    } while(0)
+
+#define MMAP_UNSHARED_BIT(addr)				\
+    mmap_unshared[MMAP_OFF(addr)/os_vm_mmap_unit_size]
+
+#define SET_MMAP_UNSHARED_BIT(addr)					\
+    do {								\
+	mmap_unshared[MMAP_OFF(addr)/os_vm_mmap_unit_size] = 1;		\
+    } while(0)
+
+#else
+#define MMAP_UNSHARED_BIT(addr) 0
+#define MMAP_FAULTED_BIT(addr) 0
+#define SET_MMAP_FAULTED_BIT(addr) do {} while(0)
+#define SET_MMAP_UNSHARED_BIT(addr) do {} while(0)
+
+#endif
+
+typeof(GetWriteWatch) *ptr_GetWriteWatch;
+typeof(ResetWriteWatch) *ptr_ResetWriteWatch;
+
 int os_number_of_processors = 1;
+
+DWORD mwwFlag = 0u;
 
 void os_init(char *argv[], char *envp[])
 {
@@ -1331,7 +1402,98 @@ void os_init(char *argv[], char *envp[])
     pthread_mutex_init(&fiber_dead_mutex,NULL);
     alloc_gc_page();
 #endif
+    ptr_GetWriteWatch =
+	(typeof(ptr_GetWriteWatch))
+	GetProcAddress(GetModuleHandleA("kernel32"),"GetWriteWatch");
+    ptr_ResetWriteWatch =
+	(typeof(ptr_ResetWriteWatch))
+	GetProcAddress(GetModuleHandleA("kernel32"),"ResetWriteWatch");
+    mwwFlag = (ptr_GetWriteWatch && ptr_ResetWriteWatch) ? MEM_WRITE_WATCH : 0u;
 }
+
+unsigned long core_mmap_unshared_pages = 0;
+
+void os_commit_wp_violation_data(boolean call_gc)
+{
+    LPVOID ww_start = core_mmap_end ? core_mmap_end : (LPVOID)DYNAMIC_SPACE_START;
+    SIZE_T ww_size = ((LPVOID)DYNAMIC_SPACE_END) - ww_start;
+    
+    if (mwwFlag) {
+	if (call_gc) {
+	    LPVOID writeAddrs[4096];
+	    ULONG_PTR nAddrs;
+	    unsigned int total = 0;
+	    unsigned int i;
+	    const ULONG_PTR maxAddrs = sizeof(writeAddrs)/sizeof(writeAddrs[0]);
+	    ULONG granularity;
+	    do {
+		nAddrs = maxAddrs;
+		ptr_GetWriteWatch(WRITE_WATCH_FLAG_RESET,
+				  ww_start,ww_size,
+				  writeAddrs,&nAddrs,&granularity);
+		for (i=0;i<nAddrs; ++i) {
+		    LPVOID fault_address = writeAddrs[i];
+		    int index = find_page_index(fault_address);
+		    if (page_table[index].write_protected) {
+			gencgc_handle_wp_violation(fault_address);
+		    }
+		}
+		total += nAddrs;
+	    } while(nAddrs == maxAddrs);
+	    odxprint(pagefaults,"Write watch caught %u pages\n",total);
+	} else {
+	    ptr_ResetWriteWatch(ww_start,ww_size);
+	}
+#ifdef COMPOSITE_MAPPING
+	if (core_mmap_end && mwwFlag) {
+	    for (ww_start = (LPVOID)DYNAMIC_SPACE_START;
+		 ww_start<core_mmap_end; ww_start += os_vm_mmap_unit_size) {
+		if (MMAP_UNSHARED_BIT(ww_start)) {
+		    if (call_gc) {
+			LPVOID writeAddrs[128];
+			ULONG_PTR nAddrs;
+			unsigned int total = 0;
+			unsigned int i;
+			const ULONG_PTR maxAddrs = sizeof(writeAddrs)/
+			    sizeof(writeAddrs[0]);
+			ULONG granularity;
+			do {
+			    nAddrs = maxAddrs;
+			    ptr_GetWriteWatch(WRITE_WATCH_FLAG_RESET,
+					      ww_start,os_vm_mmap_unit_size,
+					      writeAddrs,&nAddrs,&granularity);
+			    for (i=0;i<nAddrs; ++i) {
+				LPVOID fault_address = writeAddrs[i];
+				int index = find_page_index(fault_address);
+				if (page_table[index].write_protected) {
+				    gencgc_handle_wp_violation(fault_address);
+				}
+			    }
+			    total += nAddrs;
+			} while(nAddrs == maxAddrs);
+			odxprint(pagefaults,"[MMCore] Write watch caught %u pages\n",total);
+		    } else {
+			ptr_ResetWriteWatch(ww_start,os_vm_mmap_unit_size);
+		    }
+		} else {
+		    if (MMAP_FAULTED_BIT(ww_start)) {
+			++core_mmap_unshared_pages;
+			/* unshare? */
+			char copy[os_vm_mmap_unit_size];
+			memcpy(copy,ww_start,os_vm_mmap_unit_size);
+			UnmapViewOfFile(ww_start);
+			SET_MMAP_UNSHARED_BIT(ww_start);
+			os_validate(ww_start,os_vm_mmap_unit_size);
+			os_validate_recommit(ww_start,os_vm_mmap_unit_size);
+			memcpy(ww_start,copy,os_vm_mmap_unit_size);
+		    }
+		}
+	    }
+	}
+#endif
+    }
+}
+
 
 
 static DWORD os_protect_modes[8] = {
@@ -1459,9 +1621,18 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
 
     RECURSIVE_REDUCE_TO_ONE_SPACE_ADDR(os_validate,addr,len);
 
-    if (addr_in_mmapped_core(addr))
+    if (addr_in_mmapped_core(addr)) {
+#ifndef COMPOSITE_MAPPING
         return addr;
-
+#else
+	if (len > os_vm_mmap_unit_size)
+	    return addr;
+	if (!MMAP_UNSHARED_BIT(addr)) {
+	    SET_MMAP_FAULTED_BIT(addr);
+	    return addr;
+	}
+#endif
+    }
     if (!AVERLAX(VirtualQuery(addr, &mem_info, sizeof mem_info)))
         return 0;
 
@@ -1476,7 +1647,7 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
            family, but it will succeed on Wine if this region is
            actually free.
         */
-        VirtualAlloc(addr, len, MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        VirtualAlloc(addr, len, MEM_RESERVE|mwwFlag, PAGE_EXECUTE_READWRITE);
         /* If it is wine, second call succeeds, and now the region is
            really reserved. */
         return addr;
@@ -1488,7 +1659,7 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
     }
 
     if(!AVERLAX(VirtualAlloc(addr, len, (mem_info.State == MEM_RESERVE)?
-                             MEM_COMMIT: MEM_RESERVE, PAGE_EXECUTE_READWRITE)))
+                             MEM_COMMIT: MEM_RESERVE|mwwFlag, PAGE_EXECUTE_READWRITE)))
         return 0;
 
     return addr;
@@ -1564,14 +1735,14 @@ int win32_open_for_mmap(const char* fileName)
     HANDLE handle;
     if (strcmp(fileName,non_external_self_name)) {
 	handle = CreateFileA(fileName,GENERIC_READ|GENERIC_EXECUTE,
-			     FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,NULL,
+			     FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,
 			     OPEN_EXISTING,0,NULL);
     } else {
 	WCHAR mywpath[MAX_PATH+1];
 	DWORD gmfnResult = GetModuleFileNameW(NULL,mywpath,MAX_PATH+1);
 	AVER(gmfnResult>0 && gmfnResult<(MAX_PATH+1));
 	handle = CreateFileW(mywpath,GENERIC_READ|GENERIC_EXECUTE,
-			     FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,NULL,
+			     FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,
 			     OPEN_EXISTING,0,NULL);
 	
     }
@@ -1600,7 +1771,7 @@ FILE* win32_fopen_runtime()
 os_vm_address_t
 os_map(int fd, int offset, os_vm_address_t addr, os_vm_size_t len)
 {
-    os_vm_size_t count;
+    os_vm_size_t count, suboffset;
 
     if (addr == (os_vm_address_t)DYNAMIC_SPACE_START)
     {
@@ -1624,11 +1795,25 @@ os_map(int fd, int offset, os_vm_address_t addr, os_vm_size_t len)
                 /* Was validate()d, that's why we can't mmap with copy-on-write.
                    Well, let's turn it back... */
                 AVERLAX(VirtualFree(addr, 0, MEM_RELEASE));
+#ifdef COMPOSITE_MAPPING
+		for (suboffset = 0; suboffset < len; suboffset += os_vm_mmap_unit_size) {
+		    odxprint(io,"MVOF: %p %p %p %p\n",mapping,
+			     offset + suboffset,
+			     os_vm_mmap_unit_size,
+			     ((void*)addr) + suboffset);
+		    AVER(MapViewOfFileEx(mapping, FILE_MAP_COPY
+					 |(os_supports_executable_mapping?
+					   FILE_MAP_EXECUTE: 0), 0,
+					 offset + suboffset,
+					 os_vm_mmap_unit_size,
+					 ((void*)addr) + suboffset));
+		}
+#else		
                 AVER(MapViewOfFileEx(mapping, FILE_MAP_COPY
                                      |(os_supports_executable_mapping?
                                        FILE_MAP_EXECUTE: 0), 0,
                                      offset, len, addr));
-
+#endif
                 /* Reserve the rest of dynamic space... */
                 os_validate(addr+len, dynamic_space_size-len);
                 core_mmap_end = addr + len;
@@ -1639,7 +1824,8 @@ os_map(int fd, int offset, os_vm_address_t addr, os_vm_size_t len)
         }
     }
     AVER(VirtualAlloc(addr, len, MEM_COMMIT, PAGE_EXECUTE_READWRITE)||
-         VirtualAlloc(addr, len, MEM_RESERVE|MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+         VirtualAlloc(addr, len, MEM_RESERVE|MEM_COMMIT|mwwFlag,
+		      PAGE_EXECUTE_READWRITE));
 
     CRT_AVER_NONNEGATIVE(lseek(fd, offset, SEEK_SET));
 
@@ -1658,9 +1844,21 @@ os_protect(os_vm_address_t address, os_vm_size_t length, os_vm_prot_t prot)
     RECURSIVE_REDUCE_TO_ONE_SPACE_VOID(os_protect,address,length,,prot);
 
     if (addr_in_mmapped_core(address)) {
+#ifdef COMPOSITE_MAPPING
+	while (length) {
+	    os_vm_size_t chunk = PTR_ALIGN_UP(address+1,os_vm_mmap_unit_size) - address;
+	    if (chunk > length) chunk = length;
+	    AVER(VirtualProtect(address, chunk, os_mmap_protect_modes[prot],
+				&old_prot));
+	    length -= chunk;
+	    address += chunk;
+	}
+#else
         AVER(VirtualProtect(address, length, os_mmap_protect_modes[prot],
                             &old_prot));
+#endif
     } else {
+	if (mwwFlag) return;
         AVER(VirtualProtect(address, length, os_protect_modes[prot], &old_prot)||
              (VirtualAlloc(address, length, MEM_COMMIT,os_protect_modes[prot]) &&
               VirtualProtect(address, length, os_protect_modes[prot], &old_prot)));
@@ -2275,6 +2473,10 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 	}
 	int index = find_page_index(fault_address);
 	if (index != -1) {
+	    if (addr_in_mmapped_core(fault_address) && mwwFlag &&
+		!MMAP_UNSHARED_BIT(fault_address)) {
+		SET_MMAP_FAULTED_BIT(fault_address);
+	    }
 	    if (page_table[index].write_protected) {
 		gencgc_handle_wp_violation(fault_address);
 	    } else {

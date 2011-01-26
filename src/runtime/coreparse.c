@@ -40,7 +40,7 @@
 #include "genesis/sap.h"
 #include "pthread-lutex.h"
 #endif
-
+#include "cpputil.h"
 unsigned char build_id[] =
 #include "../../output/build-id.tmp"
 ;
@@ -232,6 +232,7 @@ process_directory(int fd, lispobj *ptr, int count, os_vm_offset_t file_offset)
                 lose("warning: core/runtime address mismatch: DYNAMIC_SPACE_START\n");
             }
 #endif
+	    free_pointer = PTR_ALIGN_UP(free_pointer,os_vm_mmap_unit_size);
 #if defined(ALLOCATION_POINTER)
             SetSymbolValue(ALLOCATION_POINTER, (lispobj)free_pointer,0);
 #else
