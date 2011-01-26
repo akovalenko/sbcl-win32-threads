@@ -1608,6 +1608,7 @@ os_vm_address_t
 os_validate(os_vm_address_t addr, os_vm_size_t len)
 {
     MEMORY_BASIC_INFORMATION mem_info;
+    DWORD memWatch = mwwFlag;
 
     /* align len to page boundary for any operation (especially
      * important as we're going to experiment with larger "pages" than
@@ -1657,9 +1658,13 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
         fprintf(stderr, "validation of reserved space too short.\n");
         fflush(stderr);
     }
+    
+    if (!(((u64)addr>=DYNAMIC_SPACE_START) && ((u64)addr<DYNAMIC_SPACE_END)))
+	memWatch = 0u;
+	
 
     if(!AVERLAX(VirtualAlloc(addr, len, (mem_info.State == MEM_RESERVE)?
-                             MEM_COMMIT: MEM_RESERVE|mwwFlag, PAGE_EXECUTE_READWRITE)))
+                             MEM_COMMIT: MEM_RESERVE|memWatch, PAGE_EXECUTE_READWRITE)))
         return 0;
 
     return addr;
