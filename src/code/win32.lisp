@@ -38,16 +38,7 @@
 
 ;;; Retrieve the calling thread's last-error code value.  The
 ;;; last-error code is maintained on a per-thread basis.
-#!-sb-gc-safepoint
 (define-alien-routine ("GetLastError" get-last-error) dword)
-#!+sb-gc-safepoint
-(declaim (inline get-last-error))
-#!+sb-gc-safepoint
-(defun get-last-error ()
-  (declare (optimize (speed 3) (safety 0) (debug 0)))
-  (sap-int
-   (sb!vm::current-thread-offset-sap
-    sb!vm::thread-foreign-context-lasterror-slot)))
 
 ;;; Flag constants for FORMAT-MESSAGE.
 (defconstant format-message-from-system #x1000)

@@ -447,6 +447,4 @@
   (pc-around-foreign-call :c-type "lispobj *" :length 1)
   #!+sb-gc-safepoint
   (gc-safepoint-context :c-type "os_context_t *" :length 1)
-  #!+(and win32 sb-gc-safepoint)
-  (foreign-context-lasterror :c-type "lispobj" :length 1)
   (interrupt-contexts :c-type "os_context_t *" :rest-p t))

@@ -2341,10 +2341,8 @@ handle_exception(EXCEPTION_RECORD *exception_record,
     os_context_t ctx, *oldctx;
     struct thread* self = arch_os_get_current_thread();
     int contextual_fpu_state = self ? self->in_lisp_fpu_mode : 0;
-
-    if (self && self->csp_around_foreign_call) {
-	self->foreign_context_lasterror = GetLastError();
-    }
+    DWORD lastError = GetLastError();
+    DWORD lastErrno = errno;
 
     if (self && context &&
 	(((DWORD)self->control_stack_end)-0x10000)>context->Esp) {
@@ -2669,11 +2667,8 @@ complain:
 
     /* Common return point. */
 finish:
-    if (self) {
-	self->in_lisp_fpu_mode = contextual_fpu_state;
-	if (self->csp_around_foreign_call)
-	    SetLastError(self->foreign_context_lasterror);
-    }
+    errno = lastErrno;
+    SetLastError(lastError);
     return disposition;
 }
 

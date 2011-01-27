@@ -4792,8 +4792,18 @@ general_alloc(long nbytes, int page_type_flag)
 lispobj *
 alloc(long nbytes)
 {
+  lispobj* result;
+#ifdef LISP_FEATURE_WIN32
+  DWORD lastError = GetLastError();
+  int lastErrno = errno;
+#endif  
   gc_assert(get_pseudo_atomic_atomic(arch_os_get_current_thread()));
-  return general_alloc(nbytes, BOXED_PAGE_FLAG);
+  result = general_alloc(nbytes, BOXED_PAGE_FLAG);
+#ifdef LISP_FEATURE_WIN32
+  SetLastError(lastError);
+  errno = lastErrno;
+#endif  
+  return result;
 }
 
 /*

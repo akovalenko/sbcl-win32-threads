@@ -1420,8 +1420,7 @@ void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
     if (maybe_wake)
 	gc_wake_wakeable();
     
- finish:
-    SetLastError(self->foreign_context_lasterror);
+ finish:;
     /* Proceed to foreign code, while possibly being in suspended
        state (!) or phase2-blocker. Foreign code shouldn't touch memory
        movable by GC; when foreign call is exited, it should wait for
@@ -1434,9 +1433,6 @@ void gc_leave_foreign_call()
    struct thread* self = arch_os_get_current_thread();
    int maybe_wake = 0;
 
-   /* Common sequence */
-   self->foreign_context_lasterror = GetLastError();
-   
    /* Interrupt signal pending */
    if (self->os_thread->pending_signal_set)
        goto full_locking;
@@ -1523,8 +1519,7 @@ void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
     if (maybe_wake)
 	gc_wake_wakeable();
     
- finish:
-    SetLastError(self->foreign_context_lasterror);
+finish:;
     /* Proceed to foreign code, while possibly being in suspended
        state (!) or phase2-blocker. Foreign code shouldn't touch memory
        movable by GC; when foreign call is exited, it should wait for
@@ -1537,7 +1532,6 @@ void gc_leave_foreign_call()
     struct thread* self = arch_os_get_current_thread();
 
     boolean waitp = 0;
-    self->foreign_context_lasterror = GetLastError();
 
     /* shorthand: no locking (and no pending interrupt/gc check)
        when GC phase 2 is enqueued after this thread. */
