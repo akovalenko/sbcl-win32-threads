@@ -1413,14 +1413,92 @@ void os_init(char *argv[], char *envp[])
 
 unsigned long core_mmap_unshared_pages = 0;
 
+/* Various aspects of GetWriteWatch usage: */
+
+/* if defined: reset write watch data on WP request (from GC);
+ * otherwise: reset on os_commit_wp_violation_data() */
+#define WRITE_WATCH_RESET_ON_WP
+
+
+/* How many addresses request from each GetWriteWatch() [notice 4K
+ * granularity].
+ *
+ * In WRITE_WATCH_RESET_ON_WP mode, it arbitrates between doing a lot
+ * of syscalls and getting a lot of garbage: bulk size 1 will give one
+ * request per WP page (not touching other page);
+ *
+ * In !defined(WRITE_WATCH_RESET_ON_WP) mode, the consequences may be
+ * more significant -- for running non-GC code as well, not only for
+ * GC performance. To be tested. */
+
+#define WRITE_WATCH_BULK_SIZE 256
+
+static boolean narrow_address_range_to_wp(LPVOID* startptr, SIZE_T* sizeptr)
+{
+    int index, wp_min=-1,wp_max=-1;
+    for (index = find_page_index(*startptr); index <page_table_pages; ++index) {
+	if (page_table[index].write_protected) {
+	    if (wp_min==-1)
+		wp_min = index;
+	    wp_max = index;
+	}
+    }
+    if (wp_min == -1) {
+	return 0;
+    }
+    *startptr = page_address(wp_min);
+    *sizeptr = page_address(wp_max) - page_address(wp_min) + BACKEND_PAGE_BYTES;
+    return 1;
+}
+
+static os_vm_address_t commit_wp_violations(LPVOID* addrs, ULONG_PTR naddrs)
+{
+    ULONG_PTR i;
+    os_vm_address_t nextaddr = 0;
+    
+    for (i=0;i<naddrs; ++i) {
+	LPVOID fault_address = addrs[i];
+	int index = find_page_index(fault_address);
+	if (page_table[index].write_protected) {
+	    gencgc_handle_wp_violation(fault_address);
+	}
+	nextaddr = fault_address + os_vm_page_size; 
+    }
+    return nextaddr;
+}
+
 void os_commit_wp_violation_data(boolean call_gc)
 {
     LPVOID ww_start = core_mmap_end ? core_mmap_end : (LPVOID)DYNAMIC_SPACE_START;
-    SIZE_T ww_size = ((LPVOID)DYNAMIC_SPACE_END) - ww_start;
+    SIZE_T ww_size;
+#ifdef WRITE_WATCH_RESET_ON_WP
+    if (!narrow_address_range_to_wp(&ww_start,&ww_size))
+	return;
+#endif
     
     if (mwwFlag) {
+#ifdef WRITE_WATCH_RESET_ON_WP
 	if (call_gc) {
-	    LPVOID writeAddrs[4096];
+	    LPVOID writeAddrs[WRITE_WATCH_BULK_SIZE];
+	    ULONG_PTR nAddrs;
+	    unsigned int total = 0;
+	    unsigned int i;
+	    const ULONG_PTR maxAddrs = sizeof(writeAddrs)/sizeof(writeAddrs[0]);
+	    ULONG granularity;
+	    do {
+		nAddrs = maxAddrs;
+		AVERLAX(!ptr_GetWriteWatch(0,
+				  ww_start,ww_size,
+					  writeAddrs,&nAddrs,&granularity));
+		ww_start = commit_wp_violations(writeAddrs,nAddrs);
+		total += nAddrs;
+	    } while(nAddrs == maxAddrs &&
+		    narrow_address_range_to_wp(&ww_start,&ww_size));
+	    odxprint(pagefaults,"Write watch caught %u pages\n",total);
+	}
+#else
+	if (call_gc) {
+	    LPVOID writeAddrs[WRITE_WATCH_BULK_SIZE];
 	    ULONG_PTR nAddrs;
 	    unsigned int total = 0;
 	    unsigned int i;
@@ -1431,19 +1509,15 @@ void os_commit_wp_violation_data(boolean call_gc)
 		ptr_GetWriteWatch(WRITE_WATCH_FLAG_RESET,
 				  ww_start,ww_size,
 				  writeAddrs,&nAddrs,&granularity);
-		for (i=0;i<nAddrs; ++i) {
-		    LPVOID fault_address = writeAddrs[i];
-		    int index = find_page_index(fault_address);
-		    if (page_table[index].write_protected) {
-			gencgc_handle_wp_violation(fault_address);
-		    }
-		}
+		commit_wp_violations(writeAddrs,nAddrs);
 		total += nAddrs;
 	    } while(nAddrs == maxAddrs);
 	    odxprint(pagefaults,"Write watch caught %u pages\n",total);
 	} else {
 	    ptr_ResetWriteWatch(ww_start,ww_size);
 	}
+#endif
+	
 #ifdef COMPOSITE_MAPPING
 	if (core_mmap_end && mwwFlag) {
 	    for (ww_start = (LPVOID)DYNAMIC_SPACE_START;
@@ -1870,11 +1944,16 @@ os_protect(os_vm_address_t address, os_vm_size_t length, os_vm_prot_t prot)
                             &old_prot));
 #endif
     } else {
-	if (mwwFlag)
+	if (mwwFlag) {
+#ifdef WRITE_WATCH_RESET_ON_WP
+	    ptr_ResetWriteWatch(address,length);
+#endif
 	    return;
-        AVER(VirtualProtect(address, length, os_protect_modes[prot], &old_prot)||
-             (VirtualAlloc(address, length, MEM_COMMIT,os_protect_modes[prot]) &&
-              VirtualProtect(address, length, os_protect_modes[prot], &old_prot)));
+	} else {
+	    AVER(VirtualProtect(address, length, os_protect_modes[prot], &old_prot)||
+		 (VirtualAlloc(address, length, MEM_COMMIT,os_protect_modes[prot]) &&
+		  VirtualProtect(address, length, os_protect_modes[prot], &old_prot)));
+	}
     }
 }
 

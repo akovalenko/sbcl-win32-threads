@@ -198,6 +198,22 @@ void pthread_np_suspend(pthread_t thread)
   }
 }
 
+/* Momentary suspend/getcontext/resume without locking or preventing
+   fiber reentrance.  This call is for asymmetric synchronization,
+   ensuring that the thread sees global state before doing any
+   globally visible stores.
+*/
+void pthread_np_serialize(pthread_t thread)
+{
+    CONTEXT winctx;
+    winctx.ContextFlags = CONTEXT_INTEGER;
+    if (!thread->created_as_fiber) {
+	SuspendThread(thread->handle);
+	GetThreadContext(thread->handle,&winctx);
+	ResumeThread(thread->handle);
+    }
+}
+
 int pthread_np_get_thread_context(pthread_t thread, CONTEXT* context)
 {
   context->ContextFlags = CONTEXT_FULL;

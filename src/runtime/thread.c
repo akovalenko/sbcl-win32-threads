@@ -1403,8 +1403,8 @@ void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
     self->pc_around_foreign_call = pc;
     COMPILER_BARRIER;
     self->csp_around_foreign_call = csp;
-    COMPILER_BARRIER;
-    __sync_synchronize();	/* :-( */
+    /* COMPILER_BARRIER; */
+    __sync_synchronize();
     if (!suspend_info.suspend)
 	goto finish;
     if (self->state == STATE_PHASE2_BLOCKER &&
@@ -1451,7 +1451,8 @@ void gc_leave_foreign_call()
       gc-blocker. */
    
    self->gc_safepoint_context = (void*)-1;
-   __sync_synchronize();	/* :-( */
+
+    __sync_synchronize();
 
    if (suspend_info.suspend)
        goto full_locking;
@@ -1945,6 +1946,12 @@ void gc_stop_the_world()
 
     for_each_thread(p) {
 	if (p==th) continue;
+	/* If we requested pthread_np_serialize(p->os_thread) here,
+	   the main control flow could go without
+	   __sync_synchronize(). However, current implementation of
+	   pthread_np_serialize (with SuspendThread and ResumeThread)
+	   causes problems on wine. */
+	
 	const char *oldss = dyndebug_safepoints ?
 	    get_thread_state_as_string(p) : "[?]";
 	if (move_thread_state(p,STATE_PHASE1_BLOCKER,

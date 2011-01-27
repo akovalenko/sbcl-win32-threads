@@ -95,6 +95,14 @@ int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
 
 void pthread_np_suspend(pthread_t thread);
 void pthread_np_suspend_with_signal(pthread_t thread, int signum);
+
+/* Momentary suspend/getcontext/resume without locking or preventing
+   fiber reentrance.  This call is for asymmetric synchronization,
+   ensuring that the thread sees global state before doing any
+   globally visible stores.
+*/
+void pthread_np_serialize(pthread_t thread);
+
 void pthread_np_resume(pthread_t thread);
 void pthread_np_request_interruption(pthread_t thread);
 CONTEXT* pthread_np_publish_context(CONTEXT* maybe_save_old_one);
