@@ -2667,6 +2667,8 @@ complain:
 
     /* Common return point. */
 finish:
+    if (self)
+	self->in_lisp_fpu_mode = contextual_fpu_state;
     errno = lastErrno;
     SetLastError(lastError);
     return disposition;
