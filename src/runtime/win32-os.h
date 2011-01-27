@@ -121,4 +121,15 @@ void odprintf_(const char * fmt, ...);
 
 #define bcopy(src,dest,n) memmove(dest,src,n)
 
+#define PUSH_ERRNO				\
+    {						\
+    DWORD sbcl__lastError = GetLastError();	\
+    int sbcl__lastErrno = errno;		\
+    
+#define POP_ERRNO				\
+    errno = sbcl__lastErrno;			\
+    SetLastError(sbcl__lastError);		\
+    }
+
+
 #endif  /* SBCL_INCLUDED_WIN32_OS_H */

@@ -35,6 +35,17 @@
 #define os_number_of_processors 0
 #endif
 
+#ifndef PUSH_ERRNO
+#define PUSH_ERRNO				\
+    {						\
+    int sbcl__lastErrno = errno;		\
+
+#define POP_ERRNO				\
+    errno = sbcl__lastErrno;			\
+    }
+#endif
+
+
 #ifndef THREAD_ALIEN_RESERVE
 #define THREAD_ALIEN_RESERVE (0)
 #endif

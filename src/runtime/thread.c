@@ -1411,20 +1411,16 @@ void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
 	SymbolTlValue(GC_INHIBIT,self)==T)
 	goto finish;
 
-    {
-	DWORD lastError = GetLastError();
-	int lastErrno = errno;
-	pthread_mutex_lock(self->state_lock);
-	self->csp_around_foreign_call = csp;
-	self->pc_around_foreign_call = pc;
-	maybe_wake = gc_adjust_thread_state(self);
-	pthread_mutex_unlock(self->state_lock);
+    PUSH_ERRNO;
+    pthread_mutex_lock(self->state_lock);
+    self->csp_around_foreign_call = csp;
+    self->pc_around_foreign_call = pc;
+    maybe_wake = gc_adjust_thread_state(self);
+    pthread_mutex_unlock(self->state_lock);
 
-	if (maybe_wake)
-	    gc_wake_wakeable();
-	errno = lastErrno;
-	SetLastError(lastError);
-    }
+    if (maybe_wake)
+	gc_wake_wakeable();
+    POP_ERRNO;
  finish:;
     /* Proceed to foreign code, while possibly being in suspended
        state (!) or phase2-blocker. Foreign code shouldn't touch memory
@@ -1485,21 +1481,16 @@ void gc_leave_foreign_call()
        return;
    }
 
-   {
-       DWORD lastError = GetLastError();
-       int lastErrno = errno;
-
-       pthread_mutex_lock(self->state_lock);
-       gc_accept_thread_state(gc_adjust_thread_state(self));
-       /* Then unpublish context data */
-       self->csp_around_foreign_call = NULL;
-       self->pc_around_foreign_call = NULL;
-       self->gc_safepoint_context = NULL;
-       pthread_mutex_unlock(self->state_lock);
-       while (check_pending_gc()||check_pending_interrupts(NULL));
-       errno = lastErrno;
-       SetLastError(lastError);
-   }
+   PUSH_ERRNO;
+   pthread_mutex_lock(self->state_lock);
+   gc_accept_thread_state(gc_adjust_thread_state(self));
+   /* Then unpublish context data */
+   self->csp_around_foreign_call = NULL;
+   self->pc_around_foreign_call = NULL;
+   self->gc_safepoint_context = NULL;
+   pthread_mutex_unlock(self->state_lock);
+   while (check_pending_gc()||check_pending_interrupts(NULL));
+   POP_ERRNO;
 }
 
 
