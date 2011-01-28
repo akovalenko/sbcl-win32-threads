@@ -182,11 +182,10 @@
 (defun handle-listen (handle)
   (with-alien ((avail dword)
                (buf (array char #.input-record-size)))
-    (when (and (= 3 (logand 3 handle))
-	   (peek-console-input handle
-			       (cast buf (* t))
-			       1 (addr avail)))
-      (return-from handle-listen (plusp avail)))
+    (when (= 3 (logand 3 handle))
+      (return-from handle-listen
+	(alien-funcall (extern-alien "win32_tty_listen" (function boolean handle))
+		       handle)))
     (when (peek-named-pipe handle nil 0 nil (addr avail) nil)
       (return-from handle-listen (plusp avail)))
     (let ((res (comm-input-available handle)))
