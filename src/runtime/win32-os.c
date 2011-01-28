@@ -2979,6 +2979,26 @@ int win32_write_unicode_console(HANDLE handle, void * buf, int count)
  * input event in PeekConsole queue; unless there is such an event,
  * ReadConsole is not triggered by LISTEN.
  *
+ * We _could_ make win32_tty_listen check for buffered #\Return
+ * before requesting ReadConsole, but it would break a common CL
+ * idiom for doing things in background, i.e. code like this:
+ *
+ * (PROGN (LOOP DOING (FUNCTION-TAKING-SOME-MILLISECONDS) UNTIL (LISTEN))
+ *        .... (READ-CHAR) or (READ-LINE)... ;; handle user
+ *                                           ;; input when needed
+ *
+ * As stated above, our main goal is ensuring that there _is_
+ * something to read when LISTEN returns true; thus only a completed
+ * line of input makes LISTEN return true. Given that, if LISTEN would
+ * look for #\Return before requesting ReadConsole, the entire line
+ * would have to be typed without line editing and echo output, and
+ * that's inconvenient.
+ *
+ * Former SBCL behavior was to return true from (LISTEN) as soon as
+ * there was some keyboard event buffered; the code above, obviously,
+ * would then hang on (READ-CHAR), not calling
+ * (FUNCTION-TAKING-SOME-MILLISECONDS) regularly any more.
+ *
  * 5. Console-reading Lisp thread now may be interrupted immediately;
  * ReadConsole call itself, however, continues until the line is
  * entered.
