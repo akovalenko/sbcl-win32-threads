@@ -447,4 +447,6 @@
   (pc-around-foreign-call :c-type "lispobj *" :length 1)
   #!+sb-gc-safepoint
   (gc-safepoint-context :c-type "os_context_t *" :length 1)
+  #!+win32
+  (synchronous-io-handle-and-flag :c-type "HANDLE" :length 1)
   (interrupt-contexts :c-type "os_context_t *" :rest-p t))

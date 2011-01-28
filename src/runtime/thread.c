@@ -788,6 +788,7 @@ create_thread_struct(lispobj initial_function) {
     th->gc_safepoint_context = 0;
     th->csp_around_foreign_call = 0;
     th->pc_around_foreign_call = 0;
+    th->synchronous_io_handle_and_flag = 0;
 #endif
     th->stepping = NIL;
     return th;
@@ -969,7 +970,10 @@ static inline void unlock_suspend_info(const char * file, int line)
 
 void wake_thread_io(struct thread * thread)
 {
+#ifdef LISP_FEATURE_WIN32
     SetEvent(thread->private_events.events[1]);
+    win32_maybe_interrupt_io(thread);
+#endif
 }
 
 boolean wake_needed(struct thread * thread)

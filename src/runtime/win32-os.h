@@ -89,6 +89,8 @@ void os_link_runtime();
 void establish_c_fpu_world();
 void os_commit_wp_violation_data(boolean call_gc);
 
+boolean win32_maybe_interrupt_io(void* thread);
+
 /* Temporal per-thread storage for non-lisp values, that I constantly
    need on Win32 to run code snippets injected by SEH handler and
    continue into normal code (yes, :sb-auto-fpu-switch is hackish).

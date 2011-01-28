@@ -1371,6 +1371,27 @@ char mmap_unshared[(DYNAMIC_SPACE_END-DYNAMIC_SPACE_START)/BACKEND_PAGE_BYTES];
 typeof(GetWriteWatch) *ptr_GetWriteWatch;
 typeof(ResetWriteWatch) *ptr_ResetWriteWatch;
 
+BOOL WINAPI CancelIoEx(HANDLE handle, LPOVERLAPPED overlapped);
+typeof(CancelIoEx) *ptr_CancelIoEx;
+		   
+#define RESOLVE(hmodule,fn)			\
+    do {					\
+	ptr_##fn = (typeof(ptr_##fn))		\
+	    GetProcAddress(hmodule,#fn);	\
+    } while (0)
+
+static void resolve_optional_imports()
+{
+    HMODULE kernel32 = GetModuleHandleA("kernel32");
+    if (kernel32) {
+	RESOLVE(kernel32,GetWriteWatch);
+	RESOLVE(kernel32,ResetWriteWatch);
+	RESOLVE(kernel32,CancelIoEx);
+    }
+}
+
+#undef RESOLVE
+
 int os_number_of_processors = 1;
 
 DWORD mwwFlag = 0u;
@@ -1402,12 +1423,7 @@ void os_init(char *argv[], char *envp[])
     pthread_mutex_init(&fiber_dead_mutex,NULL);
     alloc_gc_page();
 #endif
-    ptr_GetWriteWatch =
-	(typeof(ptr_GetWriteWatch))
-	GetProcAddress(GetModuleHandleA("kernel32"),"GetWriteWatch");
-    ptr_ResetWriteWatch =
-	(typeof(ptr_ResetWriteWatch))
-	GetProcAddress(GetModuleHandleA("kernel32"),"ResetWriteWatch");
+    resolve_optional_imports();
     mwwFlag = (ptr_GetWriteWatch && ptr_ResetWriteWatch) ? MEM_WRITE_WATCH : 0u;
 }
 
@@ -2841,47 +2857,53 @@ int console_handle_p(HANDLE handle)
 	((((int)(intptr_t)handle)&3)==3);
 }
 
-struct console_input_data {
-    pthread_mutex_t lock;
-    HANDLE handle;
-    int readers;
-} console_input_data = {PTHREAD_MUTEX_INITIALIZER, INVALID_HANDLE_VALUE, 0};
-
-void win32_interrupt_console_input()
+/* Atomically mark current thread as (probably) doing synchronous I/O
+ * on handle, if no cancellation is requested yet (and return TRUE),
+ * otherwise clear thread's I/O cancellation flag and return false.
+ */
+static boolean io_begin_interruptible(HANDLE handle)
 {
-    HANDLE newInstance;
-    AVER(0==pthread_mutex_lock(&console_input_data.lock));
-    AVER(DuplicateHandle(GetCurrentProcess(),console_input_data.handle,
-                         GetCurrentProcess(),&newInstance,
-                         0, FALSE, DUPLICATE_CLOSE_SOURCE|DUPLICATE_SAME_ACCESS));
-    console_input_data.handle = newInstance;
-    AVER(0==pthread_mutex_unlock(&console_input_data.lock));
+    /* No point in doing it unless OS supports cancellation from other
+     * threads */
+    if (!ptr_CancelIoEx)
+	return 1;
+
+    if (InterlockedCompareExchangePointer((volatile LPVOID *)
+					  &this_thread->synchronous_io_handle_and_flag,
+					  (LPVOID)handle, 0))
+    {
+	ResetEvent(this_thread->private_events.events[0]);
+	this_thread->synchronous_io_handle_and_flag = 0;
+	return 0;
+    } else {
+	return 1;
+    }
 }
 
-void win32_start_console_input(HANDLE original, HANDLE *target)
+/* Unmark current thread as (probably) doing synchronous I/O; if an
+ * I/O cancellation was requested, postpone it until next
+ * io_begin_interruptible */
+static void io_end_interruptible(HANDLE handle)
 {
-    /* AVER(0==pthread_mutex_lock(&console_input_data.lock)); */
-    /* if (!console_input_data.readers) { */
-    /*     AVER(DuplicateHandle(GetCurrentProcess(),original, */
-    /*                          GetCurrentProcess(),&console_input_data.handle, */
-    /*                          0, FALSE, DUPLICATE_SAME_ACCESS)); */
-    /* } */
-    /* *target = console_input_data.handle; */
-    /* (this_thread)->waiting_console_handle = console_input_data.handle; */
-    /* ++ console_input_data.readers; */
-    /* AVER(0==pthread_mutex_unlock(&console_input_data.lock)); */
-    *target = original;
-
+    if (!ptr_CancelIoEx)
+	return;
+    InterlockedCompareExchangePointer((volatile LPVOID *)
+				      &this_thread->synchronous_io_handle_and_flag,
+				      0,(LPVOID)handle);
 }
 
-void win32_end_console_input()
+boolean win32_maybe_interrupt_io(void* thread)
 {
-    /* AVER(0==pthread_mutex_lock(&console_input_data.lock)); */
-    /* if (!(-- console_input_data.readers)) { */
-    /*     CloseHandle(console_input_data.handle); */
-    /* }; */
-    /* (this_thread)->waiting_console_handle = INVALID_HANDLE_VALUE; */
-    /* AVER(0==pthread_mutex_unlock(&console_input_data.lock)); */
+    struct thread *th = thread;
+    if (ptr_CancelIoEx) {
+	HANDLE h = (HANDLE)
+	    InterlockedExchangePointer((volatile LPVOID *)
+				       &th->synchronous_io_handle_and_flag,
+				       (LPVOID)INVALID_HANDLE_VALUE);
+	return (h && (h!=INVALID_HANDLE_VALUE) && ptr_CancelIoEx(h,NULL));
+    } else {
+	return 0;
+    }
 }
 
 /* Documented limit for ReadConsole/WriteConsole is 64K bytes.
@@ -2893,10 +2915,18 @@ int win32_write_unicode_console(HANDLE handle, void * buf, int count)
 {
     DWORD written = 0;
     DWORD nchars;
+    BOOL result;
     nchars = count>>1;
     if (nchars>MAX_CONSOLE_TCHARS) nchars = MAX_CONSOLE_TCHARS;
-    
-    if (WriteConsoleW(handle,buf,count>>1,&written,NULL)) {
+
+    if (!io_begin_interruptible(handle)) {
+	errno = EINTR;
+	return -1;
+    }
+    result = WriteConsoleW(handle,buf,count>>1,&written,NULL);
+    io_end_interruptible(handle);
+
+    if (result) {
         if (!written) {
             errno = EINTR;
             return -1;
@@ -2906,7 +2936,7 @@ int win32_write_unicode_console(HANDLE handle, void * buf, int count)
     } else {
 	DWORD err = GetLastError();
 	odxprint(io,"WriteConsole fails => %u\n", err);
-        errno = EIO;
+        errno = (err==ERROR_OPERATION_ABORTED ? EINTR : EIO);
         return -1;
     }
 }
@@ -2921,14 +2951,17 @@ again:
     nchars = count>>1;
     if (nchars>MAX_CONSOLE_TCHARS) nchars = MAX_CONSOLE_TCHARS;
     
-    win32_start_console_input(handle,&ownhandle);
     if (WaitForSingleObject(this_thread->private_events.events[1],
 			    0)!=WAIT_TIMEOUT) {
 	errno = EINTR;
 	return -1;
     }
-    ok = ReadConsoleW(ownhandle,buf,nchars,&nread,NULL);
-    win32_end_console_input();
+    if (!io_begin_interruptible(handle)) {
+	errno = EINTR;
+	return -1;
+    }
+    ok = ReadConsoleW(handle,buf,nchars,&nread,NULL);
+    io_end_interruptible(handle);
     if (ok) {
         if (!nread) {
 	    DWORD err = GetLastError();
@@ -2953,7 +2986,7 @@ again:
     } else {
 	DWORD err = GetLastError();
 	odxprint(io,"ReadConsole fails => %u\n", err);
-        errno = EIO;
+        errno = (err==ERROR_OPERATION_ABORTED ? EINTR : EIO);
         return -1;
     }
 }
@@ -2969,6 +3002,7 @@ int win32_unix_write(int fd, void * buf, int count)
     BOOL waitInGOR;
     LARGE_INTEGER file_position;
     BOOL seekable;
+    BOOL ok;
 
     odprintf("write(%d, 0x%p, %d)", fd, buf, count);
     handle =(HANDLE)_get_osfhandle(fd);
@@ -2988,8 +3022,14 @@ int win32_unix_write(int fd, void * buf, int count)
         overlapped.Offset = 0;
         overlapped.OffsetHigh = 0;
     }
-    if (WriteFile(handle, buf, count, &written_bytes,
-                  &overlapped)) {
+    if (!io_begin_interruptible(handle)) {
+	errno = EINTR;
+	return -1;
+    }
+    ok = WriteFile(handle, buf, count, &written_bytes, &overlapped);
+    io_end_interruptible(handle);
+    
+    if (ok) {
         odprintf("write(%d, 0x%p, %d) immeditately wrote %d bytes",
                  fd, buf, count, written_bytes);
         goto done_something;
@@ -3040,6 +3080,9 @@ int win32_unix_read(int fd, void * buf, int count)
 
     odprintf("read(%d, 0x%p, %d)", fd, buf, count);
     handle = (HANDLE)_get_osfhandle(fd);
+
+    
+
     if (console_handle_p(handle)) {
         /* 1. Console is a singleton.
            2. The only way to cancel console handle I/O is to close it.
@@ -3061,7 +3104,12 @@ int win32_unix_read(int fd, void * buf, int count)
         overlapped.Offset = 0;
         overlapped.OffsetHigh = 0;
     }
+    if (!io_begin_interruptible(handle)) {
+	errno = EINTR;
+	return -1;
+    }
     ok = ReadFile(handle,buf,count,&read_bytes, &overlapped);
+    io_end_interruptible(handle);
     if (ok) {
         /* immediately */
         goto done_something;

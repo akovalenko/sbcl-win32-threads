@@ -304,10 +304,12 @@
                                ;; thread might have moved head...
                                (setf (buffer-head obuf) (+ count head))
                                (queue-or-wait))
-                              #!-win32
+			       #!-win32
                               ((eql errno sb!unix:ewouldblock)
                                ;; Blocking, queue or wair.
                                (queue-or-wait))
+			       ;; if interrupted on win32, just try again
+			      #!+win32 ((eql errno sb!unix:eintr))
                               (t
                                (simple-stream-perror "Couldn't write to ~s"
                                                      stream errno)))))))))))))
