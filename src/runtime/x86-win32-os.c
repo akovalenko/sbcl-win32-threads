@@ -62,7 +62,11 @@ int arch_os_thread_init(struct thread *thread)
             fprintf(stderr, "VirtualQuery: 0x%lx.\n", GetLastError());
             lose("Could not query stack memory information.");
         }
-        cur_stack_start = stack_memory.AllocationBase;
+
+        cur_stack_start = stack_memory.AllocationBase
+	    /* OS provides its own guard page at the stack start,
+	       and we have ours. Do you really want to see how they interact? */
+	    + os_vm_page_size;
 
         /* We use top_exception_frame rather than cur_stack_end to
          * elide the last few (boring) stack entries at the bottom of

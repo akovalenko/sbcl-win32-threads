@@ -838,6 +838,7 @@ interrupt_handler_pending_p(void)
     return (data->pending_handler != 0);
 }
 
+#ifndef LISP_FEATURE_SB_GC_SAFEPOINT
 void
 interrupt_handle_pending(os_context_t *context)
 {
@@ -1001,6 +1002,7 @@ interrupt_handle_pending(os_context_t *context)
      * when to call receive-pending-interrupt are not exact. */
     FSHOW_SIGNAL((stderr, "/exiting interrupt_handle_pending\n"));
 }
+#endif
 
 
 void
@@ -1396,6 +1398,7 @@ arrange_return_to_lisp_function(os_context_t *context, lispobj function)
      */
 
     u32 *sp=(u32 *)*os_context_register_addr(context,reg_ESP);
+
 
 #if defined(LISP_FEATURE_DARWIN)
     u32 *register_save_area = (u32 *)os_validate(0, 0x40);

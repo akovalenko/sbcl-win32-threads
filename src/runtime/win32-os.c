@@ -1584,6 +1584,16 @@ void os_commit_wp_violation_data(boolean call_gc)
     }
 }
 
+static inline boolean local_thread_stack_address_p(os_vm_address_t address)
+{
+    return this_thread &&
+	(((((u64)address >= (u64)this_thread->os_address) &&
+	   ((u64)address < ((u64)this_thread)))||
+
+	  (((u64)address >= (u64)this_thread->control_stack_start)&&
+	   ((u64)address < (u64)this_thread->control_stack_end))));
+}
+
 
 
 static DWORD os_protect_modes[8] = {
@@ -1942,6 +1952,7 @@ void
 os_protect(os_vm_address_t address, os_vm_size_t length, os_vm_prot_t prot)
 {
     DWORD old_prot;
+    boolean localp = local_thread_stack_address_p(address);
 
     RECURSIVE_REDUCE_TO_ONE_SPACE_VOID(os_protect,address,length,,prot);
 
@@ -1960,15 +1971,17 @@ os_protect(os_vm_address_t address, os_vm_size_t length, os_vm_prot_t prot)
                             &old_prot));
 #endif
     } else {
-	if (mwwFlag) {
+	if (mwwFlag && !localp) {
 #ifdef WRITE_WATCH_RESET_ON_WP
 	    ptr_ResetWriteWatch(address,length);
 #endif
 	    return;
 	} else {
-	    AVER(VirtualProtect(address, length, os_protect_modes[prot], &old_prot)||
-		 (VirtualAlloc(address, length, MEM_COMMIT,os_protect_modes[prot]) &&
-		  VirtualProtect(address, length, os_protect_modes[prot], &old_prot)));
+	    DWORD new_prot = os_protect_modes[prot];
+
+	    AVER(VirtualProtect(address, length, new_prot, &old_prot)||
+		 (VirtualAlloc(address, length, MEM_COMMIT, new_prot) &&
+		  VirtualProtect(address, length, new_prot, &old_prot)));
 	}
     }
 }
@@ -2359,18 +2372,6 @@ handle_exception(EXCEPTION_RECORD *exception_record,
     int contextual_fpu_state = self ? self->in_lisp_fpu_mode : 0;
     DWORD lastError = GetLastError();
     DWORD lastErrno = errno;
-
-    if (self && context &&
-	(((DWORD)self->control_stack_end)-0x10000)>context->Esp) {
-	fprintf(stderr,
-		"Overflowing in SEH, thread %p\n"
-		"EIP %p Faddr %p code %p\n",
-		self,
-		context->Eip,
-		fault_address,
-		code);
-	ExitProcess(0);
-    }
     
     if (dyndebug_lazy_fpu)
     {
@@ -2549,6 +2550,12 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 
 	goto finish;
     }
+    else if (exception_record->ExceptionCode == STATUS_GUARD_PAGE_VIOLATION) {
+	BEGIN_GC_UNSAFE_CODE;
+        if (handle_guard_page_triggered(&ctx, fault_address))
+            goto finish;
+	END_GC_UNSAFE_CODE;
+    }
     else if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
         odxprint(pagefaults,
 		     "SEGV. ThSap %p, Eip %p, Esp %p, Addr %p Access %d\n",
@@ -2558,12 +2565,20 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 		     fault_address,
 		     exception_record->ExceptionInformation[0]);
 	if (self) {
+	    if (local_thread_stack_address_p(fault_address)&&
+	    	handle_guard_page_triggered(&ctx, fault_address)) {
+	    	BEGIN_GC_UNSAFE_CODE;
+	    	goto finish;
+	    	END_GC_UNSAFE_CODE;
+	    }
+
+
 	    if (((lispobj)fault_address)<0xFFFF) {
 		fprintf(stderr,
 			"Low page access (?) thread %p\n"
-			"(addr %p, EIP %p ESP %p EBP %p)\n",
-			self,
-			fault_address,
+			"(addr 0x%p, EIP 0x%08lx ESP 0x%08lx EBP 0x%08lx)\n",
+			    self,
+			    fault_address,
 			    context->Eip,
 			    context->Esp,
 			    context->Ebp);
@@ -2577,6 +2592,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 	    gc_maybe_stop_with_context(&ctx, 1);
 	    goto finish;
 	}
+
 	int index = find_page_index(fault_address);
 	if (index != -1) {
 	    if (addr_in_mmapped_core(fault_address) && mwwFlag &&
@@ -2600,7 +2616,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 	AVER(VirtualAlloc(PTR_ALIGN_DOWN(fault_address,os_vm_page_size),
 			  os_vm_page_size,
 			  MEM_COMMIT, PAGE_EXECUTE_READWRITE)
-	     ||(fprintf(stderr,"Unable to recommit addr %p eip %p\n",
+	     ||(fprintf(stderr,"Unable to recommit addr %p eip 0x%08lx\n",
 			fault_address, context->Eip) &&
 		(c_level_backtrace("BT",5),
 		 fake_foreign_function_call(&ctx),
@@ -2868,10 +2884,8 @@ static boolean io_begin_interruptible(HANDLE handle)
     if (!ptr_CancelIoEx)
 	return 1;
 
-    if (InterlockedCompareExchangePointer((volatile LPVOID *)
-					  &this_thread->synchronous_io_handle_and_flag,
-					  (LPVOID)handle, 0))
-    {
+    if (!__sync_bool_compare_and_swap(&this_thread->synchronous_io_handle_and_flag,
+				      0, handle)) {
 	ResetEvent(this_thread->private_events.events[0]);
 	this_thread->synchronous_io_handle_and_flag = 0;
 	return 0;
@@ -2887,9 +2901,8 @@ static void io_end_interruptible(HANDLE handle)
 {
     if (!ptr_CancelIoEx)
 	return;
-    InterlockedCompareExchangePointer((volatile LPVOID *)
-				      &this_thread->synchronous_io_handle_and_flag,
-				      0,(LPVOID)handle);
+    __sync_bool_compare_and_swap(&this_thread->synchronous_io_handle_and_flag,
+				 handle, 0);
 }
 /* Documented limit for ReadConsole/WriteConsole is 64K bytes.
    Real limit observed on W2K-SP3 is somewhere in between 32KiB and 64Kib...
