@@ -436,7 +436,7 @@
        (inst break pending-interrupt-trap)
        (emit-label ,label)
        #!+win32
-       (inst test (make-ea :byte :disp sb!vm::gc-safepoint-page-addr) 0))))
+       (inst test eax-tn (make-ea :dword :disp sb!vm::gc-safepoint-page-addr)))))
 
 #!-sb-thread
 (defmacro pseudo-atomic (&rest forms)
