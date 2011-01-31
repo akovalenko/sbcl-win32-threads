@@ -435,8 +435,10 @@
        (inst jmp :z ,label)
        (inst break pending-interrupt-trap)
        (emit-label ,label)
+       ;; IA-32: Byte-wide load shouldn't cause stalls, and seems to
+       ;; guarantee the absense of false dependencies here
        #!+win32
-       (inst test eax-tn (make-ea :dword :disp sb!vm::gc-safepoint-page-addr)))))
+       (inst test al-tn (make-ea :byte :disp sb!vm::gc-safepoint-page-addr)))))
 
 #!-sb-thread
 (defmacro pseudo-atomic (&rest forms)
