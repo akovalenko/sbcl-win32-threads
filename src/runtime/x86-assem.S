@@ -356,44 +356,32 @@ Lstack:
 Ldone:	
 	/* Registers eax, ecx, edx, edi, and esi are now live. */
 
-#ifdef LISP_FEATURE_WIN32
-	/* Establish an SEH frame. */
-#ifdef LISP_FEATURE_SB_THREAD
-	/* Save binding stack pointer */
-	subl $4, %esp
-	pushl %eax
-	movl %fs:0xE10+(4*63), %eax
-	movl THREAD_BINDING_STACK_POINTER_OFFSET(%eax), %eax
-	movl %eax, 4(%esp)
-	popl %eax
-#else
-	pushl	BINDING_STACK_POINTER + SYMBOL_VALUE_OFFSET
-#endif
-	pushl	$GNAME(exception_handler_wrapper)
-	pushl	%fs:0
-	movl	%esp, %fs:0
-#endif
 	/* Alloc new frame. */
 	push	%ebp            # Dummy for return address
 	push	%ebp		# fp in save location S1
 	mov	%esp,%ebp	# The current sp marks start of new frame.
 	sub	$4,%esp		# Ensure 3 slots are allocated, two above.
 
-	call	*CLOSURE_FUN_OFFSET(%eax)
+	/* For win32, SEH used to be installed here.  As we don't care
+	about unwinds in win32 SEH, it's now unnecessary: one
+	wos_install_interrupt_handlers() per thread (or fiber) is
+	enough.
+
+	Additionally, uwp_seh_handler_gate -- the Lisp-side SEH
+	handling Lisp nlxes -- now jumps to exception_handler_wrapper
+	for non-EH_UNWINDING|EH_EXIT_UNWIND case; it's just an
+        optimization, so our handler can run without entire record
+	list having been traversed. */
 	
+	call	*CLOSURE_FUN_OFFSET(%eax)
+.globl GNAME(call_into_lisp_return_site)
+GNAME(call_into_lisp_return_site):
+	jnc	LsingleValue
 	/* If the function returned multiple values, it will return to
 	   this point.  Lose them */
-	jnc	LsingleValue
 	mov	%ebx, %esp
 LsingleValue:
-	/* A singled value function returns here */
-
-#ifdef LISP_FEATURE_WIN32
-	/* Remove our SEH frame. */
-	mov	%fs:0,%esp
-	popl	%fs:0
-	add	$8, %esp
-#endif
+/* A singled value function returns here */
 
 /* Restore the stack, in case there was a stack change. */
 	popl	%esp		# c-sp
@@ -402,10 +390,6 @@ LsingleValue:
 	popl	%edi
 	popl	%esi
 	popl	%ebx
-	
-/* GC page access _after_ restoring phase1-safety, for the same reason as when
-   entering C function (we _are_ entering C function, after all, we're only doing
-   it from the inside...) */
 	
 /* Restore the NPX state. */
 	popl	%ebp		# c-sp
@@ -947,10 +931,11 @@ GNAME(fast_bzero_sse):
         mov 12(%esp), %edi        /* Parameter: start address */
         shr $6, %esi              /* Amount of 64-byte blocks to copy */
         jz Lend_sse               /* If none, stop */
-        movups %xmm7, -16(%esp)   /* Save XMM register */
+	subl $16,%esp
+        movups %xmm7, (%esp)   /* Save XMM register */
         xorps  %xmm7, %xmm7       /* Zero the XMM register */
         jmp Lloop_sse
-        .align align_16byte
+        .align align_16byte,0x90
 Lloop_sse:
 
         /* Copy the 16 zeroes from xmm7 to memory, 4 times. MOVNTDQ is the
@@ -966,12 +951,15 @@ Lloop_sse:
         add $64, %edi /* Advance pointer */
         dec %esi      /* Decrement 64-byte block count */
         jnz Lloop_sse
-        movups -16(%esp), %xmm7 /* Restore the XMM register */
+        movups (%esp), %xmm7 /* Restore the XMM register */
+	add $16, %esp
         sfence        /* Ensure that weakly ordered writes are flushed. */
 Lend_sse:
-        mov 12(%esp), %esi      /* Parameter: start address */
+        mov 16(%esp), %esi      /* Parameter: start address */
         prefetcht0 0(%esi)      /* Prefetch the start of the block into cache,
                                  * since it's likely to be used immediately. */
+	movl %ebp,%esp
+	popl %ebp
         pop %edi      /* Restore temp registers */
         pop %esi
 	ret
@@ -1015,8 +1003,7 @@ GNAME(uwp_seh_handler_gate):
 	movl 	4(%esp), %eax
 	testb 	$6, 4(%eax)
 	jnz 	Lunwinding
-	movl	$1,%eax
-	ret
+	jmp	GNAME(exception_handler_wrapper)
 Lunwinding:
 	pushal
 	movl	%esp,%ebp

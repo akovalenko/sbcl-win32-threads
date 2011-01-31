@@ -112,7 +112,12 @@
 
 ;;; Number of entries in the thread local storage. Limits the number
 ;;; of symbols with thread local bindings.
-(def!constant tls-size 4096)
+(def!constant tls-size
+    ;; Makes sense to make (= page-size (* word-size tls-size)), as
+    ;; os_validate (that is called to allocate dynamic value space)
+    ;; allocates an integer number of pages. Let it be this way at
+    ;; least on win32 where I may test it:
+    #!-win32 4096 #!+win32 #.(/ #x10000 4))
 
 #!+gencgc
 (progn

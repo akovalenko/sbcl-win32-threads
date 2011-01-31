@@ -549,13 +549,14 @@ void zero_pages_with_mmap(page_index_t start, page_index_t end) {
       return;
 
     os_invalidate(addr, length);
+#ifndef LISP_FEATURE_WIN32
     new_addr = os_validate(addr, length);
 
     if (new_addr == NULL || new_addr != addr) {
         lose("remap_free_pages: page moved, 0x%08x ==> 0x%08x",
              start, new_addr);
     }
-
+#endif
     for (i = start; i <= end; i++) {
         page_table[i].need_to_zero = 0;
     }
@@ -798,6 +799,12 @@ gc_alloc_new_region(long nbytes, int page_type_flag, struct alloc_region *alloc_
     os_protect(page_address(first_page),
                npage_bytes(1+last_page-first_page),
                OS_VM_PROT_ALL);
+#endif
+
+    /* Precommit (w32) */
+#ifdef LISP_FEATURE_WIN32
+    os_validate_recommit(page_address(first_page),
+			 npage_bytes(1+last_page-first_page));
 #endif
 
     /* If the first page was only partial, don't check whether it's
@@ -4794,8 +4801,15 @@ alloc(long nbytes)
 {
   lispobj* result;
   PUSH_ERRNO;
+  (arch_os_get_current_thread()->pseudo_atomic_bits) =
+      (**(lispobj**)__builtin_frame_address(0))&0x03;
+  
   gc_assert(get_pseudo_atomic_atomic(arch_os_get_current_thread()));
+  
   result = general_alloc(nbytes, BOXED_PAGE_FLAG);
+  (**(lispobj**)__builtin_frame_address(0)) |=
+      (arch_os_get_current_thread()->pseudo_atomic_bits)&0x01;
+  (arch_os_get_current_thread()->pseudo_atomic_bits)&=~0x03;
   POP_ERRNO;
   return result;
 }

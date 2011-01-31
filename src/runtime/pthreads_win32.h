@@ -112,11 +112,12 @@ void pthread_np_get_my_context_subset(CONTEXT* ctx);
 /* 2 - Mutex */
 
 typedef struct _pthread_mutex_info {
+  char padding[64];
   CRITICAL_SECTION cs;
   pthread_t owner;
   const char* file;
   int line;
-} *pthread_mutex_t;
+} __attribute__((aligned(128))) *pthread_mutex_t;
 
 typedef int pthread_mutexattr_t;
 #define PTHREAD_MUTEX_INITIALIZER ((pthread_mutex_t)-1)

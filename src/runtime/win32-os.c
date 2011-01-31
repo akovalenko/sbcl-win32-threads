@@ -432,7 +432,7 @@ inline static void *get_stack_frame(void)
  */
 void alloc_gc_page()
 {
-    AVER(VirtualAlloc(GC_SAFEPOINT_PAGE_ADDR, 4,
+    AVER(VirtualAlloc(GC_SAFEPOINT_PAGE_ADDR, BACKEND_PAGE_BYTES,
                       MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
 }
 
@@ -460,7 +460,7 @@ void alloc_gc_page()
 void map_gc_page()
 {
     DWORD oldProt;
-    AVER(VirtualProtect(GC_SAFEPOINT_PAGE_ADDR, 4,
+    AVER(VirtualProtect(GC_SAFEPOINT_PAGE_ADDR, BACKEND_PAGE_BYTES,
                         PAGE_READWRITE, &oldProt));
 }
 
@@ -508,14 +508,14 @@ void map_gc_page()
 void map_gc_page_readonly()
 {
     DWORD oldProt;
-    AVER(VirtualProtect(GC_SAFEPOINT_PAGE_ADDR, 4,
+    AVER(VirtualProtect(GC_SAFEPOINT_PAGE_ADDR, BACKEND_PAGE_BYTES,
                         PAGE_READONLY, &oldProt));
 }
 
 void unmap_gc_page()
 {
     DWORD oldProt;
-    AVER(VirtualProtect(GC_SAFEPOINT_PAGE_ADDR, 4,
+    AVER(VirtualProtect(GC_SAFEPOINT_PAGE_ADDR, BACKEND_PAGE_BYTES,
                         PAGE_NOACCESS, &oldProt));
 }
 
@@ -1399,10 +1399,12 @@ DWORD mwwFlag = 0u;
 void os_init(char *argv[], char *envp[])
 {
     SYSTEM_INFO system_info;
+    _set_sbh_threshold(480);
     GetSystemInfo(&system_info);
     os_vm_page_size = system_info.dwPageSize > BACKEND_PAGE_BYTES?
 	system_info.dwPageSize : BACKEND_PAGE_BYTES;
-    fast_bzero_pointer = fast_bzero_detect;
+    /* As of WinXP, it seems that SSE is really broken :-( */
+    /* fast_bzero_pointer = fast_bzero_detect; */
     os_number_of_processors = system_info.dwNumberOfProcessors;
     dyndebug_init();
 
@@ -1447,7 +1449,7 @@ unsigned long core_mmap_unshared_pages = 0;
  * more significant -- for running non-GC code as well, not only for
  * GC performance. To be tested. */
 
-#define WRITE_WATCH_BULK_SIZE 256
+#define WRITE_WATCH_BULK_SIZE 512
 
 static boolean narrow_address_range_to_wp(LPVOID* startptr, SIZE_T* sizeptr)
 {
@@ -1467,18 +1469,23 @@ static boolean narrow_address_range_to_wp(LPVOID* startptr, SIZE_T* sizeptr)
     return 1;
 }
 
-static os_vm_address_t commit_wp_violations(LPVOID* addrs, ULONG_PTR naddrs)
+static os_vm_address_t commit_wp_violations(LPVOID* addrs, ULONG_PTR naddrs,
+					    ULONG_PTR* counter)
 {
     ULONG_PTR i;
     os_vm_address_t nextaddr = 0;
-    
+    int index = -1;
     for (i=0;i<naddrs; ++i) {
 	LPVOID fault_address = addrs[i];
-	int index = find_page_index(fault_address);
+	addrs[i] = 0;
+	if (index == find_page_index(fault_address))
+	    continue;
+	index = find_page_index(fault_address);
 	if (page_table[index].write_protected) {
 	    gencgc_handle_wp_violation(fault_address);
+	    if (counter) ++ (*counter);
 	}
-	nextaddr = fault_address + os_vm_page_size; 
+	nextaddr = fault_address + os_vm_page_size;
     }
     return nextaddr;
 }
@@ -1501,16 +1508,18 @@ void os_commit_wp_violation_data(boolean call_gc)
 	    unsigned int i;
 	    const ULONG_PTR maxAddrs = sizeof(writeAddrs)/sizeof(writeAddrs[0]);
 	    ULONG granularity;
+	    ULONG_PTR gc_page_counter = 0;
 	    do {
 		nAddrs = maxAddrs;
 		AVERLAX(!ptr_GetWriteWatch(0,
 				  ww_start,ww_size,
 					  writeAddrs,&nAddrs,&granularity));
-		ww_start = commit_wp_violations(writeAddrs,nAddrs);
+		ww_start = commit_wp_violations(writeAddrs,nAddrs,&gc_page_counter);
 		total += nAddrs;
 	    } while(nAddrs == maxAddrs &&
 		    narrow_address_range_to_wp(&ww_start,&ww_size));
-	    odxprint(pagefaults,"Write watch caught %u pages\n",total);
+	    odxprint(pagefaults,"Write watch caught %u minipages"
+		     " in %u macropages\n",total,gc_page_counter);
 	}
 #else
 	if (call_gc) {
@@ -1525,7 +1534,7 @@ void os_commit_wp_violation_data(boolean call_gc)
 		ptr_GetWriteWatch(WRITE_WATCH_FLAG_RESET,
 				  ww_start,ww_size,
 				  writeAddrs,&nAddrs,&granularity);
-		commit_wp_violations(writeAddrs,nAddrs);
+		commit_wp_violations(writeAddrs,nAddrs,NULL);
 		total += nAddrs;
 	    } while(nAddrs == maxAddrs);
 	    odxprint(pagefaults,"Write watch caught %u pages\n",total);
@@ -1780,6 +1789,8 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
 os_vm_address_t
 os_validate_recommit(os_vm_address_t addr, os_vm_size_t len)
 {
+    if (addr_in_mmapped_core(addr))
+	return addr;
     return
         AVERLAX(VirtualAlloc(addr, len, MEM_COMMIT, PAGE_EXECUTE_READWRITE));
 }
@@ -2343,7 +2354,6 @@ extern boolean internal_errors_enabled;
      unsigned short status_x87 = context->FloatSave.StatusWord & 0xFFFFu;
 
      if (context->ContextFlags & CONTEXT_EXTENDED_REGISTERS) {
-	 memset(context->ExtendedRegisters+32,0,8*8);
 	 context->ExtendedRegisters[4] = for_lisp_p ? 0xFF : 0x00;
 	 context->ExtendedRegisters[0] = control_x87 & 0xFFu;
 	 context->ExtendedRegisters[1] = control_x87>>8;
@@ -2520,6 +2530,21 @@ handle_exception(EXCEPTION_RECORD *exception_record,
     }
     if (IS_TRAP_EXCEPTION(exception_record, ctx)) {
 	unsigned trap;
+
+	if (self) {
+	    self->pseudo_atomic_bits |= (*(char*)context->Ebp & 0x03);
+	    (*(char*)context->Ebp) &= ~0x03;
+	    if (self->pseudo_atomic_bits & 0x02) {
+		fprintf(stderr,"Pa trapped from %p, cfp %p => %p, ab %p, xc %p\n",
+			context->Eip,
+			context->Ebp,*(void**)context->Ebp,
+			self->pseudo_atomic_bits,
+			code);
+	    }
+	}
+
+
+
 	/* Unlike some other operating systems, Win32 leaves EIP
 	 * pointing to the breakpoint instruction. */
 	ctx.win32_context->Eip += TRAP_CODE_WIDTH;
@@ -2558,10 +2583,13 @@ handle_exception(EXCEPTION_RECORD *exception_record,
     }
     else if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
         odxprint(pagefaults,
-		     "SEGV. ThSap %p, Eip %p, Esp %p, Addr %p Access %d\n",
+		     "SEGV. ThSap %p, Eip %p, Esp %p, Esi %p, Edi %p, "
+		     "Addr %p Access %d\n",
 		     self,
 		     context->Eip,
 		     context->Esp,
+		     context->Esi,
+		     context->Edi,
 		     fault_address,
 		     exception_record->ExceptionInformation[0]);
 	if (self) {
@@ -2587,7 +2615,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 		ExitProcess(0);		
 	    }
 	}
-	if (fault_address == GC_SAFEPOINT_PAGE_ADDR) {
+	if (PTR_ALIGN_DOWN(fault_address,os_vm_page_size) == GC_SAFEPOINT_PAGE_ADDR) {
 	    /* Pick off GC-related memory fault next. */
 	    gc_maybe_stop_with_context(&ctx, 1);
 	    goto finish;

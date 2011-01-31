@@ -237,11 +237,11 @@
   (let ((ok (gen-label))
         (done (gen-label))
         #!+(and sb-thread win32)
-        (scratch-tn (loop for my-tn in `(,eax-tn ,ebx-tn ,edx-tn)
-                          until (and (not (location= alloc-tn my-tn))
+        (scratch-tns (loop for my-tn in `(,eax-tn ,ebx-tn ,edx-tn ,ecx-tn)
+			   when (and (not (location= alloc-tn my-tn))
                                      (or (not (tn-p size))
                                          (not (location= size my-tn))))
-                          finally (return my-tn)))
+			     collect my-tn))
         (tls-prefix #!+sb-thread :fs)
         (free-pointer
          (make-ea :dword :disp
@@ -253,43 +253,53 @@
                   #!+sb-thread (* n-word-bytes (1+ thread-alloc-region-slot))
                   #!-sb-thread (make-fixup "boxed_region" :foreign 4)
                   :scale 1)))          ; thread->alloc_region.end_addr
-    (unless (and (tn-p size) (location= alloc-tn size))
-      (inst mov alloc-tn size))
-    #!+(and sb-thread win32)
-    (progn
-      (inst push scratch-tn)
-      (inst mov scratch-tn
-            (make-ea :dword :disp
-                     +win32-tib-arbitrary-field-offset+) tls-prefix)
-      (setf (ea-base free-pointer) scratch-tn
-            (ea-base end-addr) scratch-tn
-            tls-prefix nil))
-    (inst add alloc-tn free-pointer tls-prefix)
-    (inst cmp alloc-tn end-addr tls-prefix)
-    (inst jmp :be ok)
-    (let ((dst (ecase (tn-offset alloc-tn)
-                 (#.eax-offset "alloc_overflow_eax")
-                 (#.ecx-offset "alloc_overflow_ecx")
-                 (#.edx-offset "alloc_overflow_edx")
-                 (#.ebx-offset "alloc_overflow_ebx")
-                 (#.esi-offset "alloc_overflow_esi")
-                 (#.edi-offset "alloc_overflow_edi"))))
-      (inst call (make-fixup dst :foreign)))
-    (inst jmp-short done)
-    (emit-label ok)
+    
+    (multiple-value-bind (scratch-tn swap-tn) (values-list scratch-tns)
+      (unless (and (tn-p size) (location= alloc-tn size))
+	(inst mov alloc-tn size))
+      #!+(and sb-thread win32)
+      (progn
+	(inst push scratch-tn)
+	(inst push swap-tn)
+	(inst mov scratch-tn
+	      (make-ea :dword :disp
+		       +win32-tib-arbitrary-field-offset+) tls-prefix)
+	(setf (ea-base free-pointer) scratch-tn
+	      (ea-base end-addr) scratch-tn
+	      tls-prefix nil))
+      (inst add alloc-tn free-pointer tls-prefix)
+      (inst cmp alloc-tn end-addr tls-prefix)
+      (inst jmp :be ok)
+      (let ((dst (ecase (tn-offset alloc-tn)
+		   (#.eax-offset "alloc_overflow_eax")
+		   (#.ecx-offset "alloc_overflow_ecx")
+		   (#.edx-offset "alloc_overflow_edx")
+		   (#.ebx-offset "alloc_overflow_ebx")
+		   (#.esi-offset "alloc_overflow_esi")
+		   (#.edi-offset "alloc_overflow_edi"))))
+	(inst call (make-fixup dst :foreign)))
+      (inst jmp-short done)
+      (emit-label ok)
     ;; Swap ALLOC-TN and FREE-POINTER
-    (cond ((and (tn-p size) (location= alloc-tn size))
-           ;; XCHG is extremely slow, use the xor swap trick
-           (inst xor alloc-tn free-pointer tls-prefix)
-           (inst xor free-pointer alloc-tn tls-prefix)
-           (inst xor alloc-tn free-pointer tls-prefix))
-          (t
-           ;; It's easier if SIZE is still available.
-           (inst mov free-pointer alloc-tn tls-prefix)
-           (inst sub alloc-tn size)))
-    (emit-label done)
-    (inst pop scratch-tn))
-  (values))
+      (cond ((and (tn-p size) (location= alloc-tn size))
+	     ;; XCHG is extremely slow, use the xor swap trick
+	     #!-win32
+	     (progn
+	       (inst xor alloc-tn free-pointer tls-prefix)
+	       (inst xor free-pointer alloc-tn tls-prefix)
+	       (inst xor alloc-tn free-pointer tls-prefix))
+	     #!+win32
+	     (inst mov swap-tn free-pointer tls-prefix)
+	     (inst mov free-pointer alloc-tn tls-prefix)
+	     (inst mov alloc-tn swap-tn))
+	    (t
+	     ;; It's easier if SIZE is still available.
+	     (inst mov free-pointer alloc-tn tls-prefix)
+	     (inst sub alloc-tn size)))
+      (emit-label done)
+      (inst pop swap-tn)
+      (inst pop scratch-tn))
+    (values)))
 
 
 ;;; Emit code to allocate an object with a size in bytes given by
@@ -398,11 +408,7 @@
 #!+sb-thread
 (defmacro %clear-pseudo-atomic ()
   #!+win32
-  '(progn
-    (inst push eax-tn)
-    (inst mov eax-tn (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
-    (inst mov (make-ea :dword :base eax-tn :disp (* 4 thread-pseudo-atomic-bits-slot)) 0)
-    (inst pop eax-tn))
+  '(inst and (make-ea :byte :disp 0 :base ebp-tn) #xFE)
   #!-win32
   '(inst mov (make-ea :dword :disp (* 4 thread-pseudo-atomic-bits-slot)) 0 :fs))
 
@@ -411,31 +417,26 @@
   (with-unique-names (label)
     `(let ((,label (gen-label)))
        #!+win32
-       (progn
-         (inst push eax-tn)
-         (inst mov eax-tn (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
-         (inst mov (make-ea :dword :base eax-tn :disp (* 4 thread-pseudo-atomic-bits-slot)) ebp-tn)
-         (inst pop eax-tn))
+       (inst or (make-ea :dword :disp 0 :base ebp-tn) 2)
        #!-win32
        (inst mov (make-ea :dword :disp (* 4 thread-pseudo-atomic-bits-slot))
              ebp-tn :fs)
        ,@forms
        #!+win32
        (progn
-         (inst push eax-tn)
-         (inst mov eax-tn (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
-         (inst xor (make-ea :dword :base eax-tn :disp (* 4 thread-pseudo-atomic-bits-slot)) ebp-tn)
-         (inst pop eax-tn))
+	 (inst and (make-ea :dword :disp 0 :base ebp-tn) (lognot 2))
+	 (inst test (make-ea :dword :disp 0 :base ebp-tn) 1))
        #!-win32
-       (inst xor (make-ea :dword :disp (* 4 thread-pseudo-atomic-bits-slot))
-             ebp-tn :fs)
-       (inst jmp :z ,label)
+       (progn
+	 (inst xor (make-ea :dword :disp (* 4 thread-pseudo-atomic-bits-slot))
+	       ebp-tn :fs))
        ;; if PAI was set, interrupts were disabled at the same time
        ;; using the process signal mask.
+       (inst jmp :z ,label)
        (inst break pending-interrupt-trap)
        (emit-label ,label)
        #!+win32
-       (inst test eax-tn (make-ea :dword :disp sb!vm::gc-safepoint-page-addr)))))
+       (inst test (make-ea :byte :disp sb!vm::gc-safepoint-page-addr) 0))))
 
 #!-sb-thread
 (defmacro pseudo-atomic (&rest forms)
