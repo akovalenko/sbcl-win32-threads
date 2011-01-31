@@ -257,7 +257,7 @@
 #!+sb-gc-safepoint
 (define-vop (insert-gc-safepoint)
   (:generator 0
-    (inst test eax-tn (make-ea :dword :disp sb!vm::gc-safepoint-page-addr))))
+    (inst test al-tn (make-ea :byte :disp sb!vm::gc-safepoint-page-addr))))
 
 #!+sb-thread
 (defknown current-thread-offset-sap ((unsigned-byte 32))
