@@ -588,7 +588,14 @@ main(int argc, char *argv[], char *envp[])
     /* Pass core filename and the processed argv into Lisp. They'll
      * need to be processed further there, to do locale conversion.
      */
-    core_string = core;
+    if (embedded_core_offset == 0)
+	core_string = core;
+    else
+	/* If embedded core is used, call
+	   os_get_runtime_executable_path(1) to use an external
+	   representation of runtime path for core_string. */
+	core_string = runtime_path ?
+	    os_get_runtime_executable_path(1) : saved_runtime_path;
     posix_argv = sbcl_argv;
 
     FSHOW((stderr, "/funcalling initial_function=0x%lx\n",
