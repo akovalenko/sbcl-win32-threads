@@ -297,11 +297,13 @@
           (declare (ignore ino nlink gid rdev size atime
                            #!+win32 uid))
           #!+win32
-          ;; on win32, stat regards UNC pathnames and device names as
-          ;; nonexisting, so we check once more with native API.
+          ;; On win32, stat regards UNC pathnames and device names as
+          ;; nonexisting, so we check once more with windows API.
           (unless existsp
             (when (sb!win32:close-handle
-                   (sb!win32:create-file filename 0 7 nil
+                   (sb!win32:create-file filename 0
+					 (logior sb!win32::file-share-read
+						 sb!win32::file-share-write) nil
                                          sb!win32:file-open-existing
                                          0 0))
               (setf existsp t)
