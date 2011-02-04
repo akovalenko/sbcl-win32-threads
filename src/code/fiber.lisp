@@ -178,54 +178,12 @@
 ;;; level.
 (define-alien-routine fiber-deinit-runtime void)
 
-;;; A quick-and-dirty replacement for condvars, specifically for the
-;;; task at hand.
-(define-alien-routine fiber-dead-synchronization void (type int))
-
-;;; Pop next dead os-thread from the FIFO queue.  FIBER-DEAD-GET by
-;;; itself doesn't lock anything and doesn't wait, returns 0 for empty
-;;; queue.
-(define-alien-routine fiber-dead-get os-thread)
-
-(defun fiber-queue (operation)
-  #+sb-doc
-  "Internal: synchornization operations for dead foreign thread fiber queue.
-Operation is one of :lock, :unlock, :wait
-and :get. Fiber-queue-monitor watches the queue using this interface."
-  (case operation
-    (:get (let ((fiber (fiber-dead-get)))
-            (and (/= 0 fiber) fiber)))
-    (otherwise
-         (fiber-dead-synchronization
-          (ecase operation
-            (:lock 0) (:unlock 1) (:wait 2))))))
-
-(defun fiber-queue-monitor ()
-  #+sb-doc
-  "Initial function of a Lisp thread that handles dead foreign-thread
-fiber reports."
-  (fiber-queue :lock)
-  (unwind-protect
-       (loop
-         (loop for dead-fiber = (fiber-queue :get)
-               while dead-fiber
-               do (switch-to-fiber dead-fiber))
-         (unless (thread-alive-p (or *lisp-fiber-factory-thread*
-                                     *current-thread*))
-           (return))
-         (fiber-queue :wait))
-    (fiber-queue :unlock)))
-
 (defun foreign-thread-init ()
   #+sb-doc
   "Initialize runtime support for foreign thread callbacks"
   (fiber-announce-factory
    (thread-os-thread
     (setf
-     *lisp-fiber-cleanup-thread*
-     (make-thread #'fiber-queue-monitor
-                  :name "foreign-thread-cleanup"
-                  :ephemeral t)
      *lisp-fiber-factory-thread*
      (make-fiber :name "foreign-thread-helper"
                  :ephemeral t)))

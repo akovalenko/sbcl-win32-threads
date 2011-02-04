@@ -1059,82 +1059,37 @@ void fiber_announce_factory(pthread_t thread,
    condition signalling).
 */
 
-static pthread_mutex_t fiber_dead_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-/* Event handle. Should be auto-reset, as only one thread is
-   waiting. May be NULL when event shouldn't be signalled (target
-   thread is going to recheck before waiting). */
-static HANDLE fiber_dead_wakeup;
+/* Well, let's try the same using non-lisp thread as a `fiber
+ * cemetry', and IO completion port as a queue */
 
-struct fiber_dead_record {
-    pthread_t companion_pthread;
-    struct fiber_dead_record* next;
-};
+HANDLE dead_fiber_queue;
+pthread_t fiber_funeral_service;
 
-static struct fiber_dead_record *first_dead, *last_dead;
+void* fiber_funeral_function(void*arg)
+{
+    HANDLE port = (HANDLE)arg;
+    DWORD useless1;
+    ULONG_PTR fiber_pthread;
+    LPOVERLAPPED useless2;
+
+    while(GetQueuedCompletionStatus(port,&useless1,&fiber_pthread,
+				    &useless2, INFINITE))
+    {
+	if (fiber_pthread)
+	    pthread_np_switch_to_fiber((pthread_t)fiber_pthread);
+	else
+	    break;
+    }
+    CloseHandle(port);
+    return NULL;
+}
 
 /* To be called from foreign thread TLS destructor */
 static void fiber_is_dead(void* companion_pthread)
 {
-    struct fiber_dead_record* next;
-    next = malloc(sizeof(*next));
-    next->next = NULL;
-    next->companion_pthread = companion_pthread;
-    pthread_mutex_lock(&fiber_dead_mutex);
-    if (!last_dead) {
-        first_dead = last_dead = next;
-    } else {
-        last_dead->next = next;
-        last_dead = next;
-    }
-    if (fiber_dead_wakeup) {
-        SetEvent(fiber_dead_wakeup);
-    }
-    pthread_mutex_unlock(&fiber_dead_mutex);
-}
-
-/* Simplified condition for handling obsolete foreign threads. TODO:
-   use either futexes or pthread */
-
-#define FIBER_DEAD_LOCK 0
-#define FIBER_DEAD_UNLOCK 1
-#define FIBER_DEAD_WAIT 2
-
-void fiber_dead_synchronization(int op)
-{
-    struct thread * self = arch_os_get_current_thread();
-    switch(op) {
-    case FIBER_DEAD_LOCK:
-        pthread_mutex_lock(&fiber_dead_mutex);
-        break;
-    case FIBER_DEAD_UNLOCK:
-        pthread_mutex_unlock(&fiber_dead_mutex);
-        break;
-    case FIBER_DEAD_WAIT:
-        fiber_dead_wakeup = self->private_events.events[0];
-        ResetEvent(fiber_dead_wakeup);
-        pthread_mutex_unlock(&fiber_dead_mutex);
-        WaitForMultipleObjects(2, self->private_events.events, FALSE, INFINITE);
-        pthread_mutex_lock(&fiber_dead_mutex);
-        fiber_dead_wakeup = NULL;
-        break;
-    }
-}
-
-pthread_t fiber_dead_get()
-{
-    pthread_t result = NULL;
-    if (first_dead) {
-        result = first_dead->companion_pthread;
-        if (first_dead == last_dead) {
-            first_dead = last_dead = NULL;
-        } else {
-            struct fiber_dead_record* prev = first_dead;
-            first_dead = first_dead->next;
-            free(prev);
-        }
-    }
-    return result;
+    AVER(PostQueuedCompletionStatus(dead_fiber_queue,0,
+				    (ULONG_PTR)companion_pthread,NULL));
 }
 
 void fiber_deinit_runtime()
@@ -1151,6 +1106,8 @@ void fiber_deinit_runtime()
     pthread_mutex_unlock(&fiber_factory_lock);
 
     fiber_is_dead(factory);
+    fiber_is_dead(NULL);
+    pthread_join(fiber_funeral_service,NULL);
     /* Lisp side should join factory thread */
 }
 
@@ -1166,60 +1123,34 @@ void fff_foreign_callback( void *v_info_ptr)
     lispobj *args = info_ptr->args;
     struct thread* self = arch_os_get_current_thread();
 
-    /* FPU stack should be empty if our caller follows C conventions;
-     * however, we have to reload the control word anyway, so cleaning
-     * the stack won't add much overhead (with modern OSes and TS bit
-     * in CR0, difference between using FPU and not using it at all is
-     * _much_ more noticeable than difference between nine and one
-     * instruction).
-
-     * There are some known situations where C convention is violated,
-     * at least by Wine -- e.g. any SEH handler may be entered with
-     * unpredictable content in FPU stack.
-
-     * Last but not least, it would be immoral to expect something
-     * from our caller that we don't provide for callouts; our
-     * :sb-auto-fpu-switch will make things right on demand, but if
-     * the foreign calling thread uses the same approach, it will
-     * surely interfere with our own SEH handler. */
+#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
+    self->in_lisp_fpu_mode = 0;
+    /* While foreign callback is running, :INVALID trap should be
+     * unmasked (should!=must, but we may get inferior FP
+     * performance due to masked exceptions). */
     
-    asm("fnclex;");
-    asm("ffree %st(7);");
-    asm("ffree %st(6);");
-    asm("ffree %st(5);");
-    asm("ffree %st(4);");
-    asm("ffree %st(3);");
-    asm("ffree %st(2);");
-    asm("ffree %st(1);");
-    asm("ffree %st(0);");
-
-
-    x87_fldcw(self->saved_c_fpu_mode);
+    unsigned short fpu_cw = x87_fnstcw();
+    x87_fwait();
+    /* If :INVALID is masked, reload CW.  From SEH p.o.v, we are now
+       in "C" mode; after :INVALID is unmasked here, it will be saved
+       and restored, if needed, as a C context FPU control word. */
+    if (fpu_cw & 1) x87_fldcw(fpu_cw & ~1);
+#endif
 
     BEGIN_GC_UNSAFE_CODE;
     funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,self),
              LISPOBJ(args[0]),LISPOBJ(args[1]),LISPOBJ(args[2]));
     END_GC_UNSAFE_CODE;
 
-    /* Even if our return type is float or double, it's loaded into
-     * fr0 by alien callback assembler wrapper, which expects FPU
-     * stack to be empty at his epilogue (initially/in the upstream it
-     * used to call funcall3(), which is a non-floating-result wrapper
-     * for call_into_lisp with a normal C ABI).
-     *
-     * With :sb-auto-fpu-switch, stack would be emptied automatically
-     * when the assembler wrapper loads a result (our exception
-     * handler would perceive assembler wrapper as C code;
-     * consequently, it would adjust FPU stack as for C
-     * calls). However, we can't rely on it in foreign threads: our
-     * exception handler isn't installed as a topmost one and won't
-     * have a chance to run. Fibers that we use are non-FPU-aware at
-     * all (a flag to specify FPU state preservation appeared
-     * somewhere around win2003 - too late); if we allowed foreign
-     * callback to return with a full ("lispy") FPU stack, we'd mess
-     * up both the fiber and the foreign thread. */
+#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
 
+    /* If stack was full, empty it. */
     establish_c_fpu_world();
+
+    /* If :INVALID was masked, restore original CW value */
+    if (fpu_cw & 1) x87_fldcw(fpu_cw);
+#endif
+
     info_ptr->done = 1;
     return;
 }
@@ -1314,12 +1245,20 @@ static pthread_key_t save_lisp_tls_key;
 static void save_lisp_tls()
 {
     pthread_setspecific(save_lisp_tls_key,TlsGetValue(OUR_TLS_INDEX));
-    establish_c_fpu_world();
 }
 
 static void restore_lisp_tls()
 {
-    TlsSetValue(OUR_TLS_INDEX, pthread_getspecific(save_lisp_tls_key));
+    struct thread *self = pthread_getspecific(save_lisp_tls_key);
+    struct thread *prev = TlsGetValue(OUR_TLS_INDEX);
+    TlsSetValue(OUR_TLS_INDEX, self);
+#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
+    /* Two goals of this function: (1) retain current-thread-sap for
+     * the same fiber across threads, (2) retain FPU mode record for
+     * the same thread across fibers.  */
+    if (self)
+	self->in_lisp_fpu_mode = prev ? prev->in_lisp_fpu_mode : 0;
+#endif
 }
 
 
@@ -1422,8 +1361,14 @@ void os_init(char *argv[], char *envp[])
     pthread_restore_context_hook = restore_lisp_tls;
     pthread_cond_init(&fiber_factory_condition,NULL);
     pthread_mutex_init(&fiber_factory_lock,NULL);
-    pthread_mutex_init(&fiber_dead_mutex,NULL);
     alloc_gc_page();
+    {
+	dead_fiber_queue = CreateIoCompletionPort(INVALID_HANDLE_VALUE,NULL,
+						  0, 1);
+	pthread_create(&fiber_funeral_service,NULL,
+		       fiber_funeral_function,
+		       (void*)dead_fiber_queue);
+    }
 #endif
     resolve_optional_imports();
     mwwFlag = (ptr_GetWriteWatch && ptr_ResetWriteWatch) ? MEM_WRITE_WATCH : 0u;

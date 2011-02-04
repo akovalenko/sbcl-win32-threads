@@ -182,19 +182,12 @@ void (*pthread_restore_context_hook)() = do_nothing;
 */
 void pthread_np_suspend(pthread_t thread)
 {
-  CONTEXT context;
   pthread_mutex_lock(&thread->fiber_lock);
-  /* If thread is about to run another fiber, fiber_context should be
-     non-NULL. No point in really suspending it, as it won't be
-     reentered without taking fiber_lock. */
-  if (!thread->fiber_context.Esp) {
-    /* For ANY fiber without saved context record, fiber_group should
-       be present. */
-    fprintf(stderr,"Had to really suspend thread #x%p\n",thread);
-    fflush(stderr);
-    SuspendThread(thread->fiber_group->handle);
-    context.ContextFlags = CONTEXT_FULL;
-    GetThreadContext(thread->fiber_group->handle, &context);
+  if (thread->fiber_group) {
+      CONTEXT context;
+      SuspendThread(thread->fiber_group->handle);
+      context.ContextFlags = CONTEXT_FULL;
+      GetThreadContext(thread->fiber_group->handle, &context);
   }
 }
 
@@ -217,87 +210,17 @@ void pthread_np_serialize(pthread_t thread)
 int pthread_np_get_thread_context(pthread_t thread, CONTEXT* context)
 {
   context->ContextFlags = CONTEXT_FULL;
-  if (thread->fiber_context.Esp) {
-    *context = thread->fiber_context;
-    return 1;
-  } else {
-    return GetThreadContext(thread->fiber_group->handle, context) != 0;
-  }
-}
-
-/* When fiber switches to other fiber using pthread_np API, its
-   CONTEXT is saved. There is no GetFiberContext call; also, we can't
-   save fiber context during SwitchToFiber itself, so it's always some
-   approximation, not a real fiber context for the moment of switching
-   out.
-
-   This approximation is enough for conservative GC: no extra
-   information from GC-sensitive world will be ever added to real
-   context before switching.
-
-   Why talk about conservative GCs here? Well, except that this
-   pthreads implementation is part of SBCL, one more reason is that
-   SuspendThread, GetThreadContext, ResumeThread are mostly used for
-   exactly that purpose, when not for debugging.
-
-   In the world of win32 GC implementations, there are two strategies
-   for stopping the world when GC requires it: (1) use of long-term
-   SuspendThread/ResumeThread, (2) use of some cooperative interthread
-   communication. The first strategy, being simple, has some
-   disadvantages (e.g. a possibility of suspending thread holding an
-   important lock in a system library). That's why SuspendThread and
-   ResumeThread is discommended by Microsoft, except for debugging.
-
-   GC could still use SuspendThread/ResumeThread for brief intervals
-   when target threads are in some predictable state. However, if
-   stopped threads are require to cooperate, they can provide context
-   data for conservative GC before stopping as well.
-
-   Hence we introduce pthread_np_publish_context API. Context of the
-   calling thread (again, some approximation of it, enough for
-   conservative GC) is copied to *pthread_self() structure; if such
-   published context exists, thread will never be suspended by
-   pthread_np_suspend or resumed by pthread_np_resume, and
-   pthread_np_get_thread_context will use last published context
-   instead of calling GetThreadContext(). */
-
-/* Returns the pointer to new published CONTEXT stored in
-   pthread_self() structure. If maybe_save_old_one is given,
-   previous published context is saved.
-*/
-
-CONTEXT* pthread_np_publish_context(CONTEXT* maybe_save_old_one)
-{
-  pthread_t self = pthread_self();
-
-  if (maybe_save_old_one)
-    *maybe_save_old_one = self->fiber_context;
-  pthread_np_get_my_context_subset(&self->fiber_context);
-  self->fiber_context.Esp = (DWORD)(intptr_t)__builtin_frame_address(0);
-  self->fiber_context.Eip = (DWORD)(intptr_t)__builtin_return_address(0);
-  return &self->fiber_context;
-}
-
-/* Validity of cooperatively-published context is designated by stack
-   pointer (Esp) being non-null: no real context with Esp==0 may exist.
-
-   pthread_np_unpublish_context invalidates published context, so
-   pthread_np_suspend et al. on this thread reacquire their usual
-   "syscall" semantics.
-*/
-void pthread_np_unpublish_context()
-{
-  pthread_t self = pthread_self();
-  self->fiber_context.Esp = 0;
+  return GetThreadContext(thread->fiber_group->handle, context) != 0;
 }
 
 void pthread_np_resume(pthread_t thread)
 {
+  HANDLE host_thread = thread->fiber_group ? thread->fiber_group->handle : NULL;
   /* Unlock first, _then_ resume, or we may end up accessing freed
      pthread structure (e.g. at startup with CREATE_SUSPENDED) */
   pthread_mutex_unlock(&thread->fiber_lock);
-  if (!thread->fiber_context.Esp) {
-    ResumeThread(thread->fiber_group->handle);
+  if (host_thread) {
+    ResumeThread(host_thread);
   }
 }
 
@@ -1319,9 +1242,6 @@ int pthread_np_switch_to_fiber(pthread_t pth)
     return -1;
   }
   if (self) {
-    /* From now on, any attempt to get context of self receives ctx
-       content, and suspend/resume work with fiber reentrance lock. */
-    pthread_np_publish_context(NULL);
     /* Target fiber group is like mine */
     pth->fiber_group = self->fiber_group;
   } else {
@@ -1352,15 +1272,6 @@ int pthread_np_switch_to_fiber(pthread_t pth)
     pthread_mutex_unlock(&pth->fiber_lock);
   }
   /* Self surely is not NULL, or we'd never be here */
-
-  pthread_mutex_lock(&self->fiber_lock);
-  /* Thus we avoid racing with GC */
-  pthread_np_unpublish_context();
-  pthread_mutex_unlock(&self->fiber_lock);
-
-  /* From now on, pthread_np_get_thread_context on self calls real
-     GetThreadContext(), and suspend/resume work with real thread
-     handle. */
 
   /* Implement call-in-fiber */
   if (self->fiber_callback) {

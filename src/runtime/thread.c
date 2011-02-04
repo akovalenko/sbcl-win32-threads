@@ -544,6 +544,7 @@ die:
 		    sizeof(th->private_events.events[0])); ++i) {
       CloseHandle(th->private_events.events[i]);
     }
+    TlsSetValue(OUR_TLS_INDEX,NULL);
 #endif
 
 #ifdef LISP_FEATURE_MACH_EXCEPTION_HANDLER
@@ -1379,46 +1380,25 @@ int check_pending_gc()
 	    if(SymbolTlValue(GC_PENDING,self)==T)
 		gc_happened = funcall0(StaticSymbolFunction(SUB_GC));
 	    
-	    END_GC_UNSAFE_CODE;
-	    
 	    pthread_mutex_unlock(&runtime_gc_mutex);
-	    
-	    /* On uniprocessors, GC may `starve' some operations in
-	       other threads (symbol-value-in-thread behaved this
-	       way; maybe I revert it eventually).
-
-	       gc_start_the_world counts threads that it restarted. We
-	       use some (rather arbitrary) heuristics to provide a
-	       `restitution' to other threads: yield some quantums to
-	       them.
-
-	       FIXME HORROR: tls_cookie use is almost random, to avoid
-	       redefining objdef. (Well, I sometimes think of the
-	       yielding fragment as `returning stolen cookies') */
-	    int concurrency = fixnum_value(self->tls_cookie);
-	    self->tls_cookie = 0;
             unbind_variable(IN_SAFEPOINT,self);
             thread_sigmask(SIG_SETMASK,&sigset,NULL);
-
             if (gc_happened == T) {
 		/* POST_GC wants to enable interrupts */
 		if (SymbolValue(INTERRUPTS_ENABLED,self) == T ||
 		    SymbolValue(ALLOW_WITH_INTERRUPTS,self) == T) {
-		    BEGIN_GC_UNSAFE_CODE;
 		    funcall0(StaticSymbolFunction(POST_GC));
-		    END_GC_UNSAFE_CODE;
 		}
                 done = 1;
-		if (concurrency>0 && os_number_of_processors == 1) {
-		    /* non-strict check for .suspend below. If
-		       somebody is running GC or INbTERRUPT-THREAD, sitting
-		       and yielding quantums may do harm instead of helping.  */
-		    while(concurrency-- &&
-			  !suspend_info.suspend)
-			thread_yield();
-		}
             }
-        }
+            /* Whole GC + finalizers section is marked as GC-unsafe,
+	       to avoid extra safe-unsafe transitions, which are
+	       normally cheap but may become expensive if there are
+	       VERY HUNGRY CONSERS around (and the probability of the
+	       latter at the moment of GC is not too low). */
+
+	    END_GC_UNSAFE_CODE;
+       }
     }
     return done;
 }
