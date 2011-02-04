@@ -1160,9 +1160,9 @@ static inline int thread_may_interrupt()
 int check_pending_interrupts(os_context_t *ctx)
 {
   struct thread * p = arch_os_get_current_thread();
-  
   pthread_t pself = p->os_thread;
   sigset_t oldset;
+  gc_assert(!p->csp_around_foreign_call);
   if (pself->pending_signal_set) {
       if (__sync_fetch_and_and(&pself->pending_signal_set,0)) {
 	  SetSymbolValue(INTERRUPT_PENDING, T, p);
@@ -1176,11 +1176,9 @@ int check_pending_interrupts(os_context_t *ctx)
   oldset = pself->blocked_signal_set;
   pself->blocked_signal_set = deferrable_sigset;
 
-  BEGIN_GC_UNSAFE_CODE;
   if (ctx) fake_foreign_function_call(ctx);
   funcall0(StaticSymbolFunction(RUN_INTERRUPTION));
   if (ctx) undo_fake_foreign_function_call(ctx);
-  END_GC_UNSAFE_CODE;
 
   pself->blocked_signal_set = oldset;
   if (ctx) ctx->sigmask = oldset;
@@ -1194,169 +1192,31 @@ int check_pending_gc()
     int done = 0;
     sigset_t sigset = 0;
 
-    /* We are `cheating' here, using a separate mutex for
-       automatically-triggered GC.
-
-       That's because GC_PENDING is signalled, basically, in ALL
-       consing threads (when threir alloc_region overflows) for the
-       SAME event (bytes_allocated crossing its threshold).
-
-       Each running Lisp thread, typically, either (1) stays in
-       foreign calls most of the time, not touching the heap, or (2)
-       conses (conses (conses))... A thread may loop in Lisp without
-       consing sometimes, but it's uncommon.
-
-       What happens (used to happen) when it's time to GC (threshold
-       crossed) and there are several threads of class (2),
-       i.e. `concurrent consers'? They _all_ trap on
-       pseudo_atomic_interrupted, almost at the same time. Each of
-       them wants to collect garbage; some happy one enters SUB-GC
-       before all others.
-
-       There was a problem, at least with :sb-gc-safepoint builds.
-       All our threads are ready to wait for GC-in-progress when they
-       notice it, and give up with their own *GC-PENDING* in this
-       case. But when a thread is about to GC, from funcalling SUB-GC
-       to stopping the world, other threads couldn't know that GC has
-       almost begun: suspend_info.suspend flag is inactive (and, btw,
-       SIG_STOP_FOR_GC in conventional builds hadn't arrived too).
-       
-       Each of our `consers', as if he was alone, proceeds to SUB-GC,
-       enters Lisp, and eventually hits the mutex inside SUB-GC
-       body. Well, every conser, except the happy one, has to wait
-       then; but at this moment no one of the waiting herd has a
-       possibility to back off -- at least without radical redesign of
-       Lisp-side GC code. One conser at a time locks that mutex and
-       collects garbage -- almost without any useful effect possible,
-       except for the first one. All that expensive stuff instead of
-       waiting until the single GC completes and continuing happily.
-
-       There is one more reason to avoid this all for :sb-gc-safepoint
-       builds. Stopping the world is not easy here, especially the
-       world running Lisp code. When a group of consers is trapped on
-       GC-PENDING, it would be much easier to stop the world: it's
-       likely that there's no threads at all in need of a signal.
-       Well, perhaps some non-conser in a tight loop, or someone in
-       lengthy WITHOUT-GCING... it doesn't happen frequently, and
-       specific traits of both kinds make it easier to signal them
-       (tight non-consing loop reacts rapidly on page protection
-       change; GC-INHIBITor may enter and leave foreign calls without
-       locking, and reach its (receive-pending-interrupt) speedily).
-
-       But you see, a half of our almost-stopped world step into
-       SUB-GC, contend for mutex, and (ouch!) each one with
-       deferrables unblocked wants to do something with
-       **finalizer-store** -- which is protected by a lock that's
-       supposed to be taken WITHOUT-GCING. I've actually seen an
-       impressive amount of useless world-stopping activity, when one
-       of the consers finishes GC and starts shopping in
-       **finalizer-store**, the next conser tries desperately to stop
-       the world, and several others have already returned from the
-       original GC-PENDING trap to run Lisp code (as
-       suspend_info.suspend is `blinking', occasionally giving the
-       idea that there's no reason to wait -- when one thread left
-       SUB-GC and another one is waking up from *ALREADY-IN-GC* mutex,
-       having no chance to stop the world yet).
-       
-       That's why I added runtime_gc_mutex to manage automatically
-       triggered GCs (it doesn't affect (SUB-GC) or (GC) called in
-       other way). The mutex is used in ...trylock mode: the thread
-       taking it successfully is `elected' to GC, and all other
-       trapped consers, failing to lock, announce themselves as being
-       in a foreign call (i.e. cooperatively providing C stack top)
-       and wait for GC completion (they know it when their own
-       *GC-PENDING* is cleared: for threads being in foreign code,
-       it's done `on their behalf' by gc_stop_the_world). */
-    
-    static pthread_mutex_t runtime_gc_mutex = PTHREAD_MUTEX_INITIALIZER;
-    
-    /* There may be occasional checks for pending GC, resulting in GC
-       invokation, in SUB-GC itself; we have to prevent infinite
-       recursion. IN_SAFEPOINT is bound to T before SUB_GC call,
-       effectively disabling pending GC checks.
-
-       SUB-GC, however, traps to (receive-pending-interrupt) in the
-       end; it's a _legitimate_ recursion (not that it's strictly
-       necessary, but the invariant that it preserves -- ``GC-PENDING
-       may be true only if there is a reason why GC was impossible
-       before'' -- is beautiful and simplifies some things greatly).
-
-       So we have to clear anti-recursion flag before pending interrupt
-       trap is handled; we used to do it after GC completion only (iff
-       GC_PENDING becomes NIL) , but the earlier moment, when SUB-GC
-       binds GC-INHIBIT to T, is already safe; so we do it on both
-       conditions.
-
-       NB this code is influenced _much_ by our policy of invoking
-       safepoints, checking pending interrupts and GC. If
-       check_pending_gc() is not called from SUB-GC before the pending
-       interrupt trap, we miss the whole interval where our predicate
-       is true (it works now because of check_gc_pending() in foreign
-       call epilogue; maybe it's better to clear IN_SAFEPOINT
-       unconditionally _on pending interrupt trap_).
-
-       The flag is cleared by setting to NIL instead of unbinding: the
-       place when it's unbound is symmetric to binding, i.e. outside
-       SUB-GC invokation, and we want to clear it inside SUB-GC. */
+    gc_assert(!self->csp_around_foreign_call);
     
     if ((SymbolValue(IN_SAFEPOINT,self) == T) &&
         ((SymbolValue(GC_INHIBIT,self) == T)||
 	 (SymbolValue(GC_PENDING,self) == NIL))) {
         SetSymbolValue(IN_SAFEPOINT,NIL,self);
     }
+    
     if (thread_may_gc() && (SymbolValue(IN_SAFEPOINT, self) == NIL)) {
         if ((SymbolTlValue(GC_PENDING, self) == T)) {
-	    boolean in_foreign_call = !!self->csp_around_foreign_call;
+	    lispobj gc_happened = NIL;
 
-	    /* Take runtime_gc_mutex while being in foreign call context,
-	       avoiding deadlock */
-	    if (!in_foreign_call)
-		gc_enter_foreign_call(&done,0);
-	    pthread_mutex_lock(&runtime_gc_mutex);
-	    if (!in_foreign_call)
-		gc_leave_foreign_call();
-
-	    if ((SymbolTlValue(GC_PENDING, self) == T)) {
-		/* We now own runtime_gc_mutex, so now we'll GC.  Turn on
-		   the anti-recursion flag (see explanations above, where
-		   it's cleared) */
-		bind_variable(IN_SAFEPOINT,T,self);
-		block_deferrable_signals(NULL,&sigset);
-		lispobj gc_happened = NIL;
-		/* We may back off, then gc_happened won't be true */
-	    
-		BEGIN_GC_UNSAFE_CODE;
-		/* As we could leave foreign call - with
-		   BEGIN_GC_UNSAFE_CODE - maybe we don't have GC_PENDING
-		   any more. Then don't GC.
-
-		   (FIXME: with a new mutex, it could only happen with
-		   parallel `manual' GC invokation. Well, let's retain
-		   this code as a reminder that _here_ we are able to back
-		   off without significant costs).  */
-		if(SymbolTlValue(GC_PENDING,self)==T)
-		    gc_happened = funcall0(StaticSymbolFunction(SUB_GC));
-	    
-		pthread_mutex_unlock(&runtime_gc_mutex);
-		unbind_variable(IN_SAFEPOINT,self);
-		thread_sigmask(SIG_SETMASK,&sigset,NULL);
-		if (gc_happened == T) {
-		    /* POST_GC wants to enable interrupts */
-		    if (SymbolValue(INTERRUPTS_ENABLED,self) == T ||
-			SymbolValue(ALLOW_WITH_INTERRUPTS,self) == T) {
-			funcall0(StaticSymbolFunction(POST_GC));
-		    }
-		    done = 1;
+	    bind_variable(IN_SAFEPOINT,T,self);
+	    block_deferrable_signals(NULL,&sigset);
+	    if(SymbolTlValue(GC_PENDING,self)==T)
+		gc_happened = funcall0(StaticSymbolFunction(SUB_GC));
+	    unbind_variable(IN_SAFEPOINT,self);
+	    thread_sigmask(SIG_SETMASK,&sigset,NULL);
+	    if (gc_happened == T) {
+		/* POST_GC wants to enable interrupts */
+		if (SymbolValue(INTERRUPTS_ENABLED,self) == T ||
+		    SymbolValue(ALLOW_WITH_INTERRUPTS,self) == T) {
+		    funcall0(StaticSymbolFunction(POST_GC));
 		}
-		/* Whole GC + finalizers section is marked as GC-unsafe,
-		   to avoid extra safe-unsafe transitions, which are
-		   normally cheap but may become expensive if there are
-		   VERY HUNGRY CONSERS around (and the probability of the
-		   latter at the moment of GC is not too low). */
-
-		END_GC_UNSAFE_CODE;
-	    } else {
-		pthread_mutex_unlock(&runtime_gc_mutex);
+		done = 1;
 	    }
 	}
     }
@@ -1664,7 +1524,6 @@ void gc_leave_foreign_call()
    self->pc_around_foreign_call = NULL;
    self->gc_safepoint_context = NULL;
    pthread_mutex_unlock(self->state_lock);
-   
    while (check_pending_gc()||check_pending_interrupts(&ctx));
    POP_ERRNO;
 }
@@ -1744,6 +1603,7 @@ void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access)
     int gcwake = 0;
     boolean maybe_wake = 0;
     lispobj oldstate;
+    static pthread_mutex_t runtime_gc_mutex = PTHREAD_MUTEX_INITIALIZER;
     boolean pai = get_pseudo_atomic_interrupted(self);
 
     /* we should not be here in pseudo-atomic */
@@ -1753,20 +1613,12 @@ void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access)
 	clear_pseudo_atomic_interrupted(self);
     }
 
-    if (self->csp_around_foreign_call) {
-	/* Avoid extra foreign/mutator/foreign switches.  Both
-	   check_pending_gc and check_pending_interrupts will switch
-	   themselves if needed, but they may wait for concurrent GC
-	   _before_ it. */
-	while (check_pending_gc()||check_pending_interrupts(ctx));
-	return;
-    }
-
 
  again:
     pthread_mutex_lock(self->state_lock);
     /* context for conservation */
-    self->gc_safepoint_context = ctx;
+    if (!self->csp_around_foreign_call)
+	self->gc_safepoint_context = ctx;
 
     do {
 	/* possibly convert blocker state into suspend state */
@@ -1783,7 +1635,10 @@ void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access)
     /* here our own willingness to GC (or interrupt handling) may take
        over. NB if concurrent GC was in progress, there is already no
        GC_PENDING. */
-    while(check_pending_gc() || check_pending_interrupts(ctx));
+    if (!self->csp_around_foreign_call) {
+	while (check_pending_gc() ||
+	       check_pending_interrupts(ctx));
+    }
 
     if (SymbolTlValue(STOP_FOR_GC_PENDING,self)==NIL
 	&& self->state != STATE_RUNNING) {
