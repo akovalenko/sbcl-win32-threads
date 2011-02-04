@@ -2329,10 +2329,10 @@ void wake_the_world()
 	    gc_page_signalling = 1;
 	}
     }
-    pthread_mutex_unlock(&all_threads_lock);
     if (gc_page_signalling)
 	unmap_gc_page();
     gc_roll_or_wait(gc_blockers, 1, SUSPEND_REASON_INTERRUPT, gc_page_signalling);
+    /* we still hold all_threads_lock -- gc_start_the_world expects it */
     gc_start_the_world();
 }
 
