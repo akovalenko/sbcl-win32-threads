@@ -1411,11 +1411,32 @@ boolean gc_accept_thread_state(boolean wakep)
 
 #ifdef X86_MEMORY_MODEL
 
+static inline void store_to_gc_page() {
+    *(((volatile unsigned char*)(intptr_t)GC_SAFEPOINT_PAGE_ADDR)+
+      /* Offset inside GC page, entirely arbitrary w.r.t correctness,
+	 but w.r.t performance: 1. constant for each thread, 2. not
+	 commonly shared between threads (cache-line scale) */
+      ((((u64)(arch_os_get_current_thread()))>>16)&
+       (BACKEND_PAGE_BYTES-1)&(~127))) = 0;
+}
+
+static inline int load_with_dep_on_gc_page(int* data) {
+    volatile int *vdata = (volatile int*)data;
+    /* Dereference the same address as above, introducing data
+       dependency on the previous store. X86 rules + postulated TLB
+       coherency = ordering. */
+    return
+	vdata [
+	       *(((volatile unsigned char*)(intptr_t)GC_SAFEPOINT_PAGE_ADDR)+
+		 ((((u64)(arch_os_get_current_thread()))>>16)&
+		  (BACKEND_PAGE_BYTES-1)&(~127)))];
+}
+
+#define COMPILER_SFENCE do { asm volatile (""); } while(0)
+
 void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
 {
     struct thread* self = arch_os_get_current_thread();
-    boolean maybe_wake = 0;
-
     *(volatile lispobj**)&self->pc_around_foreign_call = pc;
 
 #ifdef DELAY_GC_PAGE_UNMAPPING
@@ -1428,30 +1449,35 @@ void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
     if (suspend_info.suspend)
 	goto full_locking;
 
+    COMPILER_SFENCE;
+
     *(volatile lispobj**)&self->csp_around_foreign_call =
 	(lispobj*)csp;
-    *(((volatile char*)(intptr_t)GC_SAFEPOINT_PAGE_ADDR)+
-      /* Offset inside GC page, entirely arbitrary w.r.t correctness,
-	 but w.r.t performance: 1. constant for each thread, 2. not
-	 commonly shared between threads (cache-line scale) */
-      ((((u64)self)>>16)&(BACKEND_PAGE_BYTES-1)&(~127))) ^= 0;
+
+    COMPILER_SFENCE;
+
+    store_to_gc_page();
 #endif
 	
     if (self->state == STATE_PHASE2_BLOCKER &&
 	SymbolTlValue(GC_INHIBIT,self)==T)
 	goto finish;
 
- full_locking:    
-    PUSH_ERRNO;
-    pthread_mutex_lock(self->state_lock);
-    self->csp_around_foreign_call = csp;
-    self->pc_around_foreign_call = pc;
-    maybe_wake = gc_adjust_thread_state(self);
-    pthread_mutex_unlock(self->state_lock);
+ full_locking:;
+    {
+	boolean maybe_wake = 0;
 
-    if (maybe_wake)
-	gc_wake_wakeable();
-    POP_ERRNO;
+	PUSH_ERRNO;
+	pthread_mutex_lock(self->state_lock);
+	self->csp_around_foreign_call = csp;
+	self->pc_around_foreign_call = pc;
+	maybe_wake = gc_adjust_thread_state(self);
+	pthread_mutex_unlock(self->state_lock);
+
+	if (maybe_wake)
+	    gc_wake_wakeable();
+	POP_ERRNO;
+    }
  finish:;
     /* Proceed to foreign code, while possibly being in suspended
        state (!) or phase2-blocker. Foreign code shouldn't touch memory
@@ -1463,69 +1489,73 @@ void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
 void gc_leave_foreign_call()
 {
    struct thread* self = arch_os_get_current_thread();
-   int maybe_wake = 0;
-   CONTEXT w32ctx = {.Ebp = (DWORD)(intptr_t)__builtin_frame_address(1)};
-   os_context_t ctx = {.win32_context = &w32ctx,
-		       .sigmask = self->os_thread->blocked_signal_set};
-   
+
    /* Interrupt signal pending */
    if (self->os_thread->pending_signal_set)
        goto full_locking;
 
-   /* GC already in progress. */
-   if (suspend_info.suspend)
+   /* Check if GC already in progress. */
+   if (*(volatile int *)(&suspend_info.suspend))
        goto full_locking;
-   
-   COMPILER_BARRIER;
+
    /* Using ctx field as a flag. GC which is in progress won't notice,
       but gc_stop_the_world will now enqueue after this thread as
       gc-blocker. */
    
    self->gc_safepoint_context = (void*)-1;
 
-    __sync_synchronize();
+   COMPILER_SFENCE;
 
-   if (suspend_info.suspend)
+   store_to_gc_page();
+
+   COMPILER_SFENCE;
+   
+   if (load_with_dep_on_gc_page(&suspend_info.suspend))
        goto full_locking;
 
-   COMPILER_BARRIER;
-   access_control_stack_pointer(self) = self->csp_around_foreign_call;
+   COMPILER_SFENCE;
+
    self->csp_around_foreign_call = NULL;
-   if (suspend_info.suspend)
-       goto full_locking;
 
-   COMPILER_BARRIER;
+   COMPILER_SFENCE;
+   
    self->gc_safepoint_context = NULL;
-   COMPILER_BARRIER;
-   if (suspend_info.suspend)
-       goto full_locking;
+   
+   COMPILER_SFENCE;
 
    return;
 
  full_locking:
+   {
+       int maybe_wake = 0;
 
-   self->gc_safepoint_context = NULL; /* Temporary protection removed */
-   COMPILER_BARRIER;
+       CONTEXT w32ctx = {.Ebp = (DWORD)(intptr_t)__builtin_frame_address(1)};
+       os_context_t ctx = {.win32_context = &w32ctx,
+			   .sigmask = self->os_thread->blocked_signal_set};
 
-   if (self->state == STATE_PHASE2_BLOCKER &&
-       SymbolTlValue(GC_INHIBIT,self)==T) {
-       /* if we run foreign call without GCing, and phase 2 is
-	  enqueued after this thread, we are safe */
+       self->gc_safepoint_context = NULL; /* Temporary protection removed */
+       COMPILER_BARRIER;
+
+       if (self->state == STATE_PHASE2_BLOCKER &&
+	   SymbolTlValue(GC_INHIBIT,self)==T) {
+	   /* if we run foreign call without GCing, and phase 2 is
+	      enqueued after this thread, we are safe */
+	   self->csp_around_foreign_call = NULL;
+	   self->pc_around_foreign_call = NULL;
+	   return;
+       }
+
+       PUSH_ERRNO;
+       pthread_mutex_lock(self->state_lock);
+       gc_accept_thread_state(gc_adjust_thread_state(self));
+       /* Then unpublish context data */
        self->csp_around_foreign_call = NULL;
        self->pc_around_foreign_call = NULL;
-       return;
+       self->gc_safepoint_context = NULL;
+       pthread_mutex_unlock(self->state_lock);
+       while (check_pending_gc()||check_pending_interrupts(&ctx));
+       POP_ERRNO;
    }
-
-   PUSH_ERRNO;
-   pthread_mutex_lock(self->state_lock);
-   gc_accept_thread_state(gc_adjust_thread_state(self));
-   /* Then unpublish context data */
-   self->csp_around_foreign_call = NULL;
-   self->pc_around_foreign_call = NULL;
-   self->gc_safepoint_context = NULL;
-   pthread_mutex_unlock(self->state_lock);
-   while (check_pending_gc()||check_pending_interrupts(&ctx));
-   POP_ERRNO;
 }
 
 
@@ -1605,6 +1635,7 @@ void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access)
     lispobj oldstate;
     static pthread_mutex_t runtime_gc_mutex = PTHREAD_MUTEX_INITIALIZER;
     boolean pai = get_pseudo_atomic_interrupted(self);
+    void* oldctx = self->gc_safepoint_context;
 
     /* we should not be here in pseudo-atomic */
     gc_assert(!get_pseudo_atomic_atomic(self));
@@ -1619,7 +1650,9 @@ void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access)
     /* context for conservation */
     if (!self->csp_around_foreign_call)
 	self->gc_safepoint_context = ctx;
-
+    else
+	self->gc_safepoint_context = NULL;
+    
     do {
 	/* possibly convert blocker state into suspend state */
 	maybe_wake = gc_adjust_thread_state(self);
@@ -1644,6 +1677,7 @@ void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access)
 	&& self->state != STATE_RUNNING) {
 	goto again;
     }
+    self->gc_safepoint_context = oldctx;
 }
 
 lispobj fn_by_pc(unsigned int pc)
