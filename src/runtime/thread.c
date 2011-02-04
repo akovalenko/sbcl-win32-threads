@@ -110,7 +110,6 @@ link_thread(struct thread *th)
     if (all_threads) all_threads->prev=th;
     th->next=all_threads;
     th->prev=0;
-    COMPILER_BARRIER;
     all_threads=th;
 }
 
