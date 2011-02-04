@@ -2180,7 +2180,6 @@ void gc_stop_the_world()
 #endif
     pthread_mutex_lock(&all_threads_lock);
 
-
     for_each_thread(p) {
 	if (p==th) continue;
 	/* If we requested pthread_np_serialize(p->os_thread) here,
@@ -2203,6 +2202,11 @@ void gc_stop_the_world()
 	    gc_page_signalling = 1;
 	}
     }
+    /* We hold all_threads_lock until gc-start-the-world now, except
+       the `window of opportunity' below: terminated threads on which
+       GC is waiting are allowed to unlink and _then_ wake GC. It
+       proved to be useful and doesn't break locking protocol, unlike
+       the idea to run whole GC without all_threads_lock. */
     pthread_mutex_unlock(&all_threads_lock);
 
 #ifdef DELAY_GC_PAGE_UNMAPPING
@@ -2213,6 +2217,13 @@ void gc_stop_the_world()
     gc_roll_or_wait(gc_blockers, 1, SUSPEND_REASON_GC, gc_page_signalling);
 
     gc_blockers = 0;
+
+    /* No thread dies between this point and start-the-world; it is
+       enforced by gc_enter_foreign_call / gc_leave_foreign_call
+       sequence in new_thread_trampoline (if it happens after phase 1,
+       it will wait; if it happens before the `window', GCing thread
+       wait for dying thread). */
+    pthread_mutex_lock(&all_threads_lock);
     for_each_thread(p) {
 	if (p==th) continue;
 	void * oldctx = p->gc_safepoint_context;
@@ -2247,7 +2258,6 @@ void gc_start_the_world()
     odxprint(safepoints,
 	     "GCer %p starting the world\n", th);
     suspend_flushword(0);
-    pthread_mutex_lock(&all_threads_lock);
 
     for_each_thread(p) {
 	++nallthreads;
