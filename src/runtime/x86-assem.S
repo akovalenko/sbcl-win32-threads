@@ -958,8 +958,6 @@ Lend_sse:
         mov 16(%esp), %esi      /* Parameter: start address */
         prefetcht0 0(%esi)      /* Prefetch the start of the block into cache,
                                  * since it's likely to be used immediately. */
-	movl %ebp,%esp
-	popl %ebp
         pop %edi      /* Restore temp registers */
         pop %esi
 	ret

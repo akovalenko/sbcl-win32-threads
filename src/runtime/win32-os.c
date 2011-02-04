@@ -1343,7 +1343,7 @@ void os_init(char *argv[], char *envp[])
     os_vm_page_size = system_info.dwPageSize > BACKEND_PAGE_BYTES?
 	system_info.dwPageSize : BACKEND_PAGE_BYTES;
     /* As of WinXP, it seems that SSE is really broken :-( */
-    /* fast_bzero_pointer = fast_bzero_detect; */
+    fast_bzero_pointer = fast_bzero_detect;
     os_number_of_processors = system_info.dwNumberOfProcessors;
     dyndebug_init();
 
@@ -1422,7 +1422,6 @@ static os_vm_address_t commit_wp_violations(LPVOID* addrs, ULONG_PTR naddrs,
     int index = -1;
     for (i=0;i<naddrs; ++i) {
 	LPVOID fault_address = addrs[i];
-	addrs[i] = 0;
 	if (index == find_page_index(fault_address))
 	    continue;
 	index = find_page_index(fault_address);
@@ -1439,6 +1438,20 @@ void os_commit_wp_violation_data(boolean call_gc)
 {
     LPVOID ww_start = core_mmap_end ? core_mmap_end : (LPVOID)DYNAMIC_SPACE_START;
     SIZE_T ww_size;
+
+    /* static array is _allowed_, because this function is
+     * called by GC with the world stopped.
+
+     * It is _desirable_ because when it was local/auto, written-to
+     * addresses ended up in the stack; when stack space was reused,
+     * and some words were uninitialized, it could become a major
+     * source of `fake pinning' (gencgc making page unmovable).
+     *
+     * NB gencgc page-pinning does something worse than just
+     * (locally) preventing heap compaction; see code... */
+    
+    static LPVOID writeAddrs[WRITE_WATCH_BULK_SIZE];
+
 #ifdef WRITE_WATCH_RESET_ON_WP
     if (!narrow_address_range_to_wp(&ww_start,&ww_size))
 	return;
@@ -1447,7 +1460,6 @@ void os_commit_wp_violation_data(boolean call_gc)
     if (mwwFlag) {
 #ifdef WRITE_WATCH_RESET_ON_WP
 	if (call_gc) {
-	    LPVOID writeAddrs[WRITE_WATCH_BULK_SIZE];
 	    ULONG_PTR nAddrs;
 	    unsigned int total = 0;
 	    unsigned int i;
@@ -1468,7 +1480,6 @@ void os_commit_wp_violation_data(boolean call_gc)
 	}
 #else
 	if (call_gc) {
-	    LPVOID writeAddrs[WRITE_WATCH_BULK_SIZE];
 	    ULONG_PTR nAddrs;
 	    unsigned int total = 0;
 	    unsigned int i;
@@ -1494,7 +1505,6 @@ void os_commit_wp_violation_data(boolean call_gc)
 		 ww_start<core_mmap_end; ww_start += os_vm_mmap_unit_size) {
 		if (MMAP_UNSHARED_BIT(ww_start)) {
 		    if (call_gc) {
-			LPVOID writeAddrs[128];
 			ULONG_PTR nAddrs;
 			unsigned int total = 0;
 			unsigned int i;

@@ -50,6 +50,8 @@
 #define IMMEDIATE_POST_MORTEM
 #endif
 
+#include "cpputil.h"
+
 #ifdef LISP_FEATURE_WIN32
 /*
  * Win32 doesn't have SIGSTKSZ, and we're not switching stacks anyway,
@@ -376,7 +378,7 @@ new_thread_trampoline(struct thread *th)
 #else
     bind_variable(IN_SAFEPOINT,T,th);	 /* so it won't attempt GC */
     SetSymbolValue(GC_PENDING,T,th);	 /* to check result */
-    SetSymbolValue(GC_SAFE,T,th);	 /* discommend unmap_gc_page */
+    bind_variable(GC_SAFE,T,th);	 /* discommend unmap_gc_page */
 
     gc_enter_foreign_call(&function,0);
     /* May go into full suspend; returns without
@@ -392,6 +394,7 @@ new_thread_trampoline(struct thread *th)
 	   and that delays gc_stop_the_world at phase 1. */
 	gc_alloc_update_page_tables(BOXED_PAGE_FLAG, &th->alloc_region);
     }
+    unbind_variable(GC_SAFE,th);
     unbind_variable(IN_SAFEPOINT,th);
     /* After gc_safepoint, csp_around_foreign_call is cleared (and we
        had no context); thus gc_stop_the_world (if any) will mark us
@@ -1268,33 +1271,33 @@ int check_pending_gc()
     static pthread_mutex_t runtime_gc_mutex = PTHREAD_MUTEX_INITIALIZER;
     
     /* There may be occasional checks for pending GC, resulting in GC
-      invokation, in SUB-GC itself; we have to prevent infinite
-      recursion. IN_SAFEPOINT is bound to T before SUB_GC call,
-      effectively disabling pending GC checks.
+       invokation, in SUB-GC itself; we have to prevent infinite
+       recursion. IN_SAFEPOINT is bound to T before SUB_GC call,
+       effectively disabling pending GC checks.
 
-      SUB-GC, however, traps to (receive-pending-interrupt) in the
-      end; it's a _legitimate_ recursion (not that it's strictly
-      necessary, but the invariant that it preserves -- ``GC-PENDING
-      may be true only if there is a reason why GC was impossible
-      before'' -- is beautiful and simplifies some things greatly).
+       SUB-GC, however, traps to (receive-pending-interrupt) in the
+       end; it's a _legitimate_ recursion (not that it's strictly
+       necessary, but the invariant that it preserves -- ``GC-PENDING
+       may be true only if there is a reason why GC was impossible
+       before'' -- is beautiful and simplifies some things greatly).
 
-      So we have to clear anti-recursion flag before pending interrupt
-      trap is handled; we used to do it after GC completion only (iff
-      GC_PENDING becomes NIL) , but the earlier moment, when SUB-GC
-      binds GC-INHIBIT to T, is already safe; so we do it on both
-      conditions.
+       So we have to clear anti-recursion flag before pending interrupt
+       trap is handled; we used to do it after GC completion only (iff
+       GC_PENDING becomes NIL) , but the earlier moment, when SUB-GC
+       binds GC-INHIBIT to T, is already safe; so we do it on both
+       conditions.
 
-      NB this code is influenced _much_ by our policy of invoking
-      safepoints, checking pending interrupts and GC. If
-      check_pending_gc() is not called from SUB-GC before the pending
-      interrupt trap, we miss the whole interval where our predicate
-      is true (it works now because of check_gc_pending() in foreign
-      call epilogue; maybe it's better to clear IN_SAFEPOINT
-      unconditionally _on pending interrupt trap_).
+       NB this code is influenced _much_ by our policy of invoking
+       safepoints, checking pending interrupts and GC. If
+       check_pending_gc() is not called from SUB-GC before the pending
+       interrupt trap, we miss the whole interval where our predicate
+       is true (it works now because of check_gc_pending() in foreign
+       call epilogue; maybe it's better to clear IN_SAFEPOINT
+       unconditionally _on pending interrupt trap_).
 
-      The flag is cleared by setting to NIL instead of unbinding: the
-      place when it's unbound is symmetric to binding, i.e. outside
-      SUB-GC invokation, and we want to clear it inside SUB-GC. */
+       The flag is cleared by setting to NIL instead of unbinding: the
+       place when it's unbound is symmetric to binding, i.e. outside
+       SUB-GC invokation, and we want to clear it inside SUB-GC. */
     
     if ((SymbolValue(IN_SAFEPOINT,self) == T) &&
         ((SymbolValue(GC_INHIBIT,self) == T)||
@@ -1303,102 +1306,59 @@ int check_pending_gc()
     }
     if (thread_may_gc() && (SymbolValue(IN_SAFEPOINT, self) == NIL)) {
         if ((SymbolTlValue(GC_PENDING, self) == T)) {
-	    if (pthread_mutex_trylock(&runtime_gc_mutex)) {
-		/* Some execution paths (e.g. do_pending_interrupt
-		   calls) result in check_pending_gc() called in a
-		   foreign function context (i.e. when thread supposed
-		   to be in foreign call). This situation is uncommon
-		   with our current code, but it's exactly what we
-		   need for waiting... */
-		if (self->csp_around_foreign_call) {
-		    pthread_mutex_lock(self->state_lock);
-		    /* Threads running foreign code are `externally
-		       managed', so GC_PENDING will be cleared when
-		       other thread completes GC (earlier, actually:
-		       within stop the world). Thread state is
-		       externally managed too; by reacting on state
-		       change we could return earlier.
+	    boolean in_foreign_call = !!self->csp_around_foreign_call;
 
-		       This branch is taken when there is non-Lisp
-		       (non-mutator) code around check_pending_gc;
-		       currently we decided to allow running such
-		       non-interfering code when GCing. Foreign call
-		       epilogue will actually wait for GC completion,
-		       by checking thread state (which could be set to
-		       STATE_SUSPENDED `externally', again; current
-		       meaning of STATE_SUSPENDED is `any mutator code
-		       is suspended'). */
-		    while ((self->state == STATE_RUNNING)
-			   &&(SymbolTlValue(GC_PENDING,self)==T))
-			pthread_cond_wait(self->state_cond,self->state_lock);
-		    pthread_mutex_unlock(self->state_lock);
-		} else {
-		    /* When there is no foreign call, we call the
-		       prologue (and epilogue) ourselves, announcing
-		       some of our stack variables as a stack top for
-		       conservation. For the sake of callers'
-		       convenience , check_pending_gc() doesn't
-		       require context structure; we rely on the fact
-		       that the structure, if it's there, is below our
-		       advertised stack top, so gencgc will scan all
-		       its registers (FIXME: some ifdeffery in
-		       gencgc.c suggest that it's impossible on DARWIN). */
-		    gc_enter_foreign_call(&done,0);
-		    pthread_mutex_lock(self->state_lock);
-		    while (!suspend_info.suspend &&
-			   ((self->state == STATE_RUNNING)
-			    &&(SymbolTlValue(GC_PENDING,self)==T)))
-			pthread_cond_wait(self->state_cond,self->state_lock);
-		    
-		    pthread_mutex_unlock(self->state_lock);
-		    gc_leave_foreign_call();
+	    /* Take runtime_gc_mutex while being in foreign call context,
+	       avoiding deadlock */
+	    if (!in_foreign_call)
+		gc_enter_foreign_call(&done,0);
+	    pthread_mutex_lock(&runtime_gc_mutex);
+	    if (!in_foreign_call)
+		gc_leave_foreign_call();
+
+	    if ((SymbolTlValue(GC_PENDING, self) == T)) {
+		/* We now own runtime_gc_mutex, so now we'll GC.  Turn on
+		   the anti-recursion flag (see explanations above, where
+		   it's cleared) */
+		bind_variable(IN_SAFEPOINT,T,self);
+		block_deferrable_signals(NULL,&sigset);
+		lispobj gc_happened = NIL;
+		/* We may back off, then gc_happened won't be true */
+	    
+		BEGIN_GC_UNSAFE_CODE;
+		/* As we could leave foreign call - with
+		   BEGIN_GC_UNSAFE_CODE - maybe we don't have GC_PENDING
+		   any more. Then don't GC.
+
+		   (FIXME: with a new mutex, it could only happen with
+		   parallel `manual' GC invokation. Well, let's retain
+		   this code as a reminder that _here_ we are able to back
+		   off without significant costs).  */
+		if(SymbolTlValue(GC_PENDING,self)==T)
+		    gc_happened = funcall0(StaticSymbolFunction(SUB_GC));
+	    
+		pthread_mutex_unlock(&runtime_gc_mutex);
+		unbind_variable(IN_SAFEPOINT,self);
+		thread_sigmask(SIG_SETMASK,&sigset,NULL);
+		if (gc_happened == T) {
+		    /* POST_GC wants to enable interrupts */
+		    if (SymbolValue(INTERRUPTS_ENABLED,self) == T ||
+			SymbolValue(ALLOW_WITH_INTERRUPTS,self) == T) {
+			funcall0(StaticSymbolFunction(POST_GC));
+		    }
+		    done = 1;
 		}
-		/* No need to call again: GC_PENDING is cleared
-		   anyway; also, the `GCing herd' situation, where
-		   cyclic calls may be optimal, shouldn't happen now
-		   (the point of this branch is preventing it). */
-		return 0;
+		/* Whole GC + finalizers section is marked as GC-unsafe,
+		   to avoid extra safe-unsafe transitions, which are
+		   normally cheap but may become expensive if there are
+		   VERY HUNGRY CONSERS around (and the probability of the
+		   latter at the moment of GC is not too low). */
+
+		END_GC_UNSAFE_CODE;
+	    } else {
+		pthread_mutex_unlock(&runtime_gc_mutex);
 	    }
-	    
-	    /* We now own runtime_gc_mutex, so now we'll GC.  Turn on
-	      the anti-recursion flag (see explanations above, where
-	      it's cleared) */
-            bind_variable(IN_SAFEPOINT,T,self);
-            block_deferrable_signals(NULL,&sigset);
-	    lispobj gc_happened = NIL;
-	    /* We may back off, then gc_happened won't be true */
-	    
-	    BEGIN_GC_UNSAFE_CODE;
-	    /* As we could leave foreign call - with
-	       BEGIN_GC_UNSAFE_CODE - maybe we don't have GC_PENDING
-	       any more. Then don't GC.
-
-	       (FIXME: with a new mutex, it could only happen with
-	       parallel `manual' GC invokation. Well, let's retain
-	       this code as a reminder that _here_ we are able to back
-	       off without significant costs).  */
-	    if(SymbolTlValue(GC_PENDING,self)==T)
-		gc_happened = funcall0(StaticSymbolFunction(SUB_GC));
-	    
-	    pthread_mutex_unlock(&runtime_gc_mutex);
-            unbind_variable(IN_SAFEPOINT,self);
-            thread_sigmask(SIG_SETMASK,&sigset,NULL);
-            if (gc_happened == T) {
-		/* POST_GC wants to enable interrupts */
-		if (SymbolValue(INTERRUPTS_ENABLED,self) == T ||
-		    SymbolValue(ALLOW_WITH_INTERRUPTS,self) == T) {
-		    funcall0(StaticSymbolFunction(POST_GC));
-		}
-                done = 1;
-            }
-            /* Whole GC + finalizers section is marked as GC-unsafe,
-	       to avoid extra safe-unsafe transitions, which are
-	       normally cheap but may become expensive if there are
-	       VERY HUNGRY CONSERS around (and the probability of the
-	       latter at the moment of GC is not too low). */
-
-	    END_GC_UNSAFE_CODE;
-       }
+	}
     }
     return done;
 }
@@ -1576,7 +1536,9 @@ boolean gc_accept_thread_state(boolean wakep)
 	    gc_wake_wakeable();
 	    pthread_mutex_lock(self->state_lock);
 	}
-	volatile char scrubbing[1024]={0};
+	volatile char scrubbing[1024];
+	/* We may be calling SSE routine here, hence the alignment  */
+	fast_bzero_pointer(PTR_ALIGN_UP(&scrubbing,64), sizeof(scrubbing)-64);
 	/* Wait while GC starts the thread.  As we unlock before
 	   waking GC, it could have happened already.. */
 	while (self->state == oldstate)
@@ -1585,10 +1547,9 @@ boolean gc_accept_thread_state(boolean wakep)
     return waitp;
 }
 
+#undef DELAY_GC_PAGE_UNMAPPING
 
 #ifdef X86_MEMORY_MODEL
-
-#define DELAY_GC_PAGE_UNMAPPING
 
 void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
 {
@@ -1608,8 +1569,12 @@ void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
 	goto full_locking;
 
     *(volatile lispobj**)&self->csp_around_foreign_call =
-	(lispobj)csp;
-    *(((volatile char*)(intptr_t)GC_SAFEPOINT_PAGE_ADDR)+ ((((u64)self)>>16)&0xFF8)) ^= 0;
+	(lispobj*)csp;
+    *(((volatile char*)(intptr_t)GC_SAFEPOINT_PAGE_ADDR)+
+      /* Offset inside GC page, entirely arbitrary w.r.t correctness,
+	 but w.r.t performance: 1. constant for each thread, 2. not
+	 commonly shared between threads (cache-line scale) */
+      ((((u64)self)>>16)&(BACKEND_PAGE_BYTES-1)&(~127))) ^= 0;
 #endif
 	
     if (self->state == STATE_PHASE2_BLOCKER &&
@@ -1639,7 +1604,7 @@ void gc_leave_foreign_call()
 {
    struct thread* self = arch_os_get_current_thread();
    int maybe_wake = 0;
-   CONTEXT w32ctx = {.Ebp = __builtin_frame_address(1)};
+   CONTEXT w32ctx = {.Ebp = (DWORD)(intptr_t)__builtin_frame_address(1)};
    os_context_t ctx = {.win32_context = &w32ctx,
 		       .sigmask = self->os_thread->blocked_signal_set};
    
@@ -2145,7 +2110,7 @@ static inline void maybe_wake_gc_end(int oldword)
 void gc_stop_the_world()
 {
     struct thread *p, *th = arch_os_get_current_thread();
-    boolean gc_page_signalling = 0, yielded = 0;
+    boolean gc_page_signalling = 1;
     int gc_blockers = 0;
     const boolean silently = 0, loudly = 1;
     
@@ -2153,12 +2118,8 @@ void gc_stop_the_world()
     suspend_info.gc_thread = th;
     suspend_info.blockers = 0;
     suspend_flushword(pack_suspend_data(1,SUSPEND_REASON_GC,0));
-#ifndef DELAY_GC_PAGE_UNMAPPING
-    gc_page_signalling = 1;
     unmap_gc_page();
-#endif
     pthread_mutex_lock(&all_threads_lock);
-
     for_each_thread(p) {
 	if (p==th) continue;
 	/* If we requested pthread_np_serialize(p->os_thread) here,
@@ -2169,6 +2130,7 @@ void gc_stop_the_world()
 	
 	const char *oldss = dyndebug_safepoints ?
 	    get_thread_state_as_string(p) : "[?]";
+	
 	if (move_thread_state(p,STATE_PHASE1_BLOCKER,
 			      NULL,
 			      thread_needs_gc_signal,
@@ -2178,7 +2140,6 @@ void gc_stop_the_world()
 		     th, p, p->csp_around_foreign_call, p->gc_safepoint_context,
 		     oldss, get_thread_state_as_string(p));
 	    ++gc_blockers;
-	    gc_page_signalling = 1;
 	}
     }
     /* We hold all_threads_lock until gc-start-the-world now, except
@@ -2188,11 +2149,6 @@ void gc_stop_the_world()
        the idea to run whole GC without all_threads_lock. */
     pthread_mutex_unlock(&all_threads_lock);
 
-#ifdef DELAY_GC_PAGE_UNMAPPING
-    if (gc_page_signalling)
-	unmap_gc_page();
-#endif
-    
     gc_roll_or_wait(gc_blockers, 1, SUSPEND_REASON_GC, gc_page_signalling);
 
     gc_blockers = 0;
@@ -2231,37 +2187,25 @@ void gc_stop_the_world()
 void gc_start_the_world()
 {
     boolean loudly=1;
-    int nthreads = 0, nallthreads = 0;
+    int nthreads = 0, i = 0;
     struct thread *p, *th = arch_os_get_current_thread();
 
     odxprint(safepoints,
 	     "GCer %p starting the world\n", th);
     suspend_flushword(0);
-
     for_each_thread(p) {
-	++nallthreads;
-	if (p->state != STATE_DEAD && p->state != STATE_RUNNING)
+	if (move_thread_state(p, STATE_RUNNING,
+			      NULL, thread_live_other, loudly))
 	    ++nthreads;
     }
-    th->tls_cookie = make_fixnum(nallthreads>8 ? 7 : nallthreads-1);
-    if (nthreads) {
-	struct thread* wake_threads[nthreads];
-	int i = 0;
-	for_each_thread(p) {
-	    if (p->state != STATE_DEAD && p->state != STATE_RUNNING)
-		wake_threads[i++] = p;
-	}
-	nthreads = i;
-	pthread_mutex_unlock(&all_threads_lock);
-	for (i=0;i<nthreads; ++i) {
-	    move_thread_state(wake_threads[i],
-			      STATE_RUNNING,
-			      NULL, NULL, loudly);
-	} 
-    } else {
-	pthread_mutex_unlock(&all_threads_lock);
-    }
+    pthread_mutex_unlock(&all_threads_lock);
     pthread_mutex_unlock(&suspend_info.world_lock);
+    
+    if (os_number_of_processors == 1) {
+	extern unsigned long bytes_allocated, auto_gc_trigger;
+	for (i=0;i<nthreads && i<4 && (bytes_allocated<auto_gc_trigger) ; ++i)
+	    thread_yield();
+    }
     odxprint(safepoints,
 	     "GCer %p started the world [ctx %p csp %p]\n", th,
 	     th->gc_safepoint_context, th->csp_around_foreign_call);
