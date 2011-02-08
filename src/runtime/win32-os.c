@@ -3222,7 +3222,7 @@ again:
 boolean win32_maybe_interrupt_io(void* thread)
 {
     struct thread *th = thread;
-    boolean done;
+    boolean done = 0;
     if (ptr_CancelIoEx) {
 	HANDLE h = (HANDLE)
 	    InterlockedExchangePointer((volatile LPVOID *)
