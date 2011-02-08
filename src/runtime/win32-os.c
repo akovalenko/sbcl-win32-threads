@@ -2492,13 +2492,6 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 	if (self) {
 	    self->pseudo_atomic_bits |= (*(char*)context->Ebp & 0x03);
 	    (*(char*)context->Ebp) &= ~0x03;
-	    if (self->pseudo_atomic_bits & 0x02) {
-		fprintf(stderr,"Pa trapped from %p, cfp %p => %p, ab %p, xc %p\n",
-			context->Eip,
-			context->Ebp,*(void**)context->Ebp,
-			self->pseudo_atomic_bits,
-			code);
-	    }
 	}
 
 
