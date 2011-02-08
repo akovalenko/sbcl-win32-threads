@@ -1312,6 +1312,8 @@ typeof(ResetWriteWatch) *ptr_ResetWriteWatch;
 
 BOOL WINAPI CancelIoEx(HANDLE handle, LPOVERLAPPED overlapped);
 typeof(CancelIoEx) *ptr_CancelIoEx;
+BOOL WINAPI CancelSynchronousIo(HANDLE threadHandle);
+typeof(CancelSynchronousIo) *ptr_CancelSynchronousIo;
 		   
 #define RESOLVE(hmodule,fn)			\
     do {					\
@@ -1326,6 +1328,7 @@ static void resolve_optional_imports()
 	RESOLVE(kernel32,GetWriteWatch);
 	RESOLVE(kernel32,ResetWriteWatch);
 	RESOLVE(kernel32,CancelIoEx);
+	RESOLVE(kernel32,CancelSynchronousIo);
     }
 }
 
@@ -3226,6 +3229,7 @@ again:
 boolean win32_maybe_interrupt_io(void* thread)
 {
     struct thread *th = thread;
+    boolean done;
     if (ptr_CancelIoEx) {
 	HANDLE h = (HANDLE)
 	    InterlockedExchangePointer((volatile LPVOID *)
@@ -3239,7 +3243,12 @@ boolean win32_maybe_interrupt_io(void* thread)
 		pthread_mutex_unlock(&ttyinput.lock);
 	    }
 #endif
-	    return ptr_CancelIoEx(h,NULL);
+	    if (ptr_CancelSynchronousIo) {
+		pthread_mutex_lock(&th->os_thread->fiber_lock);
+		done = ptr_CancelSynchronousIo(th->os_thread->fiber_group->handle);
+		pthread_mutex_unlock(&th->os_thread->fiber_lock);
+	    }
+	    return (!!done)|(!!ptr_CancelIoEx(h,NULL));
 	}
     }
     return 0;
