@@ -460,11 +460,7 @@ new_thread_trampoline(struct thread *th)
     deadline.tv_sec = tv.tv_sec + (tv.tv_usec * 1000 + relative) / 1000000000;
     deadline.tv_nsec = (tv.tv_usec * 1000 + relative) % 1000000000;
 
-    if (pthread_mutex_trylock(&resurrected_lock)) {
-	odxprint(safepoints, "Resurrect lock busy at %p, dying", th);
-	goto die;
-    }
-    odxprint(safepoints, "Resurrect lock taken by %p", th);
+    pthread_mutex_lock(&resurrected_lock);
     ++resurrectable_waiters;
     
     struct thread* lastwaiter;
@@ -478,32 +474,36 @@ new_thread_trampoline(struct thread *th)
 	th->prev = NULL;
 	resurrected_thread = th;
     }
+    pthread_mutex_unlock(&resurrected_lock);
 
+    pthread_mutex_lock(th->state_lock);
     odxprint(safepoints, "Before timed wait %p", th);
-    pthread_cond_timedwait(th->state_cond, &resurrected_lock, &deadline);
+    while (th->state == STATE_DEAD)
+	pthread_cond_timedwait(th->state_cond, th->state_lock, &deadline);
+    pthread_mutex_unlock(th->state_lock);
+    
     odxprint(safepoints, "After timed wait %p", th);
-
-    --resurrectable_waiters;
-    /* owning reslock */
     if (th->state == STATE_DEAD) {
-	odxprint(safepoints, "State DEAD, final unlinking.. %p", th);
-	/* no change, unlink */
-	if (th->next)
-	    th->next->prev = th->prev;
-	if (th->prev)
-	    th->prev->next = th->next;
-	else
-	    resurrected_thread = th->next;
-	odxprint(safepoints, "State DEAD, dying.. %p", th);
-	pthread_mutex_unlock(&resurrected_lock);
-	goto die;
+	pthread_mutex_lock(&resurrected_lock);
+	if (th->state == STATE_DEAD) {
+	    --resurrectable_waiters;
+	    odxprint(safepoints, "State DEAD, final unlinking.. %p", th);
+	    /* no change, unlink */
+	    if (th->next)
+		th->next->prev = th->prev;
+	    if (th->prev)
+		th->prev->next = th->next;
+	    else
+		resurrected_thread = th->next;
+	    odxprint(safepoints, "State DEAD, dying.. %p", th);
+	    pthread_mutex_unlock(&resurrected_lock);
+	    goto die;
+	} else {
+	    pthread_mutex_unlock(&resurrected_lock);
+	}
     }
 
     odxprint(safepoints, "State UNDEAD - Resurrecting, %p", th);
-
-
-    /* odxprint(safepoints, "Resurrecting, %p", th); */
-    pthread_mutex_unlock(&resurrected_lock);
     
     function = th->no_tls_value_marker;
 
@@ -512,7 +512,8 @@ new_thread_trampoline(struct thread *th)
 
     memcpy(((void*)th)+MAX_INTERRUPTS*sizeof(lispobj)+sizeof(*th),
 	   ((void*)reset_dynamic_values)+MAX_INTERRUPTS*sizeof(lispobj)+sizeof(*th),
-	   (TLS_SIZE*sizeof(lispobj))-(MAX_INTERRUPTS*sizeof(lispobj)+sizeof(*th)));
+	   (SymbolValue(FREE_TLS_INDEX,0)*sizeof(lispobj))-
+	   (MAX_INTERRUPTS*sizeof(lispobj)+sizeof(*th)));
     th->no_tls_value_marker = NO_TLS_VALUE_MARKER_WIDETAG;
     th->in_lisp_fpu_mode = fpu_mode;
 
@@ -901,22 +902,23 @@ os_thread_t create_thread(lispobj initial_function) {
 #endif
 	if (resurrected_thread && !pthread_mutex_trylock(&resurrected_lock)) {
 	    if (resurrected_thread) {
+		--resurrectable_waiters;
 		th = resurrected_thread;
-		odxprint(safepoints, "%p reused by %p", th,
-			 arch_os_get_current_thread());
 		if (th->next) th->next->prev = NULL;
 		resurrected_thread = th->next;
 		th->no_tls_value_marker = initial_function;
-		th->state = STATE_RUNNING;
 		pthread_mutex_lock(th->state_lock);
+		th->state = STATE_RUNNING;
 	    } else {
 		th = NULL;
 	    }
 	    pthread_mutex_unlock(&resurrected_lock);
+	    
 	    if (th) {
+		odxprint(safepoints, "%p reused by %p", th,
+			 arch_os_get_current_thread());
 		pthread_cond_broadcast(th->state_cond);
 		pthread_mutex_unlock(th->state_lock);
-		/* wait_for_thread_state_change(th,STATE_SUSPENDED); */
 		return th->os_thread;
 	    }
 	}
@@ -1646,7 +1648,6 @@ void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access)
 	clear_pseudo_atomic_interrupted(self);
     }
 
-
  again:
     pthread_mutex_lock(self->state_lock);
     /* context for conservation */
@@ -1671,8 +1672,7 @@ void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access)
        over. NB if concurrent GC was in progress, there is already no
        GC_PENDING. */
     if (!self->csp_around_foreign_call) {
-	while (check_pending_gc() ||
-	       check_pending_interrupts(ctx));
+	while (check_pending_gc()||check_pending_interrupts(ctx));
     }
 
     if (SymbolTlValue(STOP_FOR_GC_PENDING,self)==NIL
@@ -2073,7 +2073,6 @@ void gc_stop_the_world()
     gc_roll_or_wait(gc_blockers, 2, SUSPEND_REASON_GC, gc_page_signalling);
     odxprint(safepoints,
 	     "GCer %p stopped the world\n", th);
-    /* pthread_mutex_lock(&all_threads_lock); */
 }
 
 void gc_start_the_world()

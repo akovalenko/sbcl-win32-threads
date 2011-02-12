@@ -1747,8 +1747,9 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
 os_vm_address_t
 os_validate_recommit(os_vm_address_t addr, os_vm_size_t len)
 {
-    if (addr_in_mmapped_core(addr))
+    if (addr_in_mmapped_core(addr)) {
 	return addr;
+    }
     return
         AVERLAX(VirtualAlloc(addr, len, MEM_COMMIT, PAGE_EXECUTE_READWRITE));
 }
@@ -1782,10 +1783,10 @@ os_invalidate(os_vm_address_t addr, os_vm_size_t len)
 {
     RECURSIVE_REDUCE_TO_ONE_SPACE_VOID(os_invalidate,addr,len);
 
-    if (addr_in_mmapped_core(addr)) {
-        fast_bzero_pointer(addr, len);
-    } else {
+    if (!addr_in_mmapped_core(addr)) {
         AVERLAX(VirtualFree(addr, len, MEM_DECOMMIT));
+    } else {
+	fast_bzero_pointer(addr,len);
     }
 }
 
@@ -3340,8 +3341,6 @@ int win32_unix_read(int fd, void * buf, int count)
 
     odprintf("read(%d, 0x%p, %d)", fd, buf, count);
     handle = (HANDLE)_get_osfhandle(fd);
-
-    
 
     if (console_handle_p(handle)) {
         /* 1. Console is a singleton.

@@ -1074,7 +1074,8 @@ int pthread_cond_timedwait(pthread_cond_t * cv, pthread_mutex_t * cs,
       msec = 0;
     do {
 	if (cv->alertable) {
-	    while ((rv = WaitForSingleObjectEx(w.event, msec, TRUE)) == WAIT_IO_COMPLETION);
+	    while ((rv = WaitForSingleObjectEx(w.event, msec, TRUE))
+		   == WAIT_IO_COMPLETION);
 	} else {
 	    rv = WaitForSingleObject(w.event, msec);
 	}
@@ -1085,7 +1086,8 @@ int pthread_cond_timedwait(pthread_cond_t * cv, pthread_mutex_t * cs,
   if (rv == WAIT_TIMEOUT) {
     if (!cv_wakeup_remove(cv, &w)) {
       /* Someone removed our wakeup record: though we got a timeout,
-         event was signalled before we are here. Reset it. */
+         event was (will be) signalled before we are here.
+	 Consume this wakeup. */
       WaitForSingleObject(w.event, INFINITE);
     }
   }
@@ -1454,8 +1456,7 @@ futex_wake(volatile int *lock_word, int n)
 	    }
 	    n--;
 	    postponed[npostponed++] = event;
-	    if (/* oldinfo == WAKEUP_WAITING_TIMEOUT || */
-		npostponed == sizeof(postponed)/sizeof(postponed[0])) {
+	    if (npostponed == sizeof(postponed)/sizeof(postponed[0])) {
 		for (i=0; i<npostponed; ++i)
 		    SetEvent(postponed[i]);
 		npostponed = 0;

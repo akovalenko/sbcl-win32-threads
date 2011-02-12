@@ -956,8 +956,10 @@ Lloop_sse:
         sfence        /* Ensure that weakly ordered writes are flushed. */
 Lend_sse:
         mov 16(%esp), %esi      /* Parameter: start address */
+#ifndef LISP_FEATURE_WIN32
         prefetcht0 0(%esi)      /* Prefetch the start of the block into cache,
                                  * since it's likely to be used immediately. */
+#endif
         pop %edi      /* Restore temp registers */
         pop %esi
 	ret
