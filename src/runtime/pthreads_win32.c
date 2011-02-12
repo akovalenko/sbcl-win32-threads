@@ -791,10 +791,11 @@ static pthread_key_t cv_event_key;
    find and unlink wakeup record. Let's let it know (of course,
    it will know for sure only under cv_wakeup_lock). */
 
-#define WAKEUP_NO_DATA 0
+#define WAKEUP_WAITING_NOTIMEOUT 0
+#define WAKEUP_WAITING_TIMEOUT 4
+
 #define WAKEUP_HAPPENED 1
 #define WAKEUP_BY_INTERRUPT 2
-
 
 static void* event_create()
 {
@@ -897,6 +898,10 @@ int pthread_cond_destroy(pthread_cond_t *cv)
 int pthread_cond_broadcast(pthread_cond_t *cv)
 {
   int count = 0;
+  
+  HANDLE postponed[128];
+  int npostponed = 0,i;
+
   /* No strict requirements to memory visibility model, because of
      mutex unlock around waiting. */
   if (!cv->first_wakeup)
@@ -908,11 +913,19 @@ int pthread_cond_broadcast(pthread_cond_t *cv)
     HANDLE waitevent = w->event;
     cv->first_wakeup = w->next;
     w->info = WAKEUP_HAPPENED;
-    SetEvent(waitevent);
+    postponed[npostponed++] = waitevent;
+    if (/* w->info == WAKEUP_WAITING_TIMEOUT || */ npostponed ==
+	sizeof(postponed)/sizeof(postponed[0])) {
+	for (i=0; i<npostponed; ++i)
+	    SetEvent(postponed[i]);
+	npostponed = 0;
+    }
     ++count;
   }
   cv->last_wakeup = NULL;
   pthread_mutex_unlock(&cv->wakeup_lock);
+  for (i=0; i<npostponed; ++i)
+      SetEvent(postponed[i]);
   return 0;
 }
 
@@ -942,7 +955,6 @@ int cv_wakeup_add(struct pthread_cond_t* cv, struct thread_wakeup* w)
 {
   HANDLE event;
   w->next = NULL;
-  w->info = WAKEUP_NO_DATA;
   pthread_mutex_lock(&cv->wakeup_lock);
   if (w->uaddr) {
       if (w->uval != *w->uaddr) {
@@ -1008,6 +1020,7 @@ int pthread_cond_wait(pthread_cond_t * cv, pthread_mutex_t * cs)
 {
   struct thread_wakeup w;
   w.uaddr = 0;
+  w.info = WAKEUP_WAITING_NOTIMEOUT;
   cv_wakeup_add(cv, &w);
   if (cv->last_wakeup->next == cv->last_wakeup) {
       pthread_np_lose(5,"cv->last_wakeup->next == cv->last_wakeup\n");
@@ -1018,11 +1031,13 @@ int pthread_cond_wait(pthread_cond_t * cv, pthread_mutex_t * cs)
   pthread_self()->waiting_cond = cv;
   DEBUG_RELEASE(*cs);
   pthread_mutex_unlock(cs);
-  if (cv->alertable) {
-    while (WaitForSingleObjectEx(w.event, INFINITE, TRUE) == WAIT_IO_COMPLETION);
-  } else {
-    WaitForSingleObject(w.event, INFINITE);
-  }
+  do {
+      if (cv->alertable) {
+	  while (WaitForSingleObjectEx(w.event, INFINITE, TRUE) == WAIT_IO_COMPLETION);
+      } else {
+	  WaitForSingleObject(w.event, INFINITE);
+      }
+  } while (w.info == WAKEUP_WAITING_NOTIMEOUT);
   pthread_self()->waiting_cond = NULL;
   /* Event is signalled once, wakeup is dequeued by signaller. */
   cv->return_fn(w.event);
@@ -1031,12 +1046,14 @@ int pthread_cond_wait(pthread_cond_t * cv, pthread_mutex_t * cs)
   return 0;
 }
 
-int pthread_cond_timedwait(pthread_cond_t * cv, pthread_mutex_t * cs, const struct timespec * abstime)
+int pthread_cond_timedwait(pthread_cond_t * cv, pthread_mutex_t * cs,
+			   const struct timespec * abstime)
 {
   DWORD rv;
   struct thread_wakeup w;
   pthread_t self = pthread_self();
 
+  w.info = WAKEUP_WAITING_TIMEOUT;
   w.uaddr = 0;
   cv_wakeup_add(cv, &w);
   if (cv->last_wakeup->next == cv->last_wakeup) {
@@ -1055,11 +1072,13 @@ int pthread_cond_timedwait(pthread_cond_t * cv, pthread_mutex_t * cs, const stru
     msec = sec * 1000 + abstime->tv_nsec / 1000000 - cur_tm.tv_usec / 1000;
     if (msec < 0)
       msec = 0;
-    if (cv->alertable) {
-      while ((rv = WaitForSingleObjectEx(w.event, msec, TRUE)) == WAIT_IO_COMPLETION);
-    } else {
-      rv = WaitForSingleObject(w.event, msec);
-    }
+    do {
+	if (cv->alertable) {
+	    while ((rv = WaitForSingleObjectEx(w.event, msec, TRUE)) == WAIT_IO_COMPLETION);
+	} else {
+	    rv = WaitForSingleObject(w.event, msec);
+	}
+    } while (rv == WAIT_OBJECT_0 && w.info == WAKEUP_WAITING_TIMEOUT);
   }
   self->waiting_cond = NULL;
 
@@ -1370,15 +1389,19 @@ futex_wait(volatile int *lock_word, int oldval, long sec, unsigned long usec)
   int result;
   sigset_t pendset, blocked;
   int maybeINTR;
+  int info = sec<0 ? WAKEUP_WAITING_NOTIMEOUT: WAKEUP_WAITING_TIMEOUT;
 
   w.uaddr = lock_word;
   w.uval = oldval;
+  w.info = info;
   
   if (cv_wakeup_add(&futex_pseudo_cond,&w)) {
       return FUTEX_EWOULDBLOCK;
   }
   self->futex_wakeup = &w;
-  wfso = WaitForSingleObject(w.event, msec);
+  do {
+      wfso = WaitForSingleObject(w.event, msec);
+  } while (wfso == WAIT_OBJECT_0 && w.info == info);
   self->futex_wakeup = NULL;
   sigpending(&pendset);
   maybeINTR = (pendset & ~self->blocked_signal_set)? FUTEX_EINTR : 0;
@@ -1410,12 +1433,16 @@ futex_wake(volatile int *lock_word, int n)
     pthread_cond_t *cv = &futex_pseudo_cond;
     int result = 0;
     struct thread_wakeup *w, *prev;
+    HANDLE postponed[128];
+    int npostponed = 0,i;
+    
     if (n==0) return 0;
     
     pthread_mutex_lock(&cv->wakeup_lock);
     for (w = cv->first_wakeup, prev = NULL; w && n;) {
 	if (w->uaddr == lock_word) {
 	    HANDLE event = w->event;
+	    int oldinfo = w->info;
 	    w->info = WAKEUP_HAPPENED;
 	    if (cv->last_wakeup == w)
 		cv->last_wakeup = prev;
@@ -1426,12 +1453,20 @@ futex_wake(volatile int *lock_word, int n)
 		prev->next = w;
 	    }
 	    n--;
-	    SetEvent(event);
+	    postponed[npostponed++] = event;
+	    if (/* oldinfo == WAKEUP_WAITING_TIMEOUT || */
+		npostponed == sizeof(postponed)/sizeof(postponed[0])) {
+		for (i=0; i<npostponed; ++i)
+		    SetEvent(postponed[i]);
+		npostponed = 0;
+	    }
 	} else {
 	    prev=w, w=w->next;
 	}
     }
     pthread_mutex_unlock(&cv->wakeup_lock);
+    for (i=0; i<npostponed; ++i)
+	SetEvent(postponed[i]);
     return 0;
 }
 

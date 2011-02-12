@@ -263,11 +263,9 @@
   (:temporary (:sc unsigned-reg :offset edx-offset
                    :from :eval :to :result) edx)
   #!+sb-gc-safepoint
-  (:temporary (:sc unsigned-reg :offset esi-offset
-                   :from :eval :to :result) esi)
+  (:temporary (:sc unsigned-reg :offset esi-offset) esi)
   #!+sb-gc-safepoint
-  (:temporary (:sc unsigned-reg :offset edi-offset
-                   :from :eval :to :result) edi)
+  (:temporary (:sc unsigned-reg :offset edi-offset) edi)
   (:node-var node)
   (:vop-var vop)
   (:save-p t)

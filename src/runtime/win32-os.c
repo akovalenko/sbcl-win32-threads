@@ -1814,19 +1814,22 @@ static char* non_external_self_name = "//////<SBCL executable>";
 int win32_open_for_mmap(const char* fileName)
 {
     HANDLE handle;
-    if (strcmp(fileName,non_external_self_name)) {
-	handle = CreateFileA(fileName,GENERIC_READ|GENERIC_EXECUTE,
-			     FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,
-			     OPEN_EXISTING,0,NULL);
-    } else {
-	WCHAR mywpath[MAX_PATH+1];
-	DWORD gmfnResult = GetModuleFileNameW(NULL,mywpath,MAX_PATH+1);
-	AVER(gmfnResult>0 && gmfnResult<(MAX_PATH+1));
-	handle = CreateFileW(mywpath,GENERIC_READ|GENERIC_EXECUTE,
-			     FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,
-			     OPEN_EXISTING,0,NULL);
+    int retries = 1;
+    do {
+	if (strcmp(fileName,non_external_self_name)) {
+	    handle = CreateFileA(fileName,FILE_GENERIC_READ|FILE_GENERIC_EXECUTE,
+				 FILE_SHARE_READ,NULL,
+				 OPEN_EXISTING,0,NULL);
+	} else {
+	    WCHAR mywpath[MAX_PATH+1];
+	    DWORD gmfnResult = GetModuleFileNameW(NULL,mywpath,MAX_PATH+1);
+	    AVER(gmfnResult>0 && gmfnResult<(MAX_PATH+1));
+	    handle = CreateFileW(mywpath,FILE_GENERIC_READ|FILE_GENERIC_EXECUTE,
+				 FILE_SHARE_READ,NULL,
+				 OPEN_EXISTING,0,NULL);
 	
-    }
+	}
+    } while (handle == INVALID_HANDLE_VALUE && retries--);
     AVER(handle && (handle!=INVALID_HANDLE_VALUE));
     return _open_osfhandle((intptr_t)handle,O_BINARY);
 }

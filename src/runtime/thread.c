@@ -430,8 +430,8 @@ new_thread_trampoline(struct thread *th)
 	       region => we may just go on. */
 	}
 	th->state = STATE_DEAD;
-	pthread_cond_broadcast(th->state_cond);
 	pthread_mutex_unlock(th->state_lock);
+	pthread_cond_broadcast(th->state_cond);
 	
 	if (maybe_wake_gc) {
 	    lock_suspend_info(__FILE__,__LINE__);
@@ -908,12 +908,14 @@ os_thread_t create_thread(lispobj initial_function) {
 		resurrected_thread = th->next;
 		th->no_tls_value_marker = initial_function;
 		th->state = STATE_RUNNING;
-		pthread_cond_signal(th->state_cond);
+		pthread_mutex_lock(th->state_lock);
 	    } else {
 		th = NULL;
 	    }
 	    pthread_mutex_unlock(&resurrected_lock);
 	    if (th) {
+		pthread_cond_broadcast(th->state_cond);
+		pthread_mutex_unlock(th->state_lock);
 		/* wait_for_thread_state_change(th,STATE_SUSPENDED); */
 		return th->os_thread;
 	    }
@@ -1843,12 +1845,13 @@ move_thread_state(struct thread *p,
 
 	if (!gc_adjust_thread_state(p)) {
 	    /* not externally adjustable (blocker => suspend) */
-	    if (signal_cond)
-		pthread_cond_broadcast(p->state_cond);
 	    done = 1;
 	}
     }
     pthread_mutex_unlock(p->state_lock);
+    if (done && signal_cond)
+	pthread_cond_broadcast(p->state_cond);
+    
     /* If done, thread is in STATE_PHASE1_BLOCKER or STATE_PHASE2_BLOCKER. */
     return done;
 }

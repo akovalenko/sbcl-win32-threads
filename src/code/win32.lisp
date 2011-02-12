@@ -920,39 +920,40 @@ UNIX epoch: January 1st 1970."
             ((#b000 #b010) file-open-existing)
             (#b100 file-open-always)
             (#b101 file-create-always))))
-  (let ((handle
-         (create-file path
+    (let ((handle
+	   (create-file path
                         (logior
                          (if revertable #x10000 0)
-                      (if (plusp (logand sb!unix:o_append flags))
-                          access-file-append-data
-                             (ecase (logand 3 flags)
-                            (0 access-generic-read)
-                            (1 access-generic-write)
-                               ((2 3) (logior access-generic-write
-                                              access-generic-read)))))
-                      (logior file-share-read
-                              file-share-write)
-                      nil
+			 (if (plusp (logand sb!unix:o_append flags))
+			     access-file-append-data
+			     0)
+			 (ecase (logand 3 flags)
+			   (0 FILE_GENERIC_READ)
+			   (1 FILE_GENERIC_WRITE)
+			   ((2 3) (logior FILE_GENERIC_READ
+					  FILE_GENERIC_WRITE))))
+			(logior FILE_SHARE_READ
+				FILE_SHARE_WRITE)
+			nil
                         create-disposition
-                      (logior
-                       file-attribute-normal
-                       file-flag-overlapped
-                       file-flag-sequential-scan)
-                      0)))
-    (if (eql handle invalid-handle)
-        (values nil
+			(logior
+			 file-attribute-normal
+			 file-flag-overlapped
+			 file-flag-sequential-scan)
+			0)))
+      (if (eql handle invalid-handle)
+	  (values nil
 
-                (let ((error-code (get-last-error)))
-                  (case error-code
-                    (2 sb!unix:enoent)
-                    (183 sb!unix:eexist)
-                    (otherwise (- error-code)))))
+		  (let ((error-code (get-last-error)))
+		    (case error-code
+		      (2 sb!unix:enoent)
+		      (183 sb!unix:eexist)
+		      (otherwise (- error-code)))))
           (progn
             (initialize-comm-timeouts handle)
-        (let ((fd (open-osfhandle handle (logior sb!unix::o_binary flags))))
-          (if (minusp fd)
-              (values nil (sb!unix::get-errno))
+	    (let ((fd (open-osfhandle handle (logior sb!unix::o_binary flags))))
+	      (if (minusp fd)
+		  (values nil (sb!unix::get-errno))
                   (values fd 0))))))))
 
 (define-alien-routine ("closesocket" close-socket) int (handle handle))
