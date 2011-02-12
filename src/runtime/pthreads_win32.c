@@ -1086,7 +1086,7 @@ int pthread_cond_timedwait(pthread_cond_t * cv, pthread_mutex_t * cs,
     if (!cv_wakeup_remove(cv, &w)) {
       /* Someone removed our wakeup record: though we got a timeout,
          event was signalled before we are here. Reset it. */
-      ResetEvent(w.event);
+      WaitForSingleObject(w.event, INFINITE);
     }
   }
   cv->return_fn(w.event);
@@ -1411,7 +1411,7 @@ futex_wait(volatile int *lock_word, int oldval, long sec, unsigned long usec)
       if (!cv_wakeup_remove(&futex_pseudo_cond,&w)) {
 	  /* timeout, but someone other removed wakeup. */
 	  result = maybeINTR;
-	  ResetEvent(w.event);
+	  WaitForSingleObject(w.event,INFINITE);
       } else {
 	  result = FUTEX_ETIMEDOUT;
       }
