@@ -294,7 +294,7 @@ pthread_mutex_t resurrected_lock = PTHREAD_MUTEX_INITIALIZER;
 struct thread *resurrected_thread;
 
 unsigned int resurrectable_waiters = 0;
-unsigned int max_resurrectable_waiters = 4;
+unsigned int max_resurrectable_waiters = 16;
 
 #endif
 
@@ -454,72 +454,77 @@ new_thread_trampoline(struct thread *th)
     th->prev = NULL;
     struct timespec deadline;
     int ret;
-    int relative = 5000;
+    int relative = 10000;
     struct timeval tv;
-    ret = gettimeofday(&tv, NULL);
-    deadline.tv_sec = tv.tv_sec + (tv.tv_usec * 1000 + relative) / 1000000000;
-    deadline.tv_nsec = (tv.tv_usec * 1000 + relative) % 1000000000;
-
-    pthread_mutex_lock(&resurrected_lock);
-    ++resurrectable_waiters;
-    
-    struct thread* lastwaiter;
-    
-    if (resurrected_thread) {
-	for (lastwaiter = resurrected_thread; lastwaiter->next;
-	     lastwaiter = lastwaiter->next);
-	th->prev = lastwaiter;
-	lastwaiter->next = th;
-    } else {
-	th->prev = NULL;
-	resurrected_thread = th;
-    }
-    pthread_mutex_unlock(&resurrected_lock);
-
-    pthread_mutex_lock(th->state_lock);
-    odxprint(safepoints, "Before timed wait %p", th);
-    while (th->state == STATE_DEAD)
-	pthread_cond_timedwait(th->state_cond, th->state_lock, &deadline);
-    pthread_mutex_unlock(th->state_lock);
-    
-    odxprint(safepoints, "After timed wait %p", th);
-    if (th->state == STATE_DEAD) {
-	pthread_mutex_lock(&resurrected_lock);
-	if (th->state == STATE_DEAD) {
-	    --resurrectable_waiters;
-	    odxprint(safepoints, "State DEAD, final unlinking.. %p", th);
-	    /* no change, unlink */
-	    if (th->next)
-		th->next->prev = th->prev;
-	    if (th->prev)
-		th->prev->next = th->next;
-	    else
-		resurrected_thread = th->next;
-	    odxprint(safepoints, "State DEAD, dying.. %p", th);
-	    pthread_mutex_unlock(&resurrected_lock);
-	    goto die;
-	} else {
-	    pthread_mutex_unlock(&resurrected_lock);
-	}
-    }
-
-    odxprint(safepoints, "State UNDEAD - Resurrecting, %p", th);
-    
-    function = th->no_tls_value_marker;
-
-    unsigned int fpu_mode = th->in_lisp_fpu_mode;
-    int os_data_size = offsetof(struct thread, binding_stack_start);
+    boolean responsible_awakener = 0;
 
     memcpy(((void*)th)+MAX_INTERRUPTS*sizeof(lispobj)+sizeof(*th),
 	   ((void*)reset_dynamic_values)+MAX_INTERRUPTS*sizeof(lispobj)+sizeof(*th),
 	   (SymbolValue(FREE_TLS_INDEX,0)*sizeof(lispobj))-
 	   (MAX_INTERRUPTS*sizeof(lispobj)+sizeof(*th)));
-    th->no_tls_value_marker = NO_TLS_VALUE_MARKER_WIDETAG;
-    th->in_lisp_fpu_mode = fpu_mode;
 
-#ifdef LISP_FEATURE_GENCGC
-    gc_set_region_empty(&th->alloc_region);
-#endif
+    if (pthread_mutex_trylock(&resurrected_lock))
+	goto die;
+    ++resurrectable_waiters;
+    
+    th->next = resurrected_thread;
+    resurrected_thread = th;
+    responsible_awakener = (th->next==0);
+    pthread_mutex_unlock(&resurrected_lock);
+
+    lispobj newstate;
+ wait_again:
+    pthread_mutex_lock(th->state_lock);
+    odxprint(safepoints, "Before timed wait %p", th);
+    while (th->state == STATE_DEAD) {
+	if (responsible_awakener) {
+	    ret = gettimeofday(&tv, NULL);
+	    deadline.tv_sec = tv.tv_sec + relative/1000;
+	    deadline.tv_nsec = 0;
+	    if (pthread_cond_timedwait(th->state_cond, th->state_lock, &deadline)
+		==ETIMEDOUT)
+		break;
+	} else {
+	    pthread_cond_wait(th->state_cond, th->state_lock);
+	}
+    }
+    newstate = th->state;
+    pthread_mutex_unlock(th->state_lock);
+    
+    odxprint(safepoints, "After timed wait %p", th);
+    
+    if (responsible_awakener) {
+	if (newstate == STATE_DEAD) {
+	    if (!pthread_mutex_trylock(&resurrected_lock)) {
+		struct thread* victim = resurrected_thread;
+		if (victim) {
+		    if (victim->next || victim == th) {
+			--resurrectable_waiters;
+			odxprint(safepoints, "State DEAD, final unlinking.. %p",
+				 victim);
+			resurrected_thread = victim->next;
+		    } else {
+			victim = NULL;
+		    }
+		}
+		pthread_mutex_unlock(&resurrected_lock);
+		if (victim) {
+		    pthread_mutex_lock(victim->state_lock);
+		    victim->state = STATE_SUSPENDED;
+		    pthread_mutex_unlock(victim->state_lock);
+		    pthread_cond_broadcast(victim->state_cond);
+		}
+	    }
+	}
+    }
+    if (newstate == STATE_SUSPENDED) goto die;
+    if (newstate == STATE_DEAD) goto wait_again;
+
+    odxprint(safepoints, "State UNDEAD - Resurrecting, %p", th);
+    
+    function = th->no_tls_value_marker;
+
+    th->no_tls_value_marker = NO_TLS_VALUE_MARKER_WIDETAG;
     goto resurrect;
 
 
@@ -900,11 +905,11 @@ os_thread_t create_thread(lispobj initial_function) {
 #else
     if (1) {
 #endif
-	if (resurrected_thread && !pthread_mutex_trylock(&resurrected_lock)) {
+	if (resurrected_thread) {
+	    pthread_mutex_lock(&resurrected_lock);
 	    if (resurrected_thread) {
 		--resurrectable_waiters;
 		th = resurrected_thread;
-		if (th->next) th->next->prev = NULL;
 		resurrected_thread = th->next;
 		th->no_tls_value_marker = initial_function;
 		pthread_mutex_lock(th->state_lock);
@@ -918,8 +923,9 @@ os_thread_t create_thread(lispobj initial_function) {
 		odxprint(safepoints, "%p reused by %p", th,
 			 arch_os_get_current_thread());
 		pthread_cond_broadcast(th->state_cond);
+		kid_tid = th->os_thread;
 		pthread_mutex_unlock(th->state_lock);
-		return th->os_thread;
+		return kid_tid;
 	    }
 	}
     }
