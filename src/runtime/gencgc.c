@@ -588,7 +588,7 @@ zero_dirty_pages(page_index_t start, page_index_t end) {
 
     for (i = start; i <= end; i++) {
         if (page_table[i].need_to_zero == 1) {
-            zero_pages(start, end);
+            zero_pages_with_mmap(start, end);
             break;
         }
     }
@@ -799,12 +799,6 @@ gc_alloc_new_region(long nbytes, int page_type_flag, struct alloc_region *alloc_
     os_protect(page_address(first_page),
                npage_bytes(1+last_page-first_page),
                OS_VM_PROT_ALL);
-#endif
-
-    /* Precommit (w32) */
-#ifdef LISP_FEATURE_WIN32
-    os_validate_recommit(page_address(first_page),
-			 npage_bytes(1+last_page-first_page));
 #endif
 
     /* If the first page was only partial, don't check whether it's
@@ -1168,6 +1162,11 @@ gc_alloc_large(long nbytes, int page_type_flag, struct alloc_region *alloc_regio
     os_protect(page_address(first_page),
                npage_bytes(1+last_page-first_page),
                OS_VM_PROT_ALL);
+#endif
+    /* Precommit (w32) */
+#ifdef LISP_FEATURE_WIN32
+    os_validate_recommit(page_address(first_page),
+			 npage_bytes(1+last_page-first_page));
 #endif
 
     zero_dirty_pages(first_page, last_page);

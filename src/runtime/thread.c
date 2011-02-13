@@ -144,12 +144,14 @@ static int run_lisp_function(lispobj function)
 }
 
 lispobj reset_dynamic_values[TLS_SIZE];
+static int last_initially_bound_dynamic_value_index;
 
 static int
 initial_thread_trampoline(struct thread *th)
 {
     lispobj function;
-    unsigned int i,j;
+    unsigned int i;
+    lispobj *dynamic_values = (void*)th;
 #ifdef LISP_FEATURE_SB_THREAD
     pthread_setspecific(lisp_thread, (void *)1);
 #endif
@@ -170,7 +172,10 @@ initial_thread_trampoline(struct thread *th)
     protect_alien_stack_guard_page(1, NULL);
 
     memcpy(reset_dynamic_values, th, sizeof(reset_dynamic_values));
-
+    for (i=last_initially_bound_dynamic_value_index; i<TLS_SIZE;++i) {
+	if (dynamic_values[i]!=NO_TLS_VALUE_MARKER_WIDETAG)
+	    last_initially_bound_dynamic_value_index = i;
+    }
     return run_lisp_function(function);
 }
 
@@ -187,6 +192,15 @@ initial_thread_trampoline(struct thread *th)
                             dynamic_values_bytes +                           \
                             32 * SIGSTKSZ +                                  \
                             THREAD_ALIGNMENT_BYTES)
+
+#define FIRST_TLS_INDEX							\
+    (ALIGN_UP(MAX_INTERRUPTS+						\
+	      (sizeof(struct thread)/sizeof(lispobj)), 1024)		\
+     -									\
+     (THREAD_STATE_LOCK_SIZE)/sizeof(lispobj))				\
+    
+static int last_initially_bound_dynamic_value_index = FIRST_TLS_INDEX;
+
 
 #ifdef LISP_FEATURE_SB_THREAD
 /* THREAD POST MORTEM CLEANUP
@@ -308,8 +322,8 @@ new_thread_trampoline(struct thread *th)
 {
     lispobj function;
     int result, lock_ret;
+    int i,j;
 #if defined(LISP_FEATURE_WIN32)
-    int i;
     struct lisp_exception_frame exception_frame;
 #endif
 #if defined(LISP_FEATURE_SB_AUTO_FPU_SWITCH)
@@ -457,12 +471,8 @@ new_thread_trampoline(struct thread *th)
     int relative = 10000;
     struct timeval tv;
     boolean responsible_awakener = 0;
-
-    memcpy(((void*)th)+MAX_INTERRUPTS*sizeof(lispobj)+sizeof(*th),
-	   ((void*)reset_dynamic_values)+MAX_INTERRUPTS*sizeof(lispobj)+sizeof(*th),
-	   (SymbolValue(FREE_TLS_INDEX,0)*sizeof(lispobj))-
-	   (MAX_INTERRUPTS*sizeof(lispobj)+sizeof(*th)));
-
+    lispobj* dynamic_values = (void*)th;
+    
     if (pthread_mutex_trylock(&resurrected_lock))
 	goto die;
     ++resurrectable_waiters;
@@ -472,6 +482,15 @@ new_thread_trampoline(struct thread *th)
     responsible_awakener = (th->next==0);
     pthread_mutex_unlock(&resurrected_lock);
 
+    fast_aligned_fill_words(&dynamic_values[FIRST_TLS_INDEX],
+			    ALIGN_UP(sizeof(lispobj)*
+				     (fixnum_value(SymbolValue(FREE_TLS_INDEX,0))
+				      - FIRST_TLS_INDEX),64),
+			    NO_TLS_VALUE_MARKER_WIDETAG);
+
+    for (i=FIRST_TLS_INDEX; i<last_initially_bound_dynamic_value_index; ++i)
+	dynamic_values[i] = reset_dynamic_values[i];
+    
     lispobj newstate;
  wait_again:
     pthread_mutex_lock(th->state_lock);
@@ -658,11 +677,9 @@ create_thread_struct(lispobj initial_function) {
         if(SymbolValue(FREE_TLS_INDEX,0)==UNBOUND_MARKER_WIDETAG) {
             SetSymbolValue
                 (FREE_TLS_INDEX,
-                 /* FIXME: should be MAX_INTERRUPTS -1 ? */
-                 make_fixnum(MAX_INTERRUPTS+
-                             sizeof(struct thread)/sizeof(lispobj)),
-                 0);
+                 make_fixnum(FIRST_TLS_INDEX), 0);
             SetSymbolValue(TLS_INDEX_LOCK,make_fixnum(0),0);
+	    fprintf(stderr, "FIRST TLS INDEX %d\n",FIRST_TLS_INDEX);
         }
 #define STATIC_TLS_INIT(sym,field) \
   ((struct symbol *)(sym-OTHER_POINTER_LOWTAG))->tls_index= \

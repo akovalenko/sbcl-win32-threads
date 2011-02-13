@@ -50,4 +50,13 @@
 #define THREAD_ALIEN_RESERVE (0)
 #endif
 
+#ifndef fast_aligned_fill_words
+static inline void fast_aligned_fill_words(void*addr, size_t len, lispobj pattern)
+{
+    lispobj* ptr = addr;
+    while(len--)
+	*(ptr++) = pattern;
+}
+#endif
+
 #endif /* SBCL_INCLUDED_OS_DEFAULT_H */

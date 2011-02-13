@@ -210,7 +210,8 @@ void pthread_np_serialize(pthread_t thread)
 int pthread_np_get_thread_context(pthread_t thread, CONTEXT* context)
 {
   context->ContextFlags = CONTEXT_FULL;
-  return GetThreadContext(thread->fiber_group->handle, context) != 0;
+  return thread->fiber_group &&
+      GetThreadContext(thread->fiber_group->handle, context) != 0;
 }
 
 void pthread_np_resume(pthread_t thread)

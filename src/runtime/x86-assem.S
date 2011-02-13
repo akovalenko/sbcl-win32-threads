@@ -876,7 +876,6 @@ GNAME(fast_bzero):
         /* Indirect function call */
         jmp *GNAME(fast_bzero_pointer)
 	SIZE(GNAME(fast_bzero))
-        
       
 	.text
 	.align	align_16byte,0x90
@@ -964,7 +963,49 @@ Lend_sse:
         pop %esi
 	ret
 	SIZE(GNAME(fast_bzero_sse))
-                
+
+.text
+.align	align_16byte,0x90
+.globl GNAME(fast_wordfill_sse)
+GNAME(fast_wordfill_sse):
+        /* A fast routine for filling blocks of memory that are
+         * guaranteed to start and end at a 4096-byte aligned address
+         */        
+        push %esi                 /* Save temporary registers */
+        push %edi
+        mov 16(%esp), %esi        /* Parameter: amount of bytes to fill */
+        mov 12(%esp), %edi        /* Parameter: start address */
+        shr $6, %esi              /* Amount of 64-byte blocks to copy */
+        jz 2f               	  /* If none, stop */
+	subl $16,%esp
+        movups %xmm7, (%esp)      /* Save XMM register */
+	movups 20+16(%esp),%xmm7  /* load fill pattern */
+        jmp 1f
+        .align align_16byte,0x90
+1:
+
+        /* Copy the 16 zeroes from xmm7 to memory, 4 times. MOVNTDQ is the
+         * non-caching double-quadword moving variant, i.e. the memory areas
+         * we're touching are not fetched into the L1 cache, since we're just
+         * going to overwrite the memory soon anyway.
+         */
+        movntdq %xmm7, 0(%edi)
+        movntdq %xmm7, 16(%edi)
+        movntdq %xmm7, 32(%edi)
+        movntdq %xmm7, 48(%edi)
+ 
+        add $64, %edi /* Advance pointer */
+        dec %esi      /* Decrement 64-byte block count */
+        jnz 1b
+        movups (%esp), %xmm7 /* Restore the XMM register */
+	add $16, %esp
+        sfence        /* Ensure that weakly ordered writes are flushed. */
+2:
+        pop %edi      /* Restore temp registers */
+        pop %esi
+	ret
+	SIZE(GNAME(fast_wordfill_sse))
+        
 
 	.text
 	.align	align_16byte,0x90

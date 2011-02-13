@@ -122,7 +122,11 @@ if the symbol isn't found."
   (declare (ignorable sap))
   #-sb-xc-host
   (let ((addr (sap-int sap)))
-    (declare (ignorable addr))
+    (declare (ignorable addr)
+	     #!+win32
+	     (disable-package-locks
+	      static-symbols-sorted-by-address
+	      runtime-session))
     #!+linkage-table
     (when (<= sb!vm:linkage-table-space-start
               addr
@@ -139,9 +143,10 @@ if the symbol isn't found."
              (< 0 (- addr *runtime-dlhandle*) 2000000))
       (loop for (known-addr . name-addr)
               in
-              (locally (declare (special
-                                 static-symbols-sorted-by-address
-                                 runtime-session))
+              (locally (declare
+			(special
+			 static-symbols-sorted-by-address
+			 runtime-session))
                 (if (and (boundp 'static-symbols-sorted-by-address)
                          (boundp 'runtime-session)
                          (eq runtime-session

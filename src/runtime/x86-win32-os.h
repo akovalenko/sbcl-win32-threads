@@ -24,4 +24,10 @@ static inline DWORD NT_GetLastError() {
 unsigned long os_context_fp_control(os_context_t *context);
 void os_restore_fp_control(os_context_t *context);
 
+void (*fast_fill_pointer)(void*addr, size_t len, lispobj pattern);
+
+os_context_register_t * os_context_fp_addr(os_context_t *context);
+
+#define fast_aligned_fill_words fast_fill_pointer
+
 #endif /* _X86_WIN32_OS_H */

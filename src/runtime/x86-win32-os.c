@@ -41,6 +41,51 @@
 #include "validate.h"
 size_t os_vm_page_size;
 
+static boolean have_sse2()
+{
+    int request = 1;
+    int edx;
+    
+    asm ("cpuid;"
+	 :"=d"(edx)
+	 :"a"(request)
+	 :"%ebx","%ecx");
+    return (edx & 0x04000000)!=0;
+    
+}
+
+void (*fast_fill_pointer)(void*addr, size_t len, lispobj pattern);
+
+
+static void fast_fill_sse2(void*addr, size_t len, lispobj pattern)
+{
+    extern void fast_wordfill_sse(void*addr, size_t len,
+				  int w1, int w2, int w3, int w4);
+    fast_wordfill_sse(addr,len,pattern,pattern,pattern,pattern);
+}
+
+static void fast_fill_base(void*addr, size_t len, lispobj pattern)
+{
+    lispobj* ptr = addr;
+    while(len--)
+	*(ptr++) = pattern;
+}
+
+static void fast_fill_detect(void*addr, size_t len, lispobj pattern)
+{
+    if (have_sse2())
+	fast_fill_pointer = fast_fill_sse2;
+    else
+	fast_fill_pointer = fast_fill_base;
+    fast_fill_pointer(addr,len,pattern);
+}
+
+void (*fast_fill_pointer)(void*addr, size_t len, lispobj pattern)
+= fast_fill_detect;
+
+
+
+
 int arch_os_thread_init(struct thread *thread)
 {
     {
