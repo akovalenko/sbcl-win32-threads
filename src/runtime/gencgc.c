@@ -589,6 +589,7 @@ zero_dirty_pages(page_index_t start, page_index_t end) {
     for (i = start; i <= end; i++) {
         if (page_table[i].need_to_zero == 1) {
             zero_pages_with_mmap(start, end);
+	    os_validate_recommit(page_address(start),npage_bytes(end-start+1));
             break;
         }
     }
@@ -810,7 +811,7 @@ gc_alloc_new_region(long nbytes, int page_type_flag, struct alloc_region *alloc_
     }
 
     zero_dirty_pages(first_page, last_page);
-
+    
     /* we can do this after releasing free_pages_lock */
     if (gencgc_zero_check) {
         long *p;
