@@ -26,10 +26,14 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#include <signal.h>
 #include <errno.h>
 #include <string.h>
 #include "sbcl.h"
+#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
+#include "pthreads_win32.h"
+#else
+#include <signal.h>
+#endif
 #include "runtime.h"
 #include "os.h"
 #include "interr.h"
@@ -258,6 +262,9 @@ size_t void_diff(void *x, void *y)
     return (pointer_sized_uint_t)x - (pointer_sized_uint_t)y;
 }
 
+#define AGE_SCALE (1024ul*256ul)
+#define AGE_MAX (1024ul*4ul)
+
 /* a structure to hold the state of a generation
  *
  * CAUTION: If you modify this, make sure to touch up the alien
@@ -307,7 +314,7 @@ struct generation {
     /* a minimum average memory age before a GC will occur helps
      * prevent a GC when a large number of new live objects have been
      * added, in which case a GC could be a waste of time */
-    double minimum_age_before_gc;
+    unsigned long minimum_age_before_gc;
 
     /* A linked list of lutex structures in this generation, used for
      * implementing lutex finalization. */
@@ -421,16 +428,26 @@ count_generation_bytes_allocated (generation_index_t gen)
     return result;
 }
 
-/* Return the average age of the memory in a generation. */
-extern double
+/* Return the average age of the memory in a generation.  Unsigned
+   long scaled to 1000000 is preferred to double, because current
+   on-demand float stack support should benefit from the floatless GC.
+ */
+extern unsigned long
 generation_average_age(generation_index_t gen)
 {
-    if (generations[gen].bytes_allocated == 0)
-        return 0.0;
-
-    return
-        ((double)generations[gen].cum_sum_bytes_allocated)
-        / ((double)generations[gen].bytes_allocated);
+    unsigned long cum_sum = generations[gen].cum_sum_bytes_allocated,
+        allocated = generations[gen].bytes_allocated;
+    if (allocated == 0)
+        return 0ul;
+    else {
+        unsigned long agefloor = cum_sum/allocated,
+            remainder = cum_sum % allocated;
+        if (agefloor >= AGE_MAX)
+            return AGE_MAX*AGE_SCALE;
+        else
+            return agefloor*AGE_SCALE +
+                (((AGE_SCALE*AGE_MAX)/allocated)*remainder)/AGE_MAX;
+    }
 }
 
 /* The verbose argument controls how much to print: 0 for normal
@@ -506,7 +523,7 @@ print_generation_stats() /* FIXME: should take FILE argument, or construct a str
                 generations[i].gc_trigger,
                 count_write_protect_generation_pages(i),
                 generations[i].num_gc,
-                generation_average_age(i));
+                ((double)generation_average_age(i))/((double)AGE_SCALE));
     }
     fprintf(stderr,"   Total bytes allocated    = %lu\n", bytes_allocated);
     fprintf(stderr,"   Dynamic-space-size bytes = %u\n", dynamic_space_size);
@@ -532,12 +549,14 @@ void zero_pages_with_mmap(page_index_t start, page_index_t end) {
       return;
 
     os_invalidate(addr, length);
+#ifndef LISP_FEATURE_WIN32
     new_addr = os_validate(addr, length);
+
     if (new_addr == NULL || new_addr != addr) {
         lose("remap_free_pages: page moved, 0x%08x ==> 0x%08x",
              start, new_addr);
     }
-
+#endif
     for (i = start; i <= end; i++) {
         page_table[i].need_to_zero = 0;
     }
@@ -569,7 +588,8 @@ zero_dirty_pages(page_index_t start, page_index_t end) {
 
     for (i = start; i <= end; i++) {
         if (page_table[i].need_to_zero == 1) {
-            zero_pages(start, end);
+            zero_pages_with_mmap(start, end);
+	    os_validate_recommit(page_address(start),npage_bytes(end-start+1));
             break;
         }
     }
@@ -791,7 +811,7 @@ gc_alloc_new_region(long nbytes, int page_type_flag, struct alloc_region *alloc_
     }
 
     zero_dirty_pages(first_page, last_page);
-
+    
     /* we can do this after releasing free_pages_lock */
     if (gencgc_zero_check) {
         long *p;
@@ -1143,6 +1163,11 @@ gc_alloc_large(long nbytes, int page_type_flag, struct alloc_region *alloc_regio
     os_protect(page_address(first_page),
                npage_bytes(1+last_page-first_page),
                OS_VM_PROT_ALL);
+#endif
+    /* Precommit (w32) */
+#ifdef LISP_FEATURE_WIN32
+    os_validate_recommit(page_address(first_page),
+			 npage_bytes(1+last_page-first_page));
 #endif
 
     zero_dirty_pages(first_page, last_page);
@@ -3457,7 +3482,7 @@ verify_space(lispobj *start, size_t words)
                 }
                 */
             } else {
-                extern void funcallable_instance_tramp;
+                extern void funcallable_instance_tramp();
                 /* Verify that it points to another valid space. */
                 if (!to_readonly_space && !to_static_space
                     && (thing != (lispobj)&funcallable_instance_tramp)
@@ -3850,7 +3875,7 @@ preserve_context_registers (os_context_t *c)
     /* On Darwin the signal context isn't a contiguous block of memory,
      * so just preserve_pointering its contents won't be sufficient.
      */
-#if defined(LISP_FEATURE_DARWIN)
+#if defined(LISP_FEATURE_DARWIN)||defined(LISP_FEATURE_WIN32)
 #if defined LISP_FEATURE_X86
     preserve_pointer((void*)*os_context_register_addr(c,reg_EAX));
     preserve_pointer((void*)*os_context_register_addr(c,reg_ECX));
@@ -3879,9 +3904,11 @@ preserve_context_registers (os_context_t *c)
     #error "preserve_context_registers needs to be tweaked for non-x86 Darwin"
 #endif
 #endif
+#if !defined(LISP_FEATURE_WIN32)
     for(ptr = ((void **)(c+1))-1; ptr>=(void **)c; ptr--) {
         preserve_pointer(*ptr);
     }
+#endif
 }
 #endif
 
@@ -3962,9 +3989,16 @@ garbage_collect_generation(generation_index_t generation, int raise)
      * handler, you will lose. */
 
 #if defined(LISP_FEATURE_X86) || defined(LISP_FEATURE_X86_64)
+#if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
+    if (!conservative_stack) {
+	arch_os_get_current_thread()->pc_around_foreign_call = 0;
+    }
+#endif
     /* And if we're saving a core, there's no point in being conservative. */
     if (conservative_stack) {
         for_each_thread(th) {
+	    if (th->state == STATE_DEAD)
+		continue;
             void **ptr;
             void **esp=(void **)-1;
 #ifdef LISP_FEATURE_SB_THREAD
@@ -3972,8 +4006,45 @@ garbage_collect_generation(generation_index_t generation, int raise)
             if(th==arch_os_get_current_thread()) {
                 /* Somebody is going to burn in hell for this, but casting
                  * it in two steps shuts gcc up about strict aliasing. */
+		#ifndef LISP_FEATURE_SB_GC_SAFEPOINT
                 esp = (void **)((void *)&raise);
+		#else
+		/* Conservative collect_garbage is always invoked with
+		   foreign C call on top; we don't promise to preserve
+		   any registers in vop call-out for :sb-gc-safepoint
+		   builds, so preserved csp is enough. */
+
+		esp = (void**)th->csp_around_foreign_call;
+		/* ...Together with return address, that is the only
+		   value from the entire context that we need (and
+		   it's saved by foreign call wrapper). That's because
+		   it is removed from control stack into a register by
+		   the foreign call wrapper itself. */
+		preserve_pointer(th->pc_around_foreign_call);
+		#endif
             } else {
+#if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
+		/* target thread should provide either control stack
+		   pointer value, as it were before entering foreign
+		   call, or a full context (if the safepoint was
+		   caused by interrupt/signal/exception). There are
+		   some obscure cases when both CSP and context
+		   present; CSP should be preferred, as the thread is
+		   certainly in foreign call (on win32 using full
+		   context in this case will work too, but it's more
+		   work to do, and it would probably conserve too much) */
+		if (!th->csp_around_foreign_call) {
+		    if (!th->gc_safepoint_context) {
+			lose("Thread %p without CSP and context",th);
+		    }
+		    preserve_context_registers(th->gc_safepoint_context);
+		    esp = (void**)*os_context_register_addr(th->gc_safepoint_context,
+							    reg_SP);
+		} else {
+		    esp = (void**)th->csp_around_foreign_call;
+		    preserve_pointer(th->pc_around_foreign_call);
+		}
+#else
                 void **esp1;
                 free=fixnum_value(SymbolValue(FREE_INTERRUPT_CONTEXT_INDEX,th));
                 for(i=free-1;i>=0;i--) {
@@ -3985,6 +4056,7 @@ garbage_collect_generation(generation_index_t generation, int raise)
                         preserve_context_registers(c);
                     }
                 }
+#endif
             }
 #else
             esp = (void **)((void *)&raise);
@@ -4258,6 +4330,10 @@ collect_garbage(generation_index_t last_gen)
 
     gc_active_p = 1;
 
+#ifdef LISP_FEATURE_WIN32
+    os_commit_wp_violation_data(1);
+#endif
+
     if (last_gen > HIGHEST_NORMAL_GENERATION+1) {
         FSHOW((stderr,
                "/collect_garbage: last_gen = %d, doing a level 0 GC\n",
@@ -4378,6 +4454,9 @@ collect_garbage(generation_index_t last_gen)
     }
 
     gc_active_p = 0;
+#ifdef LISP_FEATURE_WIN32
+    os_commit_wp_violation_data(0);
+#endif
 
     SHOW("returning from collect_garbage");
 }
@@ -4529,7 +4608,7 @@ gc_init(void)
         /* the tune-able parameters */
         generations[i].bytes_consed_between_gc = 2000000;
         generations[i].number_of_gcs_before_promotion = 1;
-        generations[i].minimum_age_before_gc = 0.75;
+        generations[i].minimum_age_before_gc = (AGE_SCALE/4)*3;
         generations[i].lutexes = NULL;
     }
 
@@ -4664,7 +4743,9 @@ general_alloc_internal(long nbytes, int page_type_flag, struct alloc_region *reg
                         (context ? os_context_sigmask_addr(context) : NULL);
                 }
 #else
+#ifndef LISP_FEATURE_WIN32
                 maybe_save_gc_mask_and_block_deferrables(NULL);
+#endif
 #endif
             }
         }
@@ -4691,33 +4772,46 @@ general_alloc_internal(long nbytes, int page_type_flag, struct alloc_region *reg
 lispobj *
 general_alloc(long nbytes, int page_type_flag)
 {
-    struct thread *thread = arch_os_get_current_thread();
-    /* Select correct region, and call general_alloc_internal with it.
-     * For other then boxed allocation we must lock first, since the
-     * region is shared. */
-    if (BOXED_PAGE_FLAG & page_type_flag) {
+  lispobj* result;
+  struct thread *thread = arch_os_get_current_thread();
+  /* Select correct region, and call general_alloc_internal with it.
+   * For other then boxed allocation we must lock first, since the
+   * region is shared. */
+  if (BOXED_PAGE_FLAG & page_type_flag) {
 #ifdef LISP_FEATURE_SB_THREAD
-        struct alloc_region *region = (thread ? &(thread->alloc_region) : &boxed_region);
+      struct alloc_region *region = (thread ? &(thread->alloc_region) : &boxed_region);
 #else
-        struct alloc_region *region = &boxed_region;
+      struct alloc_region *region = &boxed_region;
 #endif
-        return general_alloc_internal(nbytes, page_type_flag, region, thread);
-    } else if (UNBOXED_PAGE_FLAG == page_type_flag) {
-        lispobj * obj;
-        gc_assert(0 == thread_mutex_lock(&allocation_lock));
-        obj = general_alloc_internal(nbytes, page_type_flag, &unboxed_region, thread);
-        gc_assert(0 == thread_mutex_unlock(&allocation_lock));
-        return obj;
-    } else {
-        lose("bad page type flag: %d", page_type_flag);
-    }
+      result = general_alloc_internal(nbytes, page_type_flag, region, thread);
+  } else if (UNBOXED_PAGE_FLAG == page_type_flag) {
+      lispobj * obj;
+      gc_assert(0 == thread_mutex_lock(&allocation_lock));
+      obj = general_alloc_internal(nbytes, page_type_flag, &unboxed_region, thread);
+      gc_assert(0 == thread_mutex_unlock(&allocation_lock));
+      result = obj;
+  } else {
+      lose("bad page type flag: %d", page_type_flag);
+  }
+  return result;
 }
 
 lispobj *
 alloc(long nbytes)
 {
-    gc_assert(get_pseudo_atomic_atomic(arch_os_get_current_thread()));
-    return general_alloc(nbytes, BOXED_PAGE_FLAG);
+  lispobj* result;
+  PUSH_ERRNO;
+  (arch_os_get_current_thread()->pseudo_atomic_bits) =
+      (**(lispobj**)__builtin_frame_address(0))&0x03;
+  
+  gc_assert(get_pseudo_atomic_atomic(arch_os_get_current_thread()));
+  
+  result = general_alloc(nbytes, BOXED_PAGE_FLAG);
+  (**(lispobj**)__builtin_frame_address(0)) |=
+      (arch_os_get_current_thread()->pseudo_atomic_bits)&0x01;
+  (arch_os_get_current_thread()->pseudo_atomic_bits)&=~0x03;
+  POP_ERRNO;
+  return result;
 }
 
 /*
@@ -4772,14 +4866,15 @@ gencgc_handle_wp_violation(void* fault_addr)
              * we had better not have the second one lose here if it
              * does this test after the first one has already set wp=0
              */
-            if(page_table[page_index].write_protected_cleared != 1)
+            if(page_table[page_index].write_protected_cleared != 1) {
                 lose("fault in heap page %d not marked as write-protected\nboxed_region.first_page: %d, boxed_region.last_page %d\n",
                      page_index, boxed_region.first_page,
                      boxed_region.last_page);
+            }
         }
         ret = thread_mutex_unlock(&free_pages_lock);
         gc_assert(ret == 0);
-        /* Don't worry, we can handle it. */
+         /* Don't worry, we can handle it. */
         return 1;
     }
 }

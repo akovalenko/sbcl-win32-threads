@@ -14,12 +14,13 @@
 #include <stdio.h>
 #include <sys/types.h>
 #include <stdlib.h>
+#include <strings.h>
 #include <setjmp.h>
 #include <sys/time.h>
 #ifndef LISP_FEATURE_WIN32
 #include <sys/resource.h>
 #endif
-#include <signal.h>
+#include "runtime.h"
 #include <unistd.h>
 
 #include "runtime.h"

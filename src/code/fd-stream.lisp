@@ -73,7 +73,18 @@
   `(sb!thread::with-system-spinlock (*available-buffers-spinlock*)
      ,@body))
 
-(defconstant +bytes-per-buffer+ (* 4 1024)
+(defconstant +bytes-per-buffer+
+  ;; Disk blocks today are usually 8K; as we move to larger memory
+  ;; pages, the reason to keep 4K buffer evades me.
+  #!-win32 (* 8 1024)
+
+  ;; On win32, alloc-buffer ends up in VirtualAlloc, whose allocation
+  ;; units are (normally) 64K. There are at least three reasonable
+  ;; choices: switch to malloc(), increase the size, arrange for some
+  ;; kind of sharing a single VA block among buffers. Throwing away
+  ;; 15/16 of the buffer seems extremely unwise; applies to 7/8 too. 
+  
+  #!+win32 (* 64 1024)
   #!+sb-doc
   "Default number of bytes per buffer.")
 
@@ -293,10 +304,12 @@
                                ;; thread might have moved head...
                                (setf (buffer-head obuf) (+ count head))
                                (queue-or-wait))
-                              #!-win32
+			       #!-win32
                               ((eql errno sb!unix:ewouldblock)
                                ;; Blocking, queue or wair.
                                (queue-or-wait))
+			       ;; if interrupted on win32, just try again
+			      #!+win32 ((eql errno sb!unix:eintr))
                               (t
                                (simple-stream-perror "Couldn't write to ~s"
                                                      stream errno)))))))))))))
@@ -969,6 +982,9 @@
            (errno 0)
            (count 0))
     (tagbody
+       #!+win32
+       (go :main)
+
        ;; Check for blocking input before touching the stream if we are to
        ;; serve events: if the FD is blocking, we don't want to hang on the
        ;; write if we are to serve events or notice timeouts.
@@ -1003,7 +1019,7 @@
        ((lambda (return-reason)
           (ecase return-reason
             ((nil))                     ; fast path normal cases
-            ((:wait-for-input) (go :wait-for-input))
+            ((:wait-for-input) (go #!-win32 :wait-for-input #!+win32 :main))
             ((:closed-flame)   (go :closed-flame))
             ((:read-error)     (go :read-error))))
         (without-interrupts
@@ -1039,10 +1055,9 @@
                 (setf (values count errno)
                       (sb!unix:unix-read fd (sap+ sap tail) (- length tail)))
                 (cond ((null count)
-                       #!+win32
-                       (return :read-error)
-                       #!-win32
-                       (if (eql errno sb!unix:ewouldblock)
+                       (if (eql errno
+                                #!+win32 sb!unix:eintr
+                                #!-win32 sb!unix:ewouldblock)
                            (return :wait-for-input)
                            (return :read-error)))
                       ((zerop count)
@@ -1861,6 +1876,12 @@
                         input-type
                         output-type))))))
 
+(defun fd-close (fd)
+  #!+win32
+  (sb!win32:unixlike-close fd)
+  #!-win32
+  (sb!unix:unix-close fd))
+
 ;;; Handles the resource-release aspects of stream closing, and marks
 ;;; it as closed.
 (defun release-fd-stream-resources (fd-stream)
@@ -1874,7 +1895,7 @@
         ;; us with a dangling finalizer (that would close the same
         ;; --possibly reassigned-- FD again), or a stream with a closed
         ;; FD that appears open.
-        (sb!unix:unix-close (fd-stream-fd fd-stream))
+        (fd-close (fd-stream-fd fd-stream))
         (set-closed-flame fd-stream)
         (when (fboundp 'cancel-finalization)
           (cancel-finalization fd-stream)))
@@ -2050,6 +2071,7 @@
               :expected-type 'fd-stream
               :format-control "~S is not a stream associated with a file."
               :format-arguments (list fd-stream)))
+       #!-win32
      (multiple-value-bind (okay dev ino mode nlink uid gid rdev size
                                 atime mtime ctime blksize blocks)
          (sb!unix:unix-fstat (fd-stream-fd fd-stream))
@@ -2059,7 +2081,20 @@
          (simple-stream-perror "failed Unix fstat(2) on ~S" fd-stream dev))
        (if (zerop mode)
            nil
-           (truncate size (fd-stream-element-size fd-stream)))))
+             (truncate size (fd-stream-element-size fd-stream))))
+       #!+win32
+       (let* ((fd (fd-stream-fd fd-stream))
+              (handle (sb!win32:get-osfhandle fd))
+              (element-size (fd-stream-element-size fd-stream)))
+         (multiple-value-bind (got native-size)
+             (sb!win32:get-file-size-ex handle 0)
+           (if (zerop got)
+               (let* ((here (sb!unix:unix-lseek fd 0 sb!unix:l_incr))
+                      (there (sb!unix:unix-lseek fd 0 sb!unix:l_xtnd)))
+                 (and here there
+                      (prog1 (truncate there element-size)
+                        (sb!unix:unix-lseek fd here sb!unix:l_set))))
+               (truncate native-size element-size)))))
     (:file-string-length
      (etypecase arg1
        (character (fd-stream-character-size fd-stream arg1))
@@ -2092,12 +2127,13 @@
 (defun fd-stream-get-file-position (stream)
   (declare (fd-stream stream))
   (without-interrupts
-    (let ((posn (sb!unix:unix-lseek (fd-stream-fd stream) 0 sb!unix:l_incr)))
-      (declare (type (or (alien sb!unix:off-t) null) posn))
+    (let ((posn (sb!unix:unix-lseek
+                 (fd-stream-fd stream) 0 sb!unix:l_incr)))
+      (declare (type (or (alien sb!unix:unix-offset) null) posn))
       ;; We used to return NIL for errno==ESPIPE, and signal an error
       ;; in other failure cases. However, CLHS says to return NIL if
       ;; the position cannot be determined -- so that's what we do.
-      (when (integerp posn)
+      (when (and (integerp posn) (not (minusp posn)))
         ;; Adjust for buffered output: If there is any output
         ;; buffered, the *real* file position will be larger
         ;; than reported by lseek() because lseek() obviously
@@ -2122,7 +2158,7 @@
 (defun fd-stream-set-file-position (stream position-spec)
   (declare (fd-stream stream))
   (check-type position-spec
-              (or (alien sb!unix:off-t) (member nil :start :end))
+              (or (alien sb!unix:unix-offset) (member nil :start :end))
               "valid file position designator")
   (tagbody
    :again
@@ -2154,7 +2190,7 @@
                (t
                 (values (* position-spec (fd-stream-element-size stream))
                         sb!unix:l_set)))
-           (declare (type (alien sb!unix:off-t) offset))
+           (declare (type (alien sb!unix:unix-offset) offset))
            (let ((posn (sb!unix:unix-lseek (fd-stream-fd stream)
                                            offset origin)))
              ;; CLHS says to return true if the file-position was set
@@ -2166,7 +2202,7 @@
              ;; FIXME: We are still liable to signal an error if flushing
              ;; output fails.
              (return-from fd-stream-set-file-position
-               (typep posn '(alien sb!unix:off-t))))))))
+               (typep posn '(alien sb!unix:unix-offset))))))))
 
 
 ;;;; creation routines (MAKE-FD-STREAM and OPEN)
@@ -2235,7 +2271,7 @@
     (when (and auto-close (fboundp 'finalize))
       (finalize stream
                 (lambda ()
-                  (sb!unix:unix-close fd)
+                  (fd-close fd)
                   #!+sb-show
                   (format *terminal-io* "** closed file descriptor ~W **~%"
                           fd))
@@ -2406,7 +2442,10 @@
         ;; Now we can try the actual Unix open(2).
         (multiple-value-bind (fd errno)
             (if namestring
+                #!-win32
                 (sb!unix:unix-open namestring mask mode)
+                #!+win32
+                (sb!win32:unixlike-open namestring mask mode)
                 (values nil sb!unix:enoent))
           (labels ((open-error (format-control &rest format-arguments)
                      (error 'simple-file-error
@@ -2487,8 +2526,7 @@
 
 (defun stdstream-external-format (outputp)
   (declare (ignorable outputp))
-  (let* ((keyword #!+win32 (if outputp (sb!win32::console-output-codepage) (sb!win32::console-input-codepage))
-                  #!-win32 (default-external-format))
+  (let* ((keyword (default-external-format))
          (ef (get-external-format keyword))
          (replacement (ef-default-replacement-character ef)))
     `(,keyword :replacement ,replacement)))
@@ -2500,29 +2538,60 @@
       (aver (not (boundp '*available-buffers*)))
       (setf *available-buffers* nil)))
   (with-output-to-string (*error-output*)
-    (setf *stdin*
-          (make-fd-stream 0 :name "standard input" :input t :buffering :line
-                          :element-type :default
-                          :serve-events t
-                          :external-format (stdstream-external-format nil)))
-    (setf *stdout*
-          (make-fd-stream 1 :name "standard output" :output t :buffering :line
-                          :element-type :default
-                          :external-format (stdstream-external-format t)))
-    (setf *stderr*
-          (make-fd-stream 2 :name "standard error" :output t :buffering :line
-                          :element-type :default
-                          :external-format (stdstream-external-format t)))
-    (let* ((ttyname #.(coerce "/dev/tty" 'simple-base-string))
-           (tty (sb!unix:unix-open ttyname sb!unix:o_rdwr #o666)))
-      (if tty
-          (setf *tty*
-                (make-fd-stream tty :name "the terminal"
-                                :input t :output t :buffering :line
-                                :external-format (stdstream-external-format t)
-                                :serve-events t
-                                :auto-close t))
-          (setf *tty* (make-two-way-stream *stdin* *stdout*))))
+    (let ((ttyname #.(coerce "/dev/tty" 'simple-base-string))
+	  (stdstream-vars '(*stdin* *stdout* *stderr* *tty*)))
+      #!+win32 (declare (ignorable ttyname))
+      (loop for fd in '(0 1 2 nil)
+	    and auto-close-p in '(nil nil nil t)
+	    and stream-var in stdstream-vars
+	    and direction in '(:input :output :output :io)
+	    and name in '("standard input"
+			  "standard output"
+			  "standard error"
+			  "the terminal")
+	    do
+	 (let ((outputp (not (eq direction :input)))
+	       (inputp (not (eq direction :output))))
+	   (unless fd
+	     #!+win32
+	     (multiple-value-bind (keyboard screen)
+		 (sb!win32::make-console-fds)
+	       (setf (symbol-value stream-var)
+		     (make-two-way-stream
+		      (if keyboard
+			  (make-fd-stream keyboard :name name :input t
+					  :element-type :default :buffering :line
+					  :auto-close auto-close-p
+					  :external-format :ucs-2)
+			  *stdin*)
+		      (if screen
+			  (make-fd-stream screen :name name :output t
+					  :element-type :default :buffering :line
+					  :auto-close auto-close-p
+					  :external-format :ucs-2)
+			  *stdout*)))
+	       (return))
+	     #!-win32
+	     (setf fd (sb!unix:unix-open ttyname sb!unix:o_rdwr 0)))
+	   (setf (symbol-value stream-var)
+		 (if fd
+		     (make-fd-stream fd
+				     :name name
+				     :input inputp
+				     :output outputp
+				     :buffering :line
+				     :element-type :default
+				     #!-win32 :serve-events #!-win32 inputp
+				     :auto-close auto-close-p
+				     :external-format
+				     (or
+				      #!+win32
+				      (let ((handle (sb!win32:get-osfhandle fd)))
+					(when (and (/= handle -1)
+						   (logbitp 0 handle)
+						   (logbitp 1 handle)) :ucs-2))
+				      (stdstream-external-format outputp)))
+		     (make-two-way-stream *stdin* *stdout*))))))
     (princ (get-output-stream-string *error-output*) *stderr*))
   (values))
 

@@ -22,9 +22,20 @@ else
     BASE=`pwd`
     cd "${opwd}"
 fi
+
+. "$BASE/guess-environment.sh"
+
+NATIVEBASE=$BASE
 if [ "$OSTYPE" = "cygwin" ]
 then
     BASE=`cygpath -w "$BASE"`
+fi
+
+if [ "$OSTYPE" = "wine" ]
+then
+    SBCL_RUNTIME_EXECUTABLE=sbcl.exe
+else
+    SBCL_RUNTIME_EXECUTABLE=sbcl
 fi
 CORE_DEFINED=no
 
@@ -51,9 +62,9 @@ if [ "$CORE_DEFINED" = "no" ]; then
     ARGUMENTS="--core "$BASE"/output/sbcl.core"
 fi
 
-if [ -x "$BASE"/src/runtime/sbcl -a -f "$BASE"/output/sbcl.core ]; then
+if [ -x "$NATIVEBASE"/src/runtime/$SBCL_RUNTIME_EXECUTABLE -a -f "$NATIVEBASE"/output/sbcl.core ] ; then
     echo "(running SBCL from: $BASE)" 1>&2
-    SBCL_HOME="$BASE"/contrib "$BASE"/src/runtime/sbcl $ARGUMENTS "$@"
+    SBCL_HOME="$BASE"/contrib "$NATIVEBASE"/src/runtime/$SBCL_RUNTIME_EXECUTABLE $ARGUMENTS "$@"
 else
     echo "No built SBCL here ($BASE): run 'sh make.sh' first!"
     exit 1

@@ -16,8 +16,8 @@
 
 (defun extern-alien-name (name)
   (handler-case
-      #!-win32 (coerce name 'base-string)
-      #!+win32 (concatenate 'base-string "_" name)
+      #!-(and win32 (not sb-dynamic-core)) (coerce name 'base-string)
+      #!+(and win32 (not sb-dynamic-core)) (concatenate 'base-string "_" name)
     (error ()
       (error "invalid external alien name: ~S" name))))
 
@@ -54,7 +54,10 @@ Dynamic symbols are entered into the linkage-table if they aren't there already.
 
 On non-linkage-table ports signals an error if the symbol isn't found."
   (declare (ignorable datap))
-  (let ((static (find-foreign-symbol-in-table name  *static-foreign-symbols*)))
+  #!+sb-dynamic-core
+  (values (ensure-foreign-symbol-linkage name datap) t)
+  #!-sb-dynamic-core
+  (let ((static (find-foreign-symbol-in-table name *static-foreign-symbols*)))
     (if static
         (values static nil)
         #!+os-provides-dlopen
@@ -81,8 +84,6 @@ if the symbol isn't found."
   #!+linkage-table
   (multiple-value-bind (addr sharedp)
       (foreign-symbol-address symbol datap)
-    #+sb-xc-host
-    (aver (not sharedp))
     ;; If the address is from linkage-table and refers to data
     ;; we need to do a bit of juggling. It is not the address of the
     ;; variable, but the address where the real address is stored.
@@ -104,7 +105,7 @@ if the symbol isn't found."
 ;;; Cleanups before saving a core
 #-sb-xc-host
 (defun foreign-deinit ()
-  #!+(and os-provides-dlopen (or (not linkage-table) win32))
+  #!+(and os-provides-dlopen (not linkage-table))
   (when (dynamic-foreign-symbols-p)
     (warn "~@<Saving cores with alien definitions referring to non-static ~
            foreign symbols is unsupported on this platform: references to ~
@@ -121,7 +122,11 @@ if the symbol isn't found."
   (declare (ignorable sap))
   #-sb-xc-host
   (let ((addr (sap-int sap)))
-    (declare (ignorable addr))
+    (declare (ignorable addr)
+	     #!+win32
+	     (disable-package-locks
+	      static-symbols-sorted-by-address
+	      runtime-session))
     #!+linkage-table
     (when (<= sb!vm:linkage-table-space-start
               addr
@@ -131,6 +136,34 @@ if the symbol isn't found."
           (when (and (<= table-addr addr)
                      (< addr (+ table-addr sb!vm:linkage-table-entry-size)))
             (return-from sap-foreign-symbol (car name-and-datap))))))
+    #!+win32
+    (when
+        (and (boundp '*runtime-dlhandle*)
+             *runtime-dlhandle*
+             (< 0 (- addr *runtime-dlhandle*) 2000000))
+      (loop for (known-addr . name-addr)
+              in
+              (locally (declare
+			(special
+			 static-symbols-sorted-by-address
+			 runtime-session))
+                (if (and (boundp 'static-symbols-sorted-by-address)
+                         (boundp 'runtime-session)
+                         (eq runtime-session
+                             (symbol-value 'sb!impl::*runtime-pathname*)))
+                    static-symbols-sorted-by-address
+                    (setf runtime-session (symbol-value 'sb!impl::*runtime-pathname*)
+                          static-symbols-sorted-by-address
+                          (sort (sb!alien::runtime-exported-symbols) #'< :key 'car))))
+            and last-name-addr = 0 then name-addr
+            and last-addr = 0 then known-addr
+            until (>= known-addr addr)
+            finally (return
+                      (format nil
+                              "~A +#x~X"
+                              (cast (sap-alien (int-sap last-name-addr) (* char))
+                                    c-string)
+                              (- addr last-addr)))))
     #!+os-provides-dladdr
     (with-alien ((info (struct dl-info
                                (filename c-string)
@@ -152,9 +185,17 @@ if the symbol isn't found."
 
 #-sb-xc-host
 (defun !foreign-cold-init ()
+  #!-sb-dynamic-core
   (dolist (symbol *!initial-foreign-symbols*)
     (setf (gethash (car symbol) *static-foreign-symbols*) (cdr symbol)))
-  #!+(and os-provides-dlopen (not win32))
+  #!+sb-dynamic-core
+  (loop for table-address from sb!vm::linkage-table-space-start
+	  by sb!vm::linkage-table-entry-size
+	  and reference in sb!vm::*required-runtime-c-symbols*
+	do (setf (gethash reference *linkage-info*)
+		 (make-linkage-info :datap (cdr reference)
+		      :address table-address)))
+  #!+os-provides-dlopen  
   (setf *runtime-dlhandle* (dlopen-or-lose))
   #!+os-provides-dlopen
   (setf *shared-objects* nil))

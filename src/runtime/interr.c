@@ -19,7 +19,6 @@
 
 #include "sbcl.h"
 #include "arch.h"
-#include "signal.h"
 
 #include "runtime.h"
 #include "interr.h"
@@ -39,10 +38,24 @@ default_lossage_handler(void)
 }
 static void (*lossage_handler)(void) = default_lossage_handler;
 
+#if defined(LISP_FEATURE_WIN32)
+static void backtracing_lossage_handler()
+{
+    void lisp_backtrace(int frames);
+    lisp_backtrace(100);
+    monitor_or_something();
+}
+#endif
+
 void enable_lossage_handler(void)
 {
+#if defined(LISP_FEATURE_WIN32)
+    lossage_handler = backtracing_lossage_handler;
+#else
     lossage_handler = monitor_or_something;
+#endif
 }
+
 void disable_lossage_handler(void)
 {
     lossage_handler = default_lossage_handler;
@@ -65,6 +78,8 @@ void print_message(char *fmt, va_list ap)
 static inline void
 call_lossage_handler() never_returns;
 
+
+
 static inline void
 call_lossage_handler()
 {
@@ -77,6 +92,9 @@ void
 lose(char *fmt, ...)
 {
     va_list ap;
+#if defined(LISP_FEATURE_WIN32)
+    odprintf("lose %s", fmt);
+#endif
     /* Block signals to prevent other threads, timers and such from
      * interfering. If only all threads could be stopped somehow. */
     block_blockable_signals(0, 0);
@@ -95,7 +113,7 @@ void
 corruption_warning_and_maybe_lose(char *fmt, ...)
 {
     va_list ap;
-#ifndef LISP_FEATURE_WIN32
+#if !defined(LISP_FEATURE_WIN32) || defined(LISP_FEATURE_SB_THREAD)
     sigset_t oldset;
     block_blockable_signals(0, &oldset);
 #endif
@@ -111,7 +129,7 @@ corruption_warning_and_maybe_lose(char *fmt, ...)
     fflush(stderr);
     if (lose_on_corruption_p)
         call_lossage_handler();
-#ifndef LISP_FEATURE_WIN32
+#if !defined(LISP_FEATURE_WIN32) || defined(LISP_FEATURE_SB_THREAD)
     else
         thread_sigmask(SIG_SETMASK,&oldset,0);
 #endif

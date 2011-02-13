@@ -40,22 +40,10 @@
 #include "genesis/sap.h"
 #include "pthread-lutex.h"
 #endif
-
-
+#include "cpputil.h"
 unsigned char build_id[] =
 #include "../../output/build-id.tmp"
 ;
-
-int
-open_binary(char *filename, int mode)
-{
-#ifdef LISP_FEATURE_WIN32
-    mode |= O_BINARY;
-#endif
-
-    return open(filename, mode);
-}
-
 
 static struct runtime_options *
 read_runtime_options(int fd)
@@ -90,7 +78,7 @@ maybe_initialize_runtime_options(int fd)
 
     lseek(fd, -end_offset, SEEK_END);
 
-    if (new_runtime_options = read_runtime_options(fd)) {
+    if ((new_runtime_options = read_runtime_options(fd))) {
         runtime_options = new_runtime_options;
     }
 }
@@ -113,7 +101,7 @@ search_for_embedded_core(char *filename)
     os_vm_offset_t core_start, pos;
     int fd = -1;
 
-    if ((fd = open_binary(filename, O_RDONLY)) < 0)
+    if ((fd = os_open_core(filename, O_RDONLY)) < 0)
         goto lose;
     if (lseek(fd, -lispobj_size, SEEK_END) < 0)
         goto lose;
@@ -279,7 +267,7 @@ lispobj
 load_core_file(char *file, os_vm_offset_t file_offset)
 {
     lispobj *header, val, len, *ptr, remaining_len;
-    int fd = open_binary(file, O_RDONLY);
+    int fd = os_open_core(file, O_RDONLY);
     unsigned int count;
 
     lispobj initial_function = NIL;
@@ -439,7 +427,7 @@ load_core_file(char *file, os_vm_offset_t file_offset)
                      *
                      * The low bits of each word are allocation flags.
                      */
-                    if (word=data[i]) {
+                    if ((word=data[i])) {
                         page_table[offset].region_start_offset = word & ~0x03;
                         page_table[offset].allocated = word & 0x03;
                     }

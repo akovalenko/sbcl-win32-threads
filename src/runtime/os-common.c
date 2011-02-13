@@ -38,9 +38,9 @@ os_zero(os_vm_address_t addr, os_vm_size_t length)
     block_size = os_trunc_size_to_page(length);
 
     if (block_start > addr)
-        bzero((char *)addr, block_start-addr);
+        memset((char *)addr, 0, block_start-addr);
     if (block_size < length)
-        bzero((char *)block_start+block_size, length-block_size);
+        memset((char *)block_start+block_size, 0, length-block_size);
 
     if (block_size != 0) {
         /* Now deallocate and allocate the block so that it faults in

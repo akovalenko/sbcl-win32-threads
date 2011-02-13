@@ -16,7 +16,7 @@
 #if defined(LISP_FEATURE_SB_THREAD) && defined(LISP_FEATURE_SB_PTHREAD_FUTEX)
 
 #include <errno.h>
-#include <pthread.h>
+#include "runtime.h"
 #include <stdlib.h>
 
 #include "runtime.h"
@@ -25,6 +25,10 @@
 #include "os.h"
 
 #define FUTEX_WAIT_NSEC (10000000) /* 10 msec */
+
+#if defined(LISP_FEATURE_WIN32)
+#define EWOULDBLOCK 3
+#endif
 
 #if 1
 # define futex_assert(ex)                                              \
@@ -228,6 +232,7 @@ futex_wait(int *lock_word, int oldval, long sec, unsigned long usec)
     int ret, result;
     struct futex *futex;
     sigset_t oldset;
+    int interrupted_by_signal = 0;
     struct timeval tv, *timeout;
 
 again:
@@ -235,8 +240,9 @@ again:
         timeout = NULL;
     else {
         ret = gettimeofday(&tv, NULL);
-        if (ret != 0)
-            return ret;
+        if (ret != 0) {
+          return ret;
+        }
         tv.tv_sec = tv.tv_sec + sec + (tv.tv_usec + usec) / 1000000;
         tv.tv_usec = (tv.tv_usec + usec) % 1000000;
         timeout = &tv;
@@ -274,14 +280,22 @@ again:
         if (result != ETIMEDOUT || futex_istimeout(timeout))
             break;
 
+#if defined(LISP_FEATURE_WIN32)
+        if (*(volatile int *)lock_word != oldval) {
+            result = EINTR;
+            goto done;
+        }
+#endif
+
         /* futex system call of Linux returns with EINTR errno when
          * it's interrupted by signals.  Check pending signals here to
          * emulate this behaviour. */
         sigpending(&pendset);
         for (i = 1; i < NSIG; i++) {
-            if (sigismember(&pendset, i) && sigismember(&newset, i)) {
-                result = EINTR;
-                goto done;
+            if (sigismember(&pendset, i) && !sigismember(&oldset, i)) {
+              result = EINTR;
+              interrupted_by_signal = 1;
+              goto done;
             }
         }
     }
@@ -289,12 +303,13 @@ done:
     ; /* Null statement is required between label and pthread_cleanup_pop. */
     pthread_cleanup_pop(1);
     pthread_sigmask(SIG_SETMASK, &oldset, NULL);
-
     /* futex_wake() in linux-os.c loops when futex system call returns
      * EINTR.  */
     if (result == EINTR) {
         sched_yield();
-        goto again;
+        if (!interrupted_by_signal)
+          goto again;
+        return 2;
     }
 
     if (result == ETIMEDOUT)

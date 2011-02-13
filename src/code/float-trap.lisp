@@ -164,7 +164,12 @@ sets the floating point modes to their current values (and thus is a no-op)."
     #!+x86 :precision #!+x86 :53-bit))
 
 (defun float-cold-init-or-reinit ()
-  (apply #'set-floating-point-modes *saved-floating-point-modes*))
+  (apply #'set-floating-point-modes
+         ;; Do we want to restore "current" exceptions from the
+         ;; previous life?
+         :current-exceptions nil
+         :accrued-exceptions nil
+         *saved-floating-point-modes*))
 
 (defun float-deinit ()
   (setf *saved-floating-point-modes* (get-floating-point-modes)))

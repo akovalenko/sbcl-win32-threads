@@ -19,6 +19,16 @@
 
 (setf sb-unix::*on-dangerous-wait* :error)
 
+(sb-alien:define-alien-routine "check_deferrables_blocked_or_lose"
+    void
+  (where sb-alien:unsigned-long))
+(sb-alien:define-alien-routine "check_deferrables_unblocked_or_lose"
+    void
+  (where sb-alien:unsigned-long))
+
+;(sb-unix::unblock-deferrable-signals)
+(check-deferrables-unblocked-or-lose 0)
+
 (defun wait-for-threads (threads)
   (mapc (lambda (thread) (sb-thread:join-thread thread :default nil)) threads)
   (assert (not (some #'sb-thread:thread-alive-p threads))))
@@ -41,13 +51,6 @@
   (let ((spinlock (make-spinlock)))
     (with-spinlock (spinlock))))
 
-(sb-alien:define-alien-routine "check_deferrables_blocked_or_lose"
-    void
-  (where sb-alien:unsigned-long))
-(sb-alien:define-alien-routine "check_deferrables_unblocked_or_lose"
-    void
-  (where sb-alien:unsigned-long))
-
 (with-test (:name (:interrupt-thread :basics :no-unwinding))
   (let ((a 0))
     (interrupt-thread *current-thread* (lambda () (setq a 1)))
@@ -65,6 +68,7 @@
                                   (check-deferrables-unblocked-or-lose 0)))))
 
 (with-test (:name (:interrupt-thread :nlx))
+  (check-deferrables-unblocked-or-lose 0)
   (catch 'xxx
     (sb-thread:interrupt-thread sb-thread:*current-thread*
                                 (lambda ()
@@ -196,6 +200,8 @@
 ;;; For one of the interupt-thread tests, we want a foreign function
 ;;; that does not make syscalls
 
+#-win32
+(progn
 (with-open-file (o "threads-foreign.c" :direction :output :if-exists :supersede)
   (format o "void loop_forever() { while(1) ; }~%"))
 (sb-ext:run-program "/bin/sh"
@@ -205,7 +211,7 @@
 (sb-alien:load-shared-object (truename "threads-foreign.so"))
 (sb-alien:define-alien-routine loop-forever sb-alien:void)
 (delete-file "threads-foreign.c")
-
+)
 
 ;;; elementary "can we get a lock and release it again"
 (with-test (:name (:mutex :basics))
@@ -394,7 +400,10 @@
   `(handler-case (progn (progn ,@body) nil)
     (sb-ext:timeout () t)))
 
-(with-test (:name (:semaphore :wait-forever))
+(with-test (:name (:semaphore :wait-forever)
+                  #-(and) #-(and) :fails-on :win32)
+  #+win32 #-(and)
+  (error "No timeout support on win32")
   (let ((sem (make-semaphore :count 0)))
     (assert (raises-timeout-p
               (sb-ext:with-timeout 0.1
@@ -529,7 +538,10 @@
   (let ((child (test-interrupt (lambda () (loop)))))
     (terminate-thread child)))
 
-(with-test (:name (:interrupt-thread :interrupt-foreign-loop))
+(with-test (:name (:interrupt-thread :interrupt-foreign-loop)
+            :fails-on :win32)
+  #+win32 (error "Foreign loop is not interruptible on win32")
+  #-win32
   (test-interrupt #'loop-forever :quit))
 
 (with-test (:name (:interrupt-thread :interrupt-sleep))
@@ -855,7 +867,9 @@
      (wait-for-gc)
      (decf sb-vm::*binding-stack-pointer* 2))))
 
-(with-test (:name (:binding-stack-gc-safety))
+(with-test (:name (:binding-stack-gc-safety)
+            :fails-on :win32)
+  #+win32 (error "Not appliable on platform with safepoints")
   (let (threads)
     (unwind-protect
          (progn
@@ -880,7 +894,7 @@
   (sb-debug:backtrace)
   (catch 'done))
 
-(with-test (:name (:unsynchronized-hash-table))
+(with-test (:name (:unsynchronized-hash-table) :fails-on :win32)
   ;; We expect a (probable) error here: parellel readers and writers
   ;; on a hash-table are not expected to work -- but we also don't
   ;; expect this to corrupt the image.
@@ -1220,6 +1234,8 @@
 
 (format t "backtrace test done~%")
 
+(check-deferrables-unblocked-or-lose 0)
+
 (format t "~&starting gc deadlock test: WARNING: THIS TEST WILL HANG ON FAILURE!~%")
 
 (with-test (:name (:gc-deadlock))
@@ -1284,6 +1300,8 @@
     (setf one (make-box)
           two (make-box)
           three (make-box))))
+
+(check-deferrables-unblocked-or-lose 0)
 
 (with-test (:name (:funcallable-instances))
   ;; the funcallable-instance implementation used not to be threadsafe

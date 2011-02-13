@@ -44,7 +44,8 @@
     sb!di::handle-breakpoint
     sb!di::handle-single-step-trap
     fdefinition-object
-    #!+win32 sb!kernel::handle-win32-exception))
+    #!+win32 sb!kernel::handle-win32-exception
+    #!+sb-thread sb!thread::run-interruption))
 
 (defparameter *common-static-symbols*
   '(t
@@ -81,12 +82,18 @@
     *gc-pending*
     #!-sb-thread
     *stepping*
+    #!+(and win32 sb-thread) sb!impl::*gc-safe*
+    #!+(and win32 sb-thread) sb!impl::*in-safepoint*
+    #!+(and win32 sb-thread) sb!impl::*disable-safepoints*
 
     ;; threading support
     #!+sb-thread *stop-for-gc-pending*
     #!+sb-thread *free-tls-index*
     #!+sb-thread *tls-index-lock*
 
+    ;; dynamic runtime linking support
+    #!+sb-dynamic-core
+    *required-runtime-c-symbols*
     ;; Dispatch tables for generic array access
     sb!impl::%%data-vector-reffers%%
     sb!impl::%%data-vector-reffers/check-bounds%%
@@ -105,7 +112,12 @@
 
 ;;; Number of entries in the thread local storage. Limits the number
 ;;; of symbols with thread local bindings.
-(def!constant tls-size 4096)
+(def!constant tls-size
+    ;; Makes sense to make (= page-size (* word-size tls-size)), as
+    ;; os_validate (that is called to allocate dynamic value space)
+    ;; allocates an integer number of pages. Let it be this way at
+    ;; least on win32 where I may test it:
+    #!-win32 4096 #!+win32 #.(/ #x10000 4))
 
 #!+gencgc
 (progn
