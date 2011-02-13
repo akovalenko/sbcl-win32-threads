@@ -811,6 +811,12 @@ gc_alloc_new_region(long nbytes, int page_type_flag, struct alloc_region *alloc_
 
     zero_dirty_pages(first_page, last_page);
 
+    /* Precommit (w32) */
+#ifdef LISP_FEATURE_WIN32
+    os_validate_recommit(page_address(first_page),
+			 npage_bytes(1+last_page-first_page));
+#endif
+
     /* we can do this after releasing free_pages_lock */
     if (gencgc_zero_check) {
         long *p;
