@@ -1461,6 +1461,7 @@ benefit of the function GET-OUTPUT-STREAM-STRING.")
 
 (defun string-out-misc (stream operation &optional arg1 arg2)
   (declare (ignore arg2))
+  (declare (optimize speed))
   (case operation
     (:charpos
      ;; Keeping this first is a silly micro-optimization: FRESH-LINE
@@ -1470,8 +1471,10 @@ benefit of the function GET-OUTPUT-STREAM-STRING.")
             (buffer (string-output-stream-buffer stream))
             (prev (string-output-stream-prev stream))
             (base 0))
+        (declare (type (or null (simple-array character (*))) buffer))
       :next
-      (let ((pos (position #\newline buffer :from-end t :end pointer)))
+      (let ((pos (when buffer
+                   (position #\newline buffer :from-end t :end pointer))))
         (when (or pos (not buffer))
           ;; If newline is at index I, and pointer at index I+N, charpos
           ;; is N-1. If there is no newline, and pointer is at index N,
