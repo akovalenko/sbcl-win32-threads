@@ -38,6 +38,9 @@
 
 #if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
 void os_preinit();
+#endif
+
+#if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
 void map_gc_page();
 void unmap_gc_page();
 #endif
@@ -111,13 +114,22 @@ extern sigset_t blockable_sigset;
 /* even on alpha, int happens to be 4 bytes.  long is longer. */
 /* FIXME: these names really shouldn't reflect their length and this
    is not quite right for some of the FFI stuff */
+#if defined(LISP_FEATURE_WIN32)&&defined(LISP_FEATURE_X86_64)
+typedef unsigned long long u64;
+typedef signed long long s64;
+#else
 typedef unsigned long u64;
 typedef signed long s64;
+#endif
 typedef unsigned int u32;
 typedef signed int s32;
 
 /* this is an integral type the same length as a machine pointer */
+#if defined(LISP_FEATURE_WIN32)&&defined(LISP_FEATURE_X86_64)
+typedef unsigned long long pointer_sized_uint_t ;
+#else
 typedef unsigned long pointer_sized_uint_t ;
+#endif
 
 #include <sys/types.h>
 
@@ -145,11 +157,14 @@ typedef pthread_t os_thread_t;
 typedef pid_t os_thread_t;
 #endif
 
+typedef pointer_sized_uint_t uword_t;
+typedef intptr_t sword_t;
+
 /* FIXME: we do things this way because of the alpha32 port.  once
    alpha64 has arrived, all this nastiness can go away */
 #if 64 == N_WORD_BITS
 #define LOW_WORD(c) ((pointer_sized_uint_t)c)
-typedef unsigned long lispobj;
+typedef pointer_sized_uint_t lispobj;
 #else
 #define LOW_WORD(c) ((long)(c) & 0xFFFFFFFFL)
 /* fake it on alpha32 */
@@ -168,7 +183,7 @@ widetag_of(lispobj obj)
     return obj & WIDETAG_MASK;
 }
 
-static inline unsigned long
+static inline pointer_sized_uint_t
 HeaderValue(lispobj obj)
 {
   return obj >> N_WIDETAG_BITS;
@@ -242,7 +257,7 @@ make_fixnum(long n)
    constant expression, like this: */
 #define MAKE_FIXNUM(n) ((n)<<N_FIXNUM_TAG_BITS)
 
-static inline long
+static inline s64
 fixnum_value(lispobj n)
 {
     return n >> N_FIXNUM_TAG_BITS;

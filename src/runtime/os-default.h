@@ -50,4 +50,12 @@
 #define THREAD_ALIEN_RESERVE (0)
 #endif
 
+#ifndef PSEUDO_ATOMIC_SET_HIGHLEVEL
+#define PSEUDO_ATOMIC_SET_HIGHLEVEL do {} while(0)
+#endif
+
+#ifndef PSEUDO_ATOMIC_FLUSH_LOWLEVEL
+#define PSEUDO_ATOMIC_FLUSH_LOWLEVEL do {} while(0)
+#endif
+
 #endif /* SBCL_INCLUDED_OS_DEFAULT_H */

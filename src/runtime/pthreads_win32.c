@@ -129,20 +129,6 @@ static pthread_t tls_impersonate(pthread_t other) {
   return old;
 }
 
-void pthread_np_get_my_context_subset(CONTEXT* ctx)
-{
-  ctx->ContextFlags = CONTEXT_FULL;
-  ctx->Eip = (DWORD)(intptr_t)pthread_np_get_my_context_subset;
-  asm volatile ("mov %%eax,%0": "=m"(ctx->Eax));
-  asm volatile ("mov %%ebx,%0": "=m"(ctx->Ebx));
-  asm volatile ("mov %%ecx,%0": "=m"(ctx->Ecx));
-  asm volatile ("mov %%edx,%0": "=m"(ctx->Edx));
-  asm volatile ("mov %%esp,%0": "=m"(ctx->Esp));
-  asm volatile ("mov %%ebp,%0": "=m"(ctx->Ebp));
-  asm volatile ("mov %%esi,%0": "=m"(ctx->Esi));
-  asm volatile ("mov %%edi,%0": "=m"(ctx->Edi));
-}
-
 static void do_nothing() {}
 /* Fiber context hooks */
 void (*pthread_save_context_hook)() = do_nothing;
@@ -514,6 +500,11 @@ int pthread_key_delete(pthread_key_t key)
   tls_used[key] = 0;
   pthread_mutex_unlock(&thread_key_lock);
   return 0;
+}
+
+void  __attribute__((sysv_abi)) *pthread_getspecific(pthread_key_t key)
+{
+  return pthread_self()->specifics[key];
 }
 
 /* Internal function calling destructors for current pthread */

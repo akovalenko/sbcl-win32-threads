@@ -272,16 +272,6 @@ typedef struct pthread_thread {
 typedef int pthread_once_t;
 int pthread_once(pthread_once_t *once_control, void (*init_routine)(void));
 
-/* Make speed-critical TLS access inline.
-
-   We don't check key range or validity here: (1) pthread spec is
-   explicit about undefined behavior for bogus keys, (2)
-   setspecific/getspecific should be as fast as possible.   */
-static inline void *pthread_getspecific(pthread_key_t key)
-{
-  return pthread_self()->specifics[key];
-}
-
 static inline int pthread_setspecific(pthread_key_t key, const void *value)
 {
   pthread_self()->specifics[key] = (void*)value;
@@ -400,8 +390,19 @@ static inline int pthread_mutex_unlock_np_inline(pthread_mutex_t *mutex)
     return 0;
 }
 
-#define pthread_mutex_lock(mutex) pthread_mutex_lock_np_inline(mutex)
-#define pthread_mutex_unlock(mutex) pthread_mutex_unlock_np_inline(mutex)
+/* Make speed-critical TLS access inline.
+
+   We don't check key range or validity here: (1) pthread spec is
+   explicit about undefined behavior for bogus keys, (2)
+   setspecific/getspecific should be as fast as possible.   */
+static inline void *pthread_getspecific_np_inline(pthread_key_t key)
+{
+  return pthread_self()->specifics[key];
+}
+
+#define pthread_mutex_lock pthread_mutex_lock_np_inline
+#define pthread_mutex_unlock pthread_mutex_unlock_np_inline
+#define pthread_getspecific pthread_getspecific_np_inline
 
 #endif	/* !PTHREAD_DEBUG_OUTPUT */
 #endif	/* !PTHREAD_INTERNALS */

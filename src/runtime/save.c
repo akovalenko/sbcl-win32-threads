@@ -74,10 +74,10 @@ write_lispobj(lispobj obj, FILE *file)
     }
 }
 
-static long
-write_bytes(FILE *file, char *addr, long bytes, os_vm_offset_t file_offset)
+static os_vm_offset_t
+write_bytes(FILE *file, char *addr, size_t bytes, os_vm_offset_t file_offset)
 {
-    long count, here, data, pad_bytes;
+    uword_t count, here, data, pad_bytes;
 
     bytes = ALIGN_UP(bytes,os_vm_page_size);
 #ifdef LISP_FEATURE_WIN32
@@ -188,7 +188,7 @@ scan_for_lutexes(lispobj *addr, long n_words)
 static void
 output_space(FILE *file, int id, lispobj *addr, lispobj *end, os_vm_offset_t file_offset)
 {
-    size_t words, bytes, data;
+    os_vm_size_t words, bytes, data;
     static char *names[] = {NULL, "dynamic", "static", "read-only"};
 
     write_lispobj(id, file);
@@ -202,13 +202,13 @@ output_space(FILE *file, int id, lispobj *addr, lispobj *end, os_vm_offset_t fil
     scan_for_lutexes((char *)addr, words);
 #endif
 
-    printf("writing %lu bytes from the %s space at 0x%08lx\n",
-           (unsigned long)bytes, names[id], (unsigned long)addr);
+    printf("writing %lu bytes from the %s space at 0x%p\n",
+           bytes, names[id], addr);
 
     data = write_bytes(file, (char *)addr, bytes, file_offset);
 
     write_lispobj(data, file);
-    write_lispobj((long)addr / os_vm_page_size, file);
+    write_lispobj((uword_t)addr / os_vm_page_size, file);
     write_lispobj((bytes + os_vm_page_size - 1) / os_vm_page_size, file);
 }
 
@@ -314,11 +314,11 @@ save_to_filehandle(FILE *file, char *filename, lispobj init_function,
 
 #ifdef LISP_FEATURE_GENCGC
     {
-        size_t size = (last_free_page*sizeof(long)+os_vm_page_size-1)
+        os_vm_size_t size = (last_free_page*sizeof(long)+os_vm_page_size-1)
             &~(os_vm_page_size-1);
-        unsigned long *data = calloc(size, 1);
+        uword_t *data = calloc(size, 1);
         if (data) {
-            unsigned long word;
+            uword_t word;
             long offset;
             int i;
             for (i = 0; i < last_free_page; i++) {

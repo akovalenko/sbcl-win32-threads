@@ -429,7 +429,7 @@ main(int argc, char *argv[], char *envp[])
                 if (argi >= argc)
                     lose("missing argument for --dynamic-space-size");
                 errno = 0;
-                dynamic_space_size = strtol(argv[argi++], 0, 0) << 20;
+                dynamic_space_size = ((sword_t)strtol(argv[argi++], 0, 0)) << 20;
                 if (errno)
                     lose("argument to --dynamic-space-size is not a number");
 #               ifdef MAX_DYNAMIC_SPACE_END

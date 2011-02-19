@@ -49,10 +49,10 @@ static void skip_ws(char **ptr)
         (*ptr)++;
 }
 
-static boolean string_to_long(char *token, long *value)
+static boolean string_to_long(char *token, uword_t *value)
 {
     int base, digit;
-    long num;
+    uword_t num;
     char *ptr;
 
     if (token == 0)
@@ -316,9 +316,9 @@ char **ptr;
 {
     struct thread *thread=arch_os_get_current_thread();
     char *token = parse_token(ptr);
-    long pointer;
+    uword_t pointer;
     lispobj result;
-    long value;
+    uword_t value;
 
     if (token == NULL) {
         printf("expected an object\n");
