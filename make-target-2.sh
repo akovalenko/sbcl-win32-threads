@@ -32,10 +32,12 @@ export LANG LC_ALL
 echo //doing warm init - compilation phase
 $SBCL_XRUN ./src/runtime/$SBCL_RUNTIME_EXECUTABLE \
 --core output/cold-sbcl.core \
+--dynamic-space-size 500 \
 --lose-on-corruption \
 --no-sysinit --no-userinit < make-target-2.lisp
 echo //doing warm init - load and dump phase
 $SBCL_XRUN ./src/runtime/$SBCL_RUNTIME_EXECUTABLE \
 --core output/cold-sbcl.core \
+--dynamic-space-size 500 \
 --lose-on-corruption \
 --no-sysinit --no-userinit < make-target-2-load.lisp
