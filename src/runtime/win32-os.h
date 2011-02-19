@@ -33,8 +33,8 @@
 
 
 typedef LPVOID os_vm_address_t;
-typedef size_t os_vm_size_t;
-typedef off_t os_vm_offset_t;
+typedef uword_t os_vm_size_t;
+typedef intptr_t os_vm_offset_t;
 typedef int os_vm_prot_t;
 
 /* typedef void *siginfo_t; */
@@ -84,7 +84,6 @@ char *dirname(char *path);
 void os_invalidate_free(os_vm_address_t addr, os_vm_size_t len);
 void* os_validate_recommit(os_vm_address_t addr, os_vm_size_t len);
 os_vm_address_t os_allocate_lazily(os_vm_size_t len);
-void accept_post_mortem_startup();
 
 void win32_interrupt_console_input();
 void os_link_runtime();
@@ -137,6 +136,25 @@ void odprintf_(const char * fmt, ...);
     errno = sbcl__lastErrno;			\
     NT_SetLastError(sbcl__lastError);		\
     }
+
+#ifdef LISP_FEATURE_X86
+#define PSEUDO_ATOMIC_SET_HIGHLEVEL				\
+    do {							\
+	(arch_os_get_current_thread()->pseudo_atomic_bits) =	\
+	    (**(lispobj**)__builtin_frame_address(0))&0x03;	\
+    } while(0)
+
+#define PSEUDO_ATOMIC_FLUSH_LOWLEVEL					\
+    do {								\
+	(**(lispobj**)__builtin_frame_address(0)) |=			\
+	    (arch_os_get_current_thread()->pseudo_atomic_bits)&0x01;	\
+	(arch_os_get_current_thread()->pseudo_atomic_bits)&=~0x03;	\
+    } while (0)
+#endif
+
+
+struct thread;
+void** os_get_csp(struct thread* th);
 
 
 #endif  /* SBCL_INCLUDED_WIN32_OS_H */

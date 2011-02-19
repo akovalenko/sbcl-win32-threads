@@ -25,15 +25,15 @@
 #include "genesis/thread.h"
 	
 /* Minimize conditionalization for different OS naming schemes. */
-#if defined __linux__  || defined __FreeBSD__ || defined __OpenBSD__ || defined __NetBSD__ || defined __sun
+#if defined __linux__  || defined __FreeBSD__ || defined __OpenBSD__ || defined __NetBSD__ || defined __sun || defined _WIN64
 #define GNAME(var) var
 #else
 #define GNAME(var) _##var
 #endif
-
+	
 /* Get the right type of alignment. Linux, FreeBSD and OpenBSD
  * want alignment in bytes. */
-#if defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined __NetBSD__ || defined(__sun)
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined __NetBSD__ || defined(__sun)  || defined _WIN64
 #define align_4byte	4
 #define align_8byte	8
 #define align_16byte	16
@@ -57,6 +57,28 @@
 #else
 #define TYPE(name)
 #define SIZE(name)
+#endif
+
+#if defined(LISP_FEATURE_WIN32)
+#define RIntArg0 %rcx
+#define RIntArg1 %rdx
+#define RIntArg2 %r8
+#define RIntArg3 %r9
+#define MakeShadowSpace sub $0x20,%rsp
+#define FreeShadowSpace add $0x20,%rsp
+#define MakeShadowSpacePlus1 sub $0x28,%rsp
+#define FreeShadowSpacePlus1 add $0x28,%rsp
+#define SpareStackOffset 16
+#else
+#define RIntArg0 %rdi
+#define RIntArg1 %rsi
+#define RIntArg2 %rdx
+#define RIntArg3 %rcx
+#define MakeShadowSpace
+#define FreeShadowSpace
+#define MakeShadowSpacePlus1
+#define FreeShadowSpacePlus1
+#define SpareStackOffset -16
 #endif
 
 /*
@@ -281,8 +303,11 @@ GNAME(undefined_tramp):
 	.globl  GNAME(alloc_tramp)
 	TYPE(GNAME(alloc_tramp))
 GNAME(alloc_tramp):
+	cld
 	push	%rbp		# Save old frame pointer.
 	mov	%rsp,%rbp	# Establish new frame.
+	and	$-16,%rsp
+	
 	push	%rax
 	push	%rcx
 	push	%rdx
@@ -292,9 +317,11 @@ GNAME(alloc_tramp):
 	push	%r9
 	push	%r10
 	push	%r11
-	mov	16(%rbp),%rdi	
+	push	%r11
+	mov	16(%rbp),%rdi
 	call	GNAME(alloc)
 	mov	%rax,16(%rbp)
+	pop	%r11
 	pop	%r11
 	pop	%r10
 	pop	%r9
@@ -304,6 +331,8 @@ GNAME(alloc_tramp):
 	pop	%rdx
 	pop	%rcx
 	pop	%rax
+	
+	mov	%rbp,%rsp
 	pop	%rbp
 	ret
 	SIZE(GNAME(alloc_tramp))
@@ -331,7 +360,7 @@ GNAME(closure_tramp):
 	.align	align_16byte,0x90
 	.globl  GNAME(funcallable_instance_tramp)
 #if !defined(LISP_FEATURE_DARWIN)
-        .type	GNAME(funcallable_instance_tramp),@function
+	TYPE(GNAME(funcallable_instance_tramp))
 #endif
         GNAME(funcallable_instance_tramp):
 	mov	FUNCALLABLE_INSTANCE_FUNCTION_OFFSET(%rax),%rax
@@ -339,7 +368,7 @@ GNAME(closure_tramp):
 	 * now, the first word of it contains the address to jump to. */
 	jmp	*CLOSURE_FUN_OFFSET(%rax)
 #if !defined(LISP_FEATURE_DARWIN)
-	.size	GNAME(funcallable_instance_tramp), .-GNAME(funcallable_instance_tramp)
+	SIZE(GNAME(funcallable_instance_tramp))
 #endif
 /*
  * fun-end breakpoint magic
@@ -452,4 +481,5 @@ Lend:
 	ret
 	SIZE(GNAME(fast_bzero))
 
+		
         END()

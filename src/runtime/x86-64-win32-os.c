@@ -36,7 +36,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "thread.h"             /* dynamic_values_bytes */
-
+#include "cpputil.h"
 
 #include "validate.h"
 size_t os_vm_page_size;
@@ -49,8 +49,8 @@ int arch_os_thread_init(struct thread *thread)
         void *cur_stack_start;
         MEMORY_BASIC_INFORMATION stack_memory;
 
-        asm volatile ("movl %%fs:0,%0": "=r" (top_exception_frame));
-        asm volatile ("movl %%fs:4,%0": "=r" (cur_stack_end));
+        asm volatile ("mov %%gs:0,%0": "=r" (top_exception_frame));
+        asm volatile ("mov %%gs:8,%0": "=r" (cur_stack_end));
 
         /* Can't pull stack start from fs:4 or fs:8 or whatever,
          * because that's only what currently has memory behind
@@ -73,7 +73,7 @@ int arch_os_thread_init(struct thread *thread)
          * the backtrace.
          */
         thread->control_stack_start = cur_stack_start;
-        thread->control_stack_end = top_exception_frame;
+        thread->control_stack_end = __builtin_frame_address(0);
 
 #ifndef LISP_FEATURE_SB_THREAD
         /*
@@ -89,7 +89,9 @@ int arch_os_thread_init(struct thread *thread)
     }
 
 #ifdef LISP_FEATURE_SB_THREAD
-    TlsSetValue(OUR_TLS_INDEX,thread);
+    pthread_setspecific(specials,thread);
+    thread->csp_around_foreign_call = PTR_ALIGN_UP(((lispobj*)thread) + TLS_SIZE,
+						   os_vm_page_size);
 #endif
     return 1;
 }
@@ -112,37 +114,45 @@ sigset_t *os_context_sigmask_addr(os_context_t *context)
 os_context_register_t *
 os_context_register_addr(os_context_t *context, int offset)
 {
-    static const size_t offsets[8] = {
-	offsetof(CONTEXT,Eax),
-	offsetof(CONTEXT,Ecx),
-	offsetof(CONTEXT,Edx),
-	offsetof(CONTEXT,Ebx),
-	offsetof(CONTEXT,Esp),
-	offsetof(CONTEXT,Ebp),
-	offsetof(CONTEXT,Esi),
-	offsetof(CONTEXT,Edi),
+    static const size_t offsets[16] = {
+	offsetof(CONTEXT,Rax),
+	offsetof(CONTEXT,Rcx),
+	offsetof(CONTEXT,Rdx),
+	offsetof(CONTEXT,Rbx),
+	offsetof(CONTEXT,Rsp),
+	offsetof(CONTEXT,Rbp),
+	offsetof(CONTEXT,Rsi),
+	offsetof(CONTEXT,Rdi),
+	offsetof(CONTEXT,R8),
+	offsetof(CONTEXT,R9),
+	offsetof(CONTEXT,R10),
+	offsetof(CONTEXT,R11),
+	offsetof(CONTEXT,R12),
+	offsetof(CONTEXT,R13),
+	offsetof(CONTEXT,R14),
+	offsetof(CONTEXT,R15),
     };
     return
-	(offset >= 0 && offset < 16) ?
+	(offset >= 0 && offset < 32) ?
 	((void*)(context->win32_context)) + offsets[offset>>1]	: 0;
 }
 
 os_context_register_t *
 os_context_pc_addr(os_context_t *context)
 {
-    return (void*)&context->win32_context->Eip; /*  REG_EIP */
+    return (void*)&context->win32_context->Rip; /*  REG_EIP */
 }
 
 os_context_register_t *
 os_context_sp_addr(os_context_t *context)
 {
-    return (void*)&context->win32_context->Esp; /* REG_UESP */
+    return (void*)&context->win32_context->Rsp; /* REG_UESP */
 }
 
 os_context_register_t *
 os_context_fp_addr(os_context_t *context)
 {
-    return (void*)&context->win32_context->Ebp; /* REG_EBP */
+    return (void*)&context->win32_context->Rbp; /* REG_EBP */
 }
 
 unsigned long

@@ -44,11 +44,13 @@ unsigned long fast_random_state = 1;
 void arch_init(void)
 {}
 
+#ifndef _WIN64
 os_vm_address_t
 arch_get_bad_addr(int sig, siginfo_t *code, os_context_t *context)
 {
     return (os_vm_address_t)code->si_addr;
 }
+#endif
 
 
 /*
@@ -76,6 +78,8 @@ context_eflags_addr(os_context_t *context)
     return &context->sc_rflags;
 #elif defined __NetBSD__
     return CONTEXT_ADDR_FROM_STEM(RFLAGS);
+#elif defined _WIN64
+    return (os_context_register_t*)&context->win32_context->EFlags;
 #else
 #error unsupported OS
 #endif
@@ -89,7 +93,7 @@ void arch_skip_instruction(os_context_t *context)
      * error-trap or cerror-trap then skip the data bytes that follow. */
 
     int vlen;
-    long code;
+    uword_t code;
 
 
     /* Get and skip the Lisp interrupt code. */
@@ -233,7 +237,7 @@ arch_handle_fun_end_breakpoint(os_context_t *context)
 {
     *os_context_pc_addr(context) -= BREAKPOINT_WIDTH;
     *os_context_pc_addr(context) =
-        (unsigned long)handle_fun_end_breakpoint(context);
+        (uword_t)handle_fun_end_breakpoint(context);
 }
 
 void
@@ -368,12 +372,12 @@ arch_install_interrupt_handlers()
      * OS I haven't tested on?) and we have to go back to the old CMU
      * CL way, I hope there will at least be a comment to explain
      * why.. -- WHN 2001-06-07 */
-#if !defined(LISP_FEATURE_MACH_EXCEPTION_HANDLER)
+#if !defined(LISP_FEATURE_MACH_EXCEPTION_HANDLER) && !defined(LISP_FEATURE_WIN32)
     undoably_install_low_level_interrupt_handler(SIGILL , sigill_handler);
     undoably_install_low_level_interrupt_handler(SIGTRAP, sigtrap_handler);
 #endif
 
-#ifdef X86_64_SIGFPE_FIXUP
+#if defined(X86_64_SIGFPE_FIXUP) && !defined(LISP_FEATURE_WIN32)
     undoably_install_low_level_interrupt_handler(SIGFPE, sigfpe_handler);
 #endif
 
@@ -388,7 +392,7 @@ arch_install_interrupt_handlers()
 void
 arch_write_linkage_table_jmp(char * reloc, void * fun)
 {
-    unsigned long addr = (unsigned long) fun;
+    uword_t addr = (uword_t) fun;
     int i;
 
     *reloc++ = 0xFF; /* Opcode for near jump to absolute reg/mem64. */
@@ -400,7 +404,7 @@ arch_write_linkage_table_jmp(char * reloc, void * fun)
 
     for (i = 0; i < 8; i++) {
         *reloc++ = addr & 0xff;
-        addr >>= 8;
+        addr >>= 8u;
     }
 
     /* write a nop for good measure. */
@@ -410,7 +414,7 @@ arch_write_linkage_table_jmp(char * reloc, void * fun)
 void
 arch_write_linkage_table_ref(void * reloc, void * data)
 {
-    *(unsigned long *)reloc = (unsigned long)data;
+    *(uword_t *)reloc = (uword_t)data;
 }
 
 #endif

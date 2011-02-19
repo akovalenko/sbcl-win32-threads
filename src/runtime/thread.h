@@ -69,7 +69,7 @@ extern struct threads_suspend_info suspend_info;
 
 
 struct gcing_safety {
-    lispobj* csp_around_foreign_call;
+    lispobj csp_around_foreign_call;
     lispobj* pc_around_foreign_call;
 };
 
@@ -345,14 +345,25 @@ void gc_enter_foreign_call(lispobj* csp, lispobj* pc);
 void gc_leave_foreign_call();
 void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access);
 
+/* New generation */
+void thread_in_safety_transition(os_context_t *ctx);
+void thread_in_lisp_raised(os_context_t *ctx);
+void thread_interrupted(os_context_t *ctx);
+
+
 
 static inline
 void push_gcing_safety(struct gcing_safety *into)
 {
     struct thread* th = arch_os_get_current_thread();
-    into->pc_around_foreign_call = th->pc_around_foreign_call;
-    if ((into->csp_around_foreign_call = th->csp_around_foreign_call)) {
-	gc_leave_foreign_call();
+    asm volatile ("");
+    if ((into->csp_around_foreign_call =
+	 *th->csp_around_foreign_call)) {
+	*th->csp_around_foreign_call = 0;
+	asm volatile ("");
+	into->pc_around_foreign_call = th->pc_around_foreign_call;
+	th->pc_around_foreign_call = 0;
+	asm volatile ("");
     }
 }
 
@@ -361,8 +372,11 @@ void pop_gcing_safety(struct gcing_safety *from)
 {
     struct thread* th = arch_os_get_current_thread();
     if (from->csp_around_foreign_call) {
-	gc_enter_foreign_call(from->csp_around_foreign_call,
-			      from->pc_around_foreign_call);
+	asm volatile ("");
+	*th->csp_around_foreign_call = from->csp_around_foreign_call;
+	asm volatile ("");
+	th->pc_around_foreign_call = from->pc_around_foreign_call;
+	asm volatile ("");
     }
 }
 

@@ -111,6 +111,7 @@ int dyndebug_runtime_link = 0;
 int dyndebug_safepoints = 0;
 int dyndebug_pagefaults = 0;
 int dyndebug_io = 0;
+int dyndebug_seh = 0;
 
 int dyndebug_to_filestream = 1;
 int dyndebug_to_odstring = 0;
@@ -160,6 +161,8 @@ static inline void dyndebug_init()
         GetEnvironmentVariableA("SBCL_DYNDEBUG__PAGEFAULTS",NULL,0);
     dyndebug_io =
         GetEnvironmentVariableA("SBCL_DYNDEBUG__IO",NULL,0);
+    dyndebug_seh =
+        GetEnvironmentVariableA("SBCL_DYNDEBUG__SEH",NULL,0);
 }
 
 /* wrappers for winapi calls that must be successful (like SBCL's
@@ -169,7 +172,7 @@ static inline void dyndebug_init()
  * ..AVER.. macrology (below) */
 
 static inline
-void* win_aver(void* value, char* comment, char* file, int line,
+intptr_t win_aver(intptr_t value, char* comment, char* file, int line,
                int justwarn)
 {
     if (dyndebug_skip_averlax)
@@ -224,10 +227,10 @@ void* win_aver(void* value, char* comment, char* file, int line,
  * "POSIX-parody" CRT results ("lowio" and similar stuff):
  * negative number means something... negative. */
 static inline
-long sys_aver(long value, char* comment, char* file, int line,
+intptr_t sys_aver(long value, char* comment, char* file, int line,
               int justwarn)
 {
-    win_aver((void*)(value>=0),comment,file,line,justwarn);
+    win_aver((intptr_t)(value>=0),comment,file,line,justwarn);
     return value;
 }
 
@@ -243,7 +246,7 @@ long sys_aver(long value, char* comment, char* file, int line,
 #define AVER(call)                                                      \
     ({ __typeof__(call) __attribute__((unused)) me =                    \
             (__typeof__(call))                                          \
-            win_aver((void*)(call), #call, __FILE__, __LINE__, 0);      \
+            win_aver((intptr_t)(call), #call, __FILE__, __LINE__, 0);      \
         me;})
 
 /* AVERLAX(call): do the same check as AVER did, but be mild on
@@ -254,7 +257,7 @@ long sys_aver(long value, char* comment, char* file, int line,
 #define AVERLAX(call)                                                   \
     ({ __typeof__(call) __attribute__((unused)) me =                    \
             (__typeof__(call))                                          \
-            win_aver((void*)(call), #call, __FILE__, __LINE__, 1);      \
+            win_aver((intptr_t)(call), #call, __FILE__, __LINE__, 1);      \
         me;})
 
 /* Now, when failed AVER... prints both errno and GetLastError(), two
@@ -313,9 +316,11 @@ void odprintf_(const char * fmt, ...)
     struct thread * self = arch_os_get_current_thread();
 #if defined(LISP_FEATURE_SB_THREAD)
     if (self) {
-        sprintf(buf, "[0x%p] %s, %s, %s, %s ", pthread_self(), t_nil_s(GC_SAFE), t_nil_s(GC_INHIBIT), t_nil_s(INTERRUPTS_ENABLED), t_nil_s(IN_SAFEPOINT));
+        sprintf(buf, "[0x%p] [0x%04lx] %s, %s, %s, %s ", pthread_self(),
+		GetCurrentThreadId(),
+		t_nil_s(GC_SAFE), t_nil_s(GC_INHIBIT), t_nil_s(INTERRUPTS_ENABLED), t_nil_s(IN_SAFEPOINT));
     } else {
-        sprintf(buf, "[0x%p] (arch_os_get_current_thread() is NULL) ", pthread_self());
+        sprintf(buf, "[0x%p] [0x%04lx] (arch_os_get_current_thread() is NULL) ", pthread_self(),GetCurrentThreadId());
     }
 #else
     buf[0] = 0;
@@ -330,8 +335,12 @@ void odprintf_(const char * fmt, ...)
 
     if (dyndebug_to_odstring)
 	OutputDebugString(buf);
-    if (dyndebug_to_filestream)
+    if (dyndebug_to_filestream) {
+	static pthread_mutex_t loglock = PTHREAD_MUTEX_INITIALIZER;
+	pthread_mutex_lock(&loglock);
 	fprintf(dyndebug_output,"%s",buf);
+	pthread_mutex_unlock(&loglock);
+    }
     SetLastError(lastError);
 }
 
@@ -389,13 +398,21 @@ os_vm_address_t core_mmap_end;
 static void *get_seh_frame(void)
 {
     void* retval;
-    asm volatile ("movl %%fs:0,%0": "=r" (retval));
+#ifdef LISP_FEATURE_X86
+    asm volatile ("mov %%fs:0,%0": "=r" (retval));
+#else
+    asm volatile ("mov %%gs:0,%0": "=r" (retval));
+#endif
     return retval;
 }
 
 static void set_seh_frame(void *frame)
 {
-    asm volatile ("movl %0,%%fs:0": : "r" (frame));
+#ifdef LISP_FEATURE_X86
+    asm volatile ("mov %0,%%fs:0": : "r" (frame));
+#else
+    asm volatile ("mov %0,%%gs:0": : "r" (frame));
+#endif
 }
 
 #if 0
@@ -423,6 +440,7 @@ inline static void *get_stack_frame(void)
 
 
 #if defined(LISP_FEATURE_SB_THREAD)
+
 /* Allocate (reserve+commit) a page so that each thread running Lisp
  * code will never iterate in a loop without a single Load from it.
  *
@@ -432,8 +450,8 @@ inline static void *get_stack_frame(void)
  */
 void alloc_gc_page()
 {
-    AVER(VirtualAlloc(GC_SAFEPOINT_PAGE_ADDR, BACKEND_PAGE_BYTES,
-                      MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    AVER(VirtualAlloc(GC_SAFEPOINT_PAGE_ADDR, sizeof(lispobj),
+                      MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE));
 }
 
 /* Permit loads from GC_SAFEPOINT_PAGE_ADDR (NB page state change is
@@ -460,7 +478,7 @@ void alloc_gc_page()
 void map_gc_page()
 {
     DWORD oldProt;
-    AVER(VirtualProtect(GC_SAFEPOINT_PAGE_ADDR, BACKEND_PAGE_BYTES,
+    AVER(VirtualProtect(GC_SAFEPOINT_PAGE_ADDR, sizeof(lispobj),
                         PAGE_READWRITE, &oldProt));
 }
 
@@ -508,15 +526,26 @@ void map_gc_page()
 void map_gc_page_readonly()
 {
     DWORD oldProt;
-    AVER(VirtualProtect(GC_SAFEPOINT_PAGE_ADDR, BACKEND_PAGE_BYTES,
+    AVER(VirtualProtect(GC_SAFEPOINT_PAGE_ADDR, sizeof(lispobj),
                         PAGE_READONLY, &oldProt));
 }
 
 void unmap_gc_page()
 {
     DWORD oldProt;
-    AVER(VirtualProtect(GC_SAFEPOINT_PAGE_ADDR, BACKEND_PAGE_BYTES,
+    AVER(VirtualProtect(GC_SAFEPOINT_PAGE_ADDR, sizeof(lispobj),
                         PAGE_NOACCESS, &oldProt));
+}
+
+void do_nothing() {}
+
+void** os_get_csp(struct thread* th)
+{
+    odxprint(safepoints,"Thread %p has CSP [%p] %p => %p",
+	     th,th->csp_around_foreign_call,
+	     *(void***)th->csp_around_foreign_call,
+	     th->control_stack_end);
+    return *(void***)th->csp_around_foreign_call;
 }
 
 #endif
@@ -785,11 +814,17 @@ u32 os_get_build_time_shared_libraries(u32 excl_maximum,
 	     * That's all: mapped region base _is_ a DLL's image base
 	     * and also its module handle (these 3 things are always
 	     * the same on win32). */
+#ifdef LISP_FEATURE_X86
             if (VirtualQuery
                 (*(LPCVOID**)
                  ((LPCVOID)base + image_import_descriptor->FirstThunk),
                  &moduleMapping, sizeof (moduleMapping)))
+#else
+	    if ((moduleMapping.AllocationBase = (LPVOID)
+		 GetModuleHandle((char*)(base + image_import_descriptor->Name))))
+#endif
             {
+		
 		/* We may encouncer some module more than once while
 		   traversing import descriptors (it's usually a
 		   result of non-trivial linking process, like doing
@@ -980,6 +1015,7 @@ void os_link_runtime()
 
 void os_preinit()
 {
+#ifdef LISP_FEATURE_X86
     DWORD slots[TLS_MINIMUM_AVAILABLE];
     DWORD key;
     int n_slots = 0, i;
@@ -1003,6 +1039,7 @@ void os_preinit()
         lose("TLS slot assertion failed: slot 63 is unavailable "
              "(last TlsAlloc() returned %u)",key);
     }
+#endif
 }
 
 
@@ -1244,11 +1281,14 @@ static pthread_key_t save_lisp_tls_key;
 
 static void save_lisp_tls()
 {
+#ifdef LISP_FEATURE_X86
     pthread_setspecific(save_lisp_tls_key,TlsGetValue(OUR_TLS_INDEX));
+#endif
 }
 
 static void restore_lisp_tls()
 {
+#ifdef LISP_FEATURE_X86
     struct thread *self = pthread_getspecific(save_lisp_tls_key);
     struct thread *prev = TlsGetValue(OUR_TLS_INDEX);
     TlsSetValue(OUR_TLS_INDEX, self);
@@ -1259,6 +1299,7 @@ static void restore_lisp_tls()
     if (self)
 	self->in_lisp_fpu_mode = prev ? prev->in_lisp_fpu_mode : 0;
 #endif
+#endif /* LISP_FEATURE_X86 */
 }
 
 
@@ -1345,13 +1386,13 @@ void os_init(char *argv[], char *envp[])
     GetSystemInfo(&system_info);
     os_vm_page_size = system_info.dwPageSize > BACKEND_PAGE_BYTES?
 	system_info.dwPageSize : BACKEND_PAGE_BYTES;
-    /* As of WinXP, it seems that SSE is really broken :-( */
+#if defined(LISP_FEATURE_X86)
     fast_bzero_pointer = fast_bzero_detect;
+#endif
     os_number_of_processors = system_info.dwNumberOfProcessors;
     dyndebug_init();
 
     base_seh_frame = get_seh_frame();
-    accept_post_mortem_startup();
 #if defined(LISP_FEATURE_SB_THREAD)
     pthread_key_create(&save_lisp_tls_key,NULL);
     /* lisp_fiber_key with destructor.  After foreign thread
@@ -1556,7 +1597,6 @@ static inline boolean local_thread_stack_address_p(os_vm_address_t address)
     return this_thread &&
 	(((((u64)address >= (u64)this_thread->os_address) &&
 	   ((u64)address < ((u64)this_thread)))||
-
 	  (((u64)address >= (u64)this_thread->control_stack_start)&&
 	   ((u64)address < (u64)this_thread->control_stack_end))));
 }
@@ -1783,7 +1823,7 @@ os_invalidate(os_vm_address_t addr, os_vm_size_t len)
     RECURSIVE_REDUCE_TO_ONE_SPACE_VOID(os_invalidate,addr,len);
 
     if (addr_in_mmapped_core(addr)) {
-        fast_bzero_pointer(addr, len);
+        fast_bzero(addr, len);
     } else {
         AVERLAX(VirtualFree(addr, len, MEM_DECOMMIT));
     }
@@ -1940,17 +1980,20 @@ os_protect(os_vm_address_t address, os_vm_size_t length, os_vm_prot_t prot)
                             &old_prot));
 #endif
     } else {
-	if (mwwFlag && !localp) {
+	if (mwwFlag && !localp && length != sizeof(lispobj)) {
 #ifdef WRITE_WATCH_RESET_ON_WP
 	    ptr_ResetWriteWatch(address,length);
 #endif
 	    return;
 	} else {
 	    DWORD new_prot = os_protect_modes[prot];
-
 	    AVER(VirtualProtect(address, length, new_prot, &old_prot)||
 		 (VirtualAlloc(address, length, MEM_COMMIT, new_prot) &&
 		  VirtualProtect(address, length, new_prot, &old_prot)));
+	    odxprint(safepoints,"Protecting %p + %p vmaccess %d "
+		     "newprot %08x oldprot %08x",
+		     address,length,prot,new_prot,old_prot
+		);
 	}
     }
 }
@@ -1975,8 +2018,8 @@ os_vm_prot_t os_current_protection(os_vm_address_t address)
 static boolean
 in_range_p(os_vm_address_t a, lispobj sbeg, size_t slen)
 {
-    char* beg = (char*)((long)sbeg);
-    char* end = (char*)((long)sbeg) + slen;
+    char* beg = (char*)((uword_t)sbeg);
+    char* end = (char*)((uword_t)sbeg) + slen;
     char* adr = (char*)a;
     return (adr >= beg && adr < end);
 }
@@ -1998,7 +2041,7 @@ is_valid_lisp_addr(os_vm_address_t addr)
     for_each_thread(th) {
         if(((os_vm_address_t)th->control_stack_start <= addr) && (addr < (os_vm_address_t)th->control_stack_end))
             return 1;
-        if(in_range_p(addr, (unsigned long)th->binding_stack_start, BINDING_STACK_SIZE))
+        if(in_range_p(addr, (uword_t)th->binding_stack_start, BINDING_STACK_SIZE))
             return 1;
     }
     return 0;
@@ -2011,13 +2054,21 @@ extern boolean internal_errors_enabled;
 #define IS_TRAP_EXCEPTION(exception_record, context)                    \
      (((exception_record)->ExceptionCode == EXCEPTION_ILLEGAL_INSTRUCTION) && \
       (((unsigned short *)((context.win32_context)->Eip))[0] == 0x0b0f))
- #define TRAP_CODE_WIDTH 2
- #else
- #define IS_TRAP_EXCEPTION(exception_record, context)            \
-     ((exception_record)->ExceptionCode == EXCEPTION_BREAKPOINT)
- #define TRAP_CODE_WIDTH 1
- #endif
- extern void exception_handler_wrapper();
+#define TRAP_CODE_WIDTH 2
+#else
+#define IS_TRAP_EXCEPTION(exception_record, context)            \
+    ((exception_record)->ExceptionCode == EXCEPTION_BREAKPOINT)
+
+#ifdef LISP_FEATURE_X86
+#define TRAP_CODE_WIDTH 1
+#else
+#define TRAP_CODE_WIDTH 0
+#endif
+
+#endif
+extern void exception_handler_wrapper();
+
+#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
 
  static inline
  int fpu_world_cruel_p()
@@ -2073,7 +2124,12 @@ extern boolean internal_errors_enabled;
      AVERLAX(!fpu_world_lispy_p());
  }
 
+#else
 
+int fpu_world_lispy_p() { return 0; }
+void establish_c_fpu_world() { }
+
+#endif
 
  void c_level_backtrace(const char* header, int depth)
  {
@@ -2081,7 +2137,7 @@ extern boolean internal_errors_enabled;
      int n = 0;
      void** lastseh;
 
-     for (lastseh = get_seh_frame(); lastseh && (lastseh!=(void*)0xFFFFFFFF);
+     for (lastseh = get_seh_frame(); lastseh && (lastseh!=(void*)-1);
 	  lastseh = *lastseh);
 
      fprintf(dyndebug_output, "Backtrace: %s (thread %p)\n", header, this_thread);
@@ -2105,6 +2161,8 @@ extern boolean internal_errors_enabled;
 
     Target FPU world of recover is always the world that was current
     before it was broken. */
+
+#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
 
  static inline
  void recover_fpu_world()
@@ -2159,9 +2217,13 @@ extern boolean internal_errors_enabled;
      }
  }
 
+#endif
+
  boolean sb_control_fpu_normally_untouched_by_non_float_calls = 1;
  boolean sb_control_update_sb_stat_counters = 1;
  LONG sb_stat_fpu_modeswitch_cycling_counter = 0L;
+
+#ifdef LISP_FEATURE_X86
 
  #define WCTX_PUSH(wctx,value)                                           \
      do { wctx->Esp-=4;                                                  \
@@ -2320,6 +2382,8 @@ extern boolean internal_errors_enabled;
      }
  }
 
+#endif	/* LISP_FEATURE_X86 */
+
 /*
  * A good explanation of the exception handling semantics is
  * http://win32assembly.online.fr/Exceptionhandling.html .
@@ -2332,15 +2396,29 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 		 void *dispatcher_context)
 {
     if (!context) return ExceptionContinueSearch;
+    if (exception_record->ExceptionFlags & (EH_UNWINDING|EH_EXIT_UNWIND))
+	return  ExceptionContinueSearch;
     DWORD code = exception_record->ExceptionCode;
     EXCEPTION_DISPOSITION disposition = ExceptionContinueExecution;
     void* fault_address = (void*)exception_record->ExceptionInformation[1];
     os_context_t ctx, *oldctx;
     struct thread* self = arch_os_get_current_thread();
-    int contextual_fpu_state = self ? self->in_lisp_fpu_mode : 0;
     DWORD lastError = GetLastError();
     DWORD lastErrno = errno;
+    odxprint(seh,
+	     "SEH: rec %p, frame %p, ctxptr %p, disp %p, rip %p, fault %p\n"
+	     "... thread %p, code %p, rcx %p\n\n",
+	     exception_record, exception_frame,
+	     context, dispatcher_context,
+	     context->Rip,
+	     fault_address,
+	     self,
+	     (void*)(intptr_t)code,
+	     context->Rcx);
     
+#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
+    int contextual_fpu_state = self ? self->in_lisp_fpu_mode : 0;
+
     if (dyndebug_lazy_fpu)
     {
 	DWORD tags = context->FloatSave.TagWord;
@@ -2364,6 +2442,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 	    c_level_backtrace("Exception handler: strange NPX state",10);
 	}
     }
+
     if (code == EXCEPTION_FLT_STACK_CHECK) {
 	int stack_empty = (!(context->FloatSave.StatusWord &(1<<9)));
 
@@ -2469,13 +2548,19 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 	self->in_lisp_fpu_mode |= 0xFF00; /* Hello cruel world */
     }
 
+#endif /* LISP_FEATURE_SB_AUTO_FPU_SWITCH */
+
     ctx.win32_context = context;
     ctx.sigmask = self ? self->os_thread->blocked_signal_set : 0;
 
     /* For EXCEPTION_ACCESS_VIOLATION only. */
+/*
     odprintf("handle exception, EIP = 0x%p, code = 0x%p (addr = 0x%p)",
 	     context->Eip, exception_record->ExceptionCode, fault_address);
 
+*/
+
+#if defined(LISP_FEATURE_X86)
     if (single_stepping &&
 	exception_record->ExceptionCode == EXCEPTION_SINGLE_STEP) {
 	/* We are doing a displaced instruction. At least function
@@ -2486,31 +2571,35 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 	END_GC_UNSAFE_CODE;
 	goto finish;
     }
+#endif
+
     if (IS_TRAP_EXCEPTION(exception_record, ctx)) {
 	unsigned trap;
+	
 
+#if defined(LISP_FEATURE_X86)
 	if (self) {
 	    self->pseudo_atomic_bits |= (*(char*)context->Ebp & 0x03);
 	    (*(char*)context->Ebp) &= ~0x03;
 	}
-
+#endif
 
 
 	/* Unlike some other operating systems, Win32 leaves EIP
 	 * pointing to the breakpoint instruction. */
-	ctx.win32_context->Eip += TRAP_CODE_WIDTH;
+        (*os_context_pc_addr(&ctx)) += TRAP_CODE_WIDTH;
+
 	/* Now EIP points just after the INT3 byte and aims at the
 	 * 'kind' value (eg trap_Cerror). */
 	trap = *(unsigned char *)(*os_context_pc_addr(&ctx));
-	 
 	/* Before any other trap handler: gc_safepoint ensures that
 	   inner alloc_sap for passing the context won't trap on
 	   pseudo-atomic. */
 	if (trap == trap_PendingInterrupt) {
 	    /* Done everything needed for this trap, except EIP
 	       adjustment */
-	    gc_maybe_stop_with_context(&ctx, 0);
 	    arch_skip_instruction(&ctx);
+	    thread_interrupted(&ctx);
 	    goto finish;
 	}
 	/* This is just for info in case the monitor wants to print an
@@ -2531,8 +2620,10 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         if (handle_guard_page_triggered(&ctx, fault_address))
             goto finish;
 	END_GC_UNSAFE_CODE;
+	goto finish;
     }
     else if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
+#if defined(LISP_FEATURE_X86)
         odxprint(pagefaults,
 		     "SEGV. ThSap %p, Eip %p, Esp %p, Esi %p, Edi %p, "
 		     "Addr %p Access %d\n",
@@ -2543,6 +2634,18 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 		     context->Edi,
 		     fault_address,
 		     exception_record->ExceptionInformation[0]);
+#else
+        odxprint(pagefaults,
+		     "SEGV. ThSap %p, Eip %p, Esp %p, Esi %p, Edi %p, "
+		     "Addr %p Access %d\n",
+		     self,
+		     context->Rip,
+		     context->Rsp,
+		     context->Rsi,
+		     context->Rdi,
+		     fault_address,
+		     exception_record->ExceptionInformation[0]);
+#endif	
 	if (self) {
 	    if (local_thread_stack_address_p(fault_address)&&
 	    	handle_guard_page_triggered(&ctx, fault_address)) {
@@ -2553,6 +2656,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 
 
 	    if (((lispobj)fault_address)<0xFFFF) {
+#if defined(LISP_FEATURE_X86)
 		fprintf(stderr,
 			"Low page access (?) thread %p\n"
 			"(addr 0x%p, EIP 0x%08lx ESP 0x%08lx EBP 0x%08lx)\n",
@@ -2561,14 +2665,28 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 			    context->Eip,
 			    context->Esp,
 			    context->Ebp);
+#else
+		fprintf(stderr,
+			"Low page access (?) thread %p\n"
+			"(addr 0x%p, EIP 0x%p ESP 0x%p EBP 0x%p)\n",
+			    self,
+			fault_address,
+			(void*)context->Rip,
+			(void*)context->Rsp,
+			(void*)context->Rbp);
+#endif
                 /* c_level_backtrace("Low page access",5); */
                 Sleep(INFINITE);
 		ExitProcess(0);		
 	    }
 	}
-	if (PTR_ALIGN_DOWN(fault_address,os_vm_page_size) == GC_SAFEPOINT_PAGE_ADDR) {
+	if (fault_address == GC_SAFEPOINT_PAGE_ADDR) {
 	    /* Pick off GC-related memory fault next. */
-	    gc_maybe_stop_with_context(&ctx, 1);
+	    thread_in_lisp_raised(&ctx);
+	    goto finish;
+	}
+	if (self && (((u64)fault_address) == ((u64)self->csp_around_foreign_call))) {
+	    thread_in_safety_transition(&ctx);
 	    goto finish;
 	}
 
@@ -2592,6 +2710,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 	if (fault_address == undefined_alien_address)
 	    goto complain;
 	
+#if defined(LISP_FEATURE_X86)
 	AVER(VirtualAlloc(PTR_ALIGN_DOWN(fault_address,os_vm_page_size),
 			  os_vm_page_size,
 			  MEM_COMMIT, PAGE_EXECUTE_READWRITE)
@@ -2601,7 +2720,17 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 		 fake_foreign_function_call(&ctx),
 		 lose("Lispy backtrace"),
 		 0)));
-
+#else
+	AVER(VirtualAlloc(PTR_ALIGN_DOWN(fault_address,os_vm_page_size),
+			  os_vm_page_size,
+			  MEM_COMMIT, PAGE_EXECUTE_READWRITE)
+	     ||(fprintf(stderr,"Unable to recommit addr %p eip 0x%p\n",
+			fault_address, (void*)context->Rip) &&
+		(c_level_backtrace("BT",5),
+		 fake_foreign_function_call(&ctx),
+		 lose("Lispy backtrace"),
+		 0)));
+#endif
 	goto finish;
 	
     }
@@ -2651,8 +2780,10 @@ complain:
 	goto finish;
     }
 
-    fprintf(stderr, "Exception Code: 0x%lx.\n", exception_record->ExceptionCode);
-    fprintf(stderr, "Faulting IP: 0x%lx.\n", (DWORD)exception_record->ExceptionAddress);
+    fprintf(stderr, "Exception Code: 0x%p.\n",
+	    (void*)(intptr_t)exception_record->ExceptionCode);
+    fprintf(stderr, "Faulting IP: 0x%p.\n",
+	    (void*)(intptr_t)exception_record->ExceptionAddress);
     if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
 	MEMORY_BASIC_INFORMATION mem_info;
 
@@ -2660,9 +2791,9 @@ complain:
 	    fprintf(stderr, "page status: 0x%lx.\n", mem_info.State);
 	}
 
-	fprintf(stderr, "Was writing: %ld, where: 0x%lx.\n",
-		exception_record->ExceptionInformation[0],
-		(DWORD)fault_address);
+	fprintf(stderr, "Was writing: %p, where: 0x%p.\n",
+		(void*)exception_record->ExceptionInformation[0],
+		fault_address);
     }
 
     fflush(stderr);
@@ -2673,106 +2804,60 @@ complain:
     /* FIXME: WTF? How are we supposed to end up here? */
 #if defined(LISP_FEATURE_SB_THREAD)
     pthread_sigmask(SIG_SETMASK, &ctx.sigmask, NULL);
-    gc_maybe_stop_with_context(&ctx,0);
 #endif
 
     /* Common return point. */
 finish:
+#if defined(LISP_FEATURE_SB_AUTO_FPU_SWITCH)
     if (self)
 	self->in_lisp_fpu_mode = contextual_fpu_state;
+#endif
     errno = lastErrno;
     SetLastError(lastError);
     return disposition;
 }
 
-/* When Lisp dumps core, it's sometimes useful to make it
-   CreateProcess instead of dying. */
-struct at_exit_instructions {
-    void* start_application;
-    void* command_line;
-    HANDLE std_handles[3];
-} do_at_exit;
-
-void post_mortem_function()
+LONG veh(EXCEPTION_POINTERS *ep)
 {
-    PROCESS_INFORMATION pinfo;
-    STARTUPINFO si = {.cb = sizeof (STARTUPINFO)};
-    HANDLE myHandle;
-    char myHandleStr[32];
 
-    DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(),
-                    GetCurrentProcess(), &myHandle,
-                    0,
-                    TRUE,
-                    DUPLICATE_SAME_ACCESS);
-    snprintf(myHandleStr,32,"%u",(unsigned)myHandle);
-    si.hStdInput = do_at_exit.std_handles[0];
-    si.hStdOutput = do_at_exit.std_handles[1];
-    si.hStdError = do_at_exit.std_handles[2];
+    volatile uword_t slots[4]={ep->ContextRecord->Rbp,
+			       ep->ContextRecord->Rbp};
+    ep->ContextRecord->Rbp = (uword_t)&slots[2];
 
-    SetStdHandle(STD_INPUT_HANDLE,INVALID_HANDLE_VALUE);
-    SetStdHandle(STD_OUTPUT_HANDLE,INVALID_HANDLE_VALUE);
-    SetStdHandle(STD_ERROR_HANDLE,INVALID_HANDLE_VALUE);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    if (!do_at_exit.start_application)
-        return;
-    SetEnvironmentVariable("SBCL_STARTING_ITS_HEIR",myHandleStr);
+    
+    /* uword_t oldfp = *(uword_t*)__builtin_frame_address(0); */
+    /* *(uword_t*)__builtin_frame_address(0) = ep->ContextRecord->Rbp; */
+    EXCEPTION_DISPOSITION disp =
+        handle_exception(ep->ExceptionRecord,NULL,ep->ContextRecord,NULL);
 
-    CreateProcess(do_at_exit.start_application,
-                  do_at_exit.command_line,
-                  NULL,                 /* lpProcessAttributes */
-                  NULL,                 /* lpThreadAttributes */
-                  TRUE,                 /* bInheritHandles */
-                  0,                    /* dwCreationFlags */
-                  NULL,                 /* lpEnvironment */
-                  NULL,                 /* lpCurrentDirectory */
-                  &si,                  /* startupinfo */
-                  &pinfo);              /* lpProcessInformation */
-    CloseHandle(&si.hStdInput);
-    CloseHandle(&si.hStdOutput);
-    CloseHandle(&si.hStdError);
-}
+    ep->ContextRecord->Rbp = slots[0];
 
-void start_before_dying(void* app, void* cmdline) {
-    char* copy_app = malloc(strlen(app)+1);
-    char* copy_cmdline = malloc(strlen(cmdline)+1);
-    DWORD handle_kinds[] =
-        {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
-    int i;
+    /* *(uword_t*)__builtin_frame_address(0) = oldfp; */
 
-    strcpy(copy_app,app);
-    strcpy(copy_cmdline,cmdline);
-    if (do_at_exit.command_line) {
-        free(do_at_exit.start_application);
-        free(do_at_exit.command_line);
-    } else {
-        atexit(post_mortem_function);
+    switch (disp)
+    {
+    case ExceptionContinueExecution:
+	return EXCEPTION_CONTINUE_EXECUTION;
+    case ExceptionContinueSearch:
+	return EXCEPTION_CONTINUE_SEARCH;
+    default:
+	fprintf(stderr,"Exception handler is mad\n");
+	ExitProcess(0);
     }
-    for (i=0; i<=2; ++i)
-        DuplicateHandle(GetCurrentProcess(),GetStdHandle(handle_kinds[i]),
-                        GetCurrentProcess(),&do_at_exit.std_handles[i],
-                        0, TRUE, DUPLICATE_SAME_ACCESS);
-    do_at_exit.start_application = copy_app;
-    do_at_exit.command_line = copy_cmdline;
-}
-
-void accept_post_mortem_startup()
-{
-    char parentHandleStr[32];
-    HANDLE parentHandle;
-    if (!GetEnvironmentVariable("SBCL_STARTING_ITS_HEIR",parentHandleStr,32))
-        return;
-    SetEnvironmentVariable("SBCL_STARTING_ITS_HEIR",NULL);
-    parentHandle = (HANDLE)strtoul(parentHandleStr, NULL, 0);
-    WaitForSingleObject(parentHandle,INFINITE);
 }
 
 void
 wos_install_interrupt_handlers(struct lisp_exception_frame *handler)
 {
+#ifdef LISP_FEATURE_X86
     handler->next_frame = get_seh_frame();
     handler->handler = (void*)exception_handler_wrapper;
     set_seh_frame(handler);
+#else
+    static int once = 0;
+    if (!once)
+	AddVectoredExceptionHandler(once++,veh);
+#endif
 }
 
 char *dirname(char *path)
