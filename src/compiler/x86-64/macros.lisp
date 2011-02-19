@@ -314,7 +314,9 @@
        ;; if PAI was set, interrupts were disabled at the same time
        ;; using the process signal mask.
        (inst break pending-interrupt-trap)
-       (emit-label ,label))))
+       (emit-label ,label)
+       #!+win32
+       (inst test al-tn (make-ea :byte :disp sb!vm::gc-safepoint-page-addr)))))
 
 
 #!-sb-thread

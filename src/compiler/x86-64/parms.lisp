@@ -107,6 +107,9 @@
   (def!constant read-only-space-start     #x20000000)
   (def!constant read-only-space-end       #x200ff000)
 
+  #!+sb-gc-safepoint
+  (def!constant gc-safepoint-page-addr    #x21000000)
+  
   (def!constant static-space-start        #x20100000)
   (def!constant static-space-end          #x201ff000)
 
