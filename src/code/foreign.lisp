@@ -132,7 +132,7 @@ if the symbol isn't found."
           (when (and (<= table-addr addr)
                      (< addr (+ table-addr sb!vm:linkage-table-entry-size)))
             (return-from sap-foreign-symbol (car name-and-datap))))))
-    #!+win32
+    #!+(and win32 x86)
     (when
         (and (boundp '*runtime-dlhandle*)
              *runtime-dlhandle*
