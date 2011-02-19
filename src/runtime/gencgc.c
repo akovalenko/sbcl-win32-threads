@@ -64,7 +64,7 @@
 #endif
 
 /* forward declarations */
-page_index_t  gc_find_freeish_pages(long *restart_page_ptr, long nbytes,
+page_index_t  gc_find_freeish_pages(page_index_t *restart_page_ptr, sword_t nbytes,
                                     int page_type_flag);
 
 
@@ -532,7 +532,7 @@ print_generation_stats() /* FIXME: should take FILE argument, or construct a str
 }
 
 
-#if defined(LISP_FEATURE_X86) || defined(LISP_FEATURE_X86_64)
+#if defined(LISP_FEATURE_X86)
 void fast_bzero(void*, size_t); /* in <arch>-assem.S */
 #endif
 
@@ -726,11 +726,11 @@ set_generation_alloc_start_page(generation_index_t generation, int page_type_fla
  * are allocated, although they will initially be empty.
  */
 static void
-gc_alloc_new_region(long nbytes, int page_type_flag, struct alloc_region *alloc_region)
+gc_alloc_new_region(sword_t nbytes, int page_type_flag, struct alloc_region *alloc_region)
 {
     page_index_t first_page;
     page_index_t last_page;
-    unsigned long bytes_found;
+    uword_t bytes_found;
     page_index_t i;
     int ret;
 
@@ -1061,18 +1061,18 @@ gc_alloc_update_page_tables(int page_type_flag, struct alloc_region *alloc_regio
     gc_set_region_empty(alloc_region);
 }
 
-static inline void *gc_quick_alloc(long nbytes);
+static inline void *gc_quick_alloc(sword_t nbytes);
 
 /* Allocate a possibly large object. */
 void *
-gc_alloc_large(long nbytes, int page_type_flag, struct alloc_region *alloc_region)
+gc_alloc_large(sword_t nbytes, int page_type_flag, struct alloc_region *alloc_region)
 {
     page_index_t first_page;
     page_index_t last_page;
     int orig_first_page_bytes_used;
-    long byte_cnt;
+    sword_t byte_cnt;
     int more;
-    unsigned long bytes_used;
+    uword_t bytes_used;
     page_index_t next_page;
     int ret;
 
@@ -1228,13 +1228,13 @@ gc_heap_exhausted_error_or_lose (long available, long requested)
 }
 
 page_index_t
-gc_find_freeish_pages(page_index_t *restart_page_ptr, long nbytes,
+gc_find_freeish_pages(page_index_t *restart_page_ptr, sword_t nbytes,
                       int page_type_flag)
 {
     page_index_t first_page, last_page;
     page_index_t restart_page = *restart_page_ptr;
-    long bytes_found = 0;
-    long most_bytes_found = 0;
+    sword_t bytes_found = 0;
+    sword_t most_bytes_found = 0;
     /* FIXME: assert(free_pages_lock is held); */
 
     /* Toggled by gc_and_save for heap compaction, normally -1. */
@@ -1243,7 +1243,7 @@ gc_find_freeish_pages(page_index_t *restart_page_ptr, long nbytes,
     }
 
     gc_assert(nbytes>=0);
-    if (((unsigned long)nbytes)>=PAGE_BYTES) {
+    if (((uword_t)nbytes)>=PAGE_BYTES) {
         /* Search for a contiguous free space of at least nbytes,
          * aligned on a page boundary. The page-alignment is strictly
          * speaking needed only for objects at least large_object_size
@@ -1317,7 +1317,7 @@ gc_find_freeish_pages(page_index_t *restart_page_ptr, long nbytes,
  * functions will eventually call this  */
 
 void *
-gc_alloc_with_region(long nbytes,int page_type_flag, struct alloc_region *my_region,
+gc_alloc_with_region(sword_t nbytes,int page_type_flag, struct alloc_region *my_region,
                      int quick_p)
 {
     void *new_free_pointer;
@@ -1362,31 +1362,31 @@ gc_alloc_with_region(long nbytes,int page_type_flag, struct alloc_region *my_reg
  * region */
 
 static inline void *
-gc_quick_alloc(long nbytes)
+gc_quick_alloc(sword_t nbytes)
 {
     return gc_general_alloc(nbytes, BOXED_PAGE_FLAG, ALLOC_QUICK);
 }
 
 static inline void *
-gc_quick_alloc_large(long nbytes)
+gc_quick_alloc_large(sword_t nbytes)
 {
     return gc_general_alloc(nbytes, BOXED_PAGE_FLAG ,ALLOC_QUICK);
 }
 
 static inline void *
-gc_alloc_unboxed(long nbytes)
+gc_alloc_unboxed(sword_t nbytes)
 {
     return gc_general_alloc(nbytes, UNBOXED_PAGE_FLAG, 0);
 }
 
 static inline void *
-gc_quick_alloc_unboxed(long nbytes)
+gc_quick_alloc_unboxed(sword_t nbytes)
 {
     return gc_general_alloc(nbytes, UNBOXED_PAGE_FLAG, ALLOC_QUICK);
 }
 
 static inline void *
-gc_quick_alloc_large_unboxed(long nbytes)
+gc_quick_alloc_large_unboxed(sword_t nbytes)
 {
     return gc_general_alloc(nbytes, UNBOXED_PAGE_FLAG, ALLOC_QUICK);
 }
@@ -1399,7 +1399,7 @@ gc_quick_alloc_large_unboxed(long nbytes)
  * Vectors may have shrunk. If the object is not copied the space
  * needs to be reclaimed, and the page_tables corrected. */
 lispobj
-copy_large_object(lispobj object, long nwords)
+copy_large_object(lispobj object, sword_t nwords)
 {
     int tag;
     lispobj *new;
@@ -1510,7 +1510,7 @@ copy_large_object(lispobj object, long nwords)
 
 /* to copy unboxed objects */
 lispobj
-copy_unboxed_object(lispobj object, long nwords)
+copy_unboxed_object(lispobj object, sword_t nwords)
 {
     long tag;
     lispobj *new;
@@ -1543,7 +1543,7 @@ copy_unboxed_object(lispobj object, long nwords)
  * KLUDGE: There's a lot of cut-and-paste duplication between this
  * function and copy_large_object(..). -- WHN 20000619 */
 lispobj
-copy_large_unboxed_object(lispobj object, long nwords)
+copy_large_unboxed_object(lispobj object, sword_t nwords)
 {
     int tag;
     lispobj *new;
@@ -2267,8 +2267,8 @@ looks_like_valid_lisp_pointer_p(lispobj *pointer, lispobj *start_addr)
             break;
         case CLOSURE_HEADER_WIDETAG:
         case FUNCALLABLE_INSTANCE_HEADER_WIDETAG:
-            if ((unsigned long)pointer !=
-                ((unsigned long)start_addr+FUN_POINTER_LOWTAG)) {
+            if ((uword_t)pointer !=
+                ((uword_t)start_addr+FUN_POINTER_LOWTAG)) {
                 if (gencgc_verbose) {
                     FSHOW((stderr,
                            "/Wf2: %x %x %x\n",
@@ -2287,8 +2287,8 @@ looks_like_valid_lisp_pointer_p(lispobj *pointer, lispobj *start_addr)
         }
         break;
     case LIST_POINTER_LOWTAG:
-        if ((unsigned long)pointer !=
-            ((unsigned long)start_addr+LIST_POINTER_LOWTAG)) {
+        if ((uword_t)pointer !=
+            ((uword_t)start_addr+LIST_POINTER_LOWTAG)) {
             if (gencgc_verbose) {
                 FSHOW((stderr,
                        "/Wl1: %x %x %x\n",
@@ -2311,8 +2311,8 @@ looks_like_valid_lisp_pointer_p(lispobj *pointer, lispobj *start_addr)
             return 0;
         }
     case INSTANCE_POINTER_LOWTAG:
-        if ((unsigned long)pointer !=
-            ((unsigned long)start_addr+INSTANCE_POINTER_LOWTAG)) {
+        if ((uword_t)pointer !=
+            ((uword_t)start_addr+INSTANCE_POINTER_LOWTAG)) {
             if (gencgc_verbose) {
                 FSHOW((stderr,
                        "/Wi1: %x %x %x\n",
@@ -2339,7 +2339,7 @@ looks_like_valid_lisp_pointer_p(lispobj *pointer, lispobj *start_addr)
          * need to check for it. -- AB, 2010-Jun-04 */
         if ((widetag_of(start_addr[0]) == CODE_HEADER_WIDETAG)) {
             lispobj *potential_lra =
-                (lispobj *)(((unsigned long)pointer) - OTHER_POINTER_LOWTAG);
+                (lispobj *)(((uword_t)pointer) - OTHER_POINTER_LOWTAG);
             if ((widetag_of(potential_lra[0]) == RETURN_PC_HEADER_WIDETAG) &&
                 ((potential_lra - HeaderValue(potential_lra[0])) == start_addr)) {
                 return 1; /* It's as good as we can verify. */
@@ -2347,8 +2347,8 @@ looks_like_valid_lisp_pointer_p(lispobj *pointer, lispobj *start_addr)
         }
 #endif
 
-        if ((unsigned long)pointer !=
-            ((unsigned long)start_addr+OTHER_POINTER_LOWTAG)) {
+        if ((uword_t)pointer !=
+            ((uword_t)start_addr+OTHER_POINTER_LOWTAG)) {
             if (gencgc_verbose) {
                 FSHOW((stderr,
                        "/Wo1: %x %x %x\n",
@@ -2772,7 +2772,7 @@ preserve_pointer(void *addr)
     /* quick check 2: Check the offset within the page.
      *
      */
-    if (((unsigned long)addr & (PAGE_BYTES - 1)) >
+    if (((uword_t)addr & (PAGE_BYTES - 1)) >
         page_table[addr_page_index].bytes_used)
         return;
 
@@ -2824,7 +2824,7 @@ preserve_pointer(void *addr)
         if (page_free_p(addr_page_index)
             || (page_table[addr_page_index].bytes_used == 0)
             /* Check the offset within the page. */
-            || (((unsigned long)addr & (PAGE_BYTES - 1))
+            || (((uword_t)addr & (PAGE_BYTES - 1))
                 > page_table[addr_page_index].bytes_used)) {
             FSHOW((stderr,
                    "weird? ignore ptr 0x%x to freed area of large object\n",
@@ -3434,8 +3434,8 @@ verify_space(lispobj *start, size_t words)
 {
     int is_in_dynamic_space = (find_page_index((void*)start) != -1);
     int is_in_readonly_space =
-        (READ_ONLY_SPACE_START <= (unsigned long)start &&
-         (unsigned long)start < SymbolValue(READ_ONLY_SPACE_FREE_POINTER,0));
+        (READ_ONLY_SPACE_START <= (uword_t)start &&
+         (uword_t)start < SymbolValue(READ_ONLY_SPACE_FREE_POINTER,0));
 
     while (words > 0) {
         size_t count = 1;
@@ -3777,7 +3777,7 @@ verify_zero_fill(void)
         } else {
             long free_bytes = PAGE_BYTES - page_table[page].bytes_used;
             if (free_bytes > 0) {
-                long *start_addr = (long *)((unsigned long)page_address(page)
+                long *start_addr = (long *)((uword_t)page_address(page)
                                           + page_table[page].bytes_used);
                 long size = free_bytes / N_WORD_BYTES;
                 long i;
@@ -4014,7 +4014,7 @@ garbage_collect_generation(generation_index_t generation, int raise)
 		   any registers in vop call-out for :sb-gc-safepoint
 		   builds, so preserved csp is enough. */
 
-		esp = (void**)th->csp_around_foreign_call;
+		esp = os_get_csp(th);
 		/* ...Together with return address, that is the only
 		   value from the entire context that we need (and
 		   it's saved by foreign call wrapper). That's because
@@ -4024,26 +4024,14 @@ garbage_collect_generation(generation_index_t generation, int raise)
 		#endif
             } else {
 #if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
-		/* target thread should provide either control stack
-		   pointer value, as it were before entering foreign
-		   call, or a full context (if the safepoint was
-		   caused by interrupt/signal/exception). There are
-		   some obscure cases when both CSP and context
-		   present; CSP should be preferred, as the thread is
-		   certainly in foreign call (on win32 using full
-		   context in this case will work too, but it's more
-		   work to do, and it would probably conserve too much) */
-		if (!th->csp_around_foreign_call) {
-		    if (!th->gc_safepoint_context) {
-			lose("Thread %p without CSP and context",th);
-		    }
-		    preserve_context_registers(th->gc_safepoint_context);
-		    esp = (void**)*os_context_register_addr(th->gc_safepoint_context,
-							    reg_SP);
-		} else {
-		    esp = (void**)th->csp_around_foreign_call;
-		    preserve_pointer(th->pc_around_foreign_call);
-		}
+
+		esp = os_get_csp(th);
+		/* ...Together with return address, that is the only
+		   value from the entire context that we need (and
+		   it's saved by foreign call wrapper). That's because
+		   it is removed from control stack into a register by
+		   the foreign call wrapper itself. */
+		preserve_pointer(th->pc_around_foreign_call);
 #else
                 void **esp1;
                 free=fixnum_value(SymbolValue(FREE_INTERRUPT_CONTEXT_INDEX,th));
@@ -4694,7 +4682,7 @@ gc_initialize_pointers(void)
  * region is full, so in most cases it's not needed. */
 
 static inline lispobj *
-general_alloc_internal(long nbytes, int page_type_flag, struct alloc_region *region,
+general_alloc_internal(sword_t nbytes, int page_type_flag, struct alloc_region *region,
                        struct thread *thread)
 {
 #ifndef LISP_FEATURE_WIN32
@@ -4706,7 +4694,7 @@ general_alloc_internal(long nbytes, int page_type_flag, struct alloc_region *reg
     gc_assert(nbytes>0);
 
     /* Check for alignment allocation problems. */
-    gc_assert((((unsigned long)region->free_pointer & LOWTAG_MASK) == 0)
+    gc_assert((((uword_t)region->free_pointer & LOWTAG_MASK) == 0)
               && ((nbytes & LOWTAG_MASK) == 0));
 
     /* Must be inside a PA section. */
@@ -4770,7 +4758,7 @@ general_alloc_internal(long nbytes, int page_type_flag, struct alloc_region *reg
 }
 
 lispobj *
-general_alloc(long nbytes, int page_type_flag)
+general_alloc(sword_t nbytes, int page_type_flag)
 {
   lispobj* result;
   struct thread *thread = arch_os_get_current_thread();
@@ -4796,20 +4784,15 @@ general_alloc(long nbytes, int page_type_flag)
   return result;
 }
 
-lispobj *
-alloc(long nbytes)
+lispobj * SYSV_ABI alloc(sword_t nbytes)
 {
   lispobj* result;
   PUSH_ERRNO;
-  (arch_os_get_current_thread()->pseudo_atomic_bits) =
-      (**(lispobj**)__builtin_frame_address(0))&0x03;
-  
+  PSEUDO_ATOMIC_SET_HIGHLEVEL;
+  /* fprintf(stderr,"ALLOC %ld FOR %p\n",nbytes,arch_os_get_current_thread()); */
   gc_assert(get_pseudo_atomic_atomic(arch_os_get_current_thread()));
-  
   result = general_alloc(nbytes, BOXED_PAGE_FLAG);
-  (**(lispobj**)__builtin_frame_address(0)) |=
-      (arch_os_get_current_thread()->pseudo_atomic_bits)&0x01;
-  (arch_os_get_current_thread()->pseudo_atomic_bits)&=~0x03;
+  PSEUDO_ATOMIC_FLUSH_LOWLEVEL;
   POP_ERRNO;
   return result;
 }
