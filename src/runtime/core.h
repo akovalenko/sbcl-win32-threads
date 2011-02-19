@@ -17,11 +17,11 @@
 
 struct ndir_entry {
 #ifndef LISP_FEATURE_ALPHA
-    long identifier;
-    long nwords;
-    long data_page;
-    long address;
-    long page_count;
+    intptr_t identifier;
+    intptr_t nwords;
+    intptr_t data_page;
+    intptr_t address;
+    intptr_t page_count;
 #else
     u32 identifier;
     u32 nwords;

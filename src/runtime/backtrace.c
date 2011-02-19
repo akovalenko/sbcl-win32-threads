@@ -314,7 +314,7 @@ stack_pointer_p (void *p)
   return (altstack_pointer_p(p)
           || (p < (void *) arch_os_get_current_thread()->control_stack_end
               && (p > (void *) &p || altstack_pointer_p(&p))
-              && (((unsigned long) p) & (stack_alignment-1)) == 0));
+              && (((lispobj) p) & (stack_alignment-1)) == 0));
 }
 
 static int
@@ -323,7 +323,7 @@ ra_pointer_p (void *ra)
   /* the check against 4096 is still a mystery to everyone interviewed about
    * it, but recent changes to sb-sprof seem to suggest that such values
    * do occur sometimes. */
-  return ((unsigned long) ra) > 4096 && !stack_pointer_p (ra);
+  return ((lispobj) ra) > 4096 && !stack_pointer_p (ra);
 }
 
 static int
@@ -356,7 +356,7 @@ debug_function_from_pc (struct code* code, void *pc)
 {
   unsigned long code_header_len = sizeof(lispobj) * HeaderValue(code->header);
   unsigned long offset
-    = (unsigned long) pc - (unsigned long) code - code_header_len;
+    = (lispobj) pc - (lispobj) code - code_header_len;
   struct compiled_debug_fun *df;
   struct compiled_debug_info *di;
   struct vector *v;
@@ -567,9 +567,9 @@ backtrace_from_fp(void *fp, int nframes)
                    (unsigned long) ra);
         } else
 #endif
-        printf("Foreign fp = 0x%lx, ra = 0x%lx",
-               (unsigned long) next_fp,
-               (unsigned long) ra);
+        printf("Foreign fp = 0x%p, ra = 0x%p",
+               (void*) next_fp,
+               (void*) ra);
     }
 
     putchar('\n');
