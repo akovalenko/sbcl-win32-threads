@@ -20,7 +20,7 @@ then
     installroot=${SBCL_ENV_INSTALL_ROOT:-$definstallroot}
     runtime=sbcl.exe
     sbcl_os=win32
-    sbcl_arch=x86
+    sbcl_arch=${SBCL_ARCH:-x86}
     case "$OSTYPE" in
 	cygwin)
 	    targetpath=${SBCL_ENV_TARGETPATH:-"env TERM=dumb cygpath -w"}

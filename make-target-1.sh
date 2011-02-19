@@ -37,6 +37,6 @@ $GNUMAKE -C src/runtime own-runtime-symbol-table
 # Use a little C program to grab stuff from the C header files and
 # smash it into Lisp source code.
 $GNUMAKE -C tools-for-build -I../src/runtime grovel-headers
-./tools-for-build/grovel-headers > output/stuff-groveled-from-headers.lisp
+$XRUN ./tools-for-build/grovel-headers > output/stuff-groveled-from-headers.lisp
 
 $GNUMAKE -C src/runtime after-grovel-headers

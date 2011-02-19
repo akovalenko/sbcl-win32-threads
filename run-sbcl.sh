@@ -64,7 +64,8 @@ fi
 
 if [ -x "$NATIVEBASE"/src/runtime/$SBCL_RUNTIME_EXECUTABLE -a -f "$NATIVEBASE"/output/sbcl.core ] ; then
     echo "(running SBCL from: $BASE)" 1>&2
-    SBCL_HOME="$BASE"/contrib "$NATIVEBASE"/src/runtime/$SBCL_RUNTIME_EXECUTABLE $ARGUMENTS "$@"
+    SBCL_HOME="$BASE"/contrib $SBCL_XRUN \
+    "$NATIVEBASE"/src/runtime/$SBCL_RUNTIME_EXECUTABLE $ARGUMENTS "$@"
 else
     echo "No built SBCL here ($BASE): run 'sh make.sh' first!"
     exit 1

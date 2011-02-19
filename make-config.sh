@@ -159,7 +159,12 @@ case "$sbcl_os" in
         # printf ' :sb-pthread-futex' >> $ltf
 	printf ' :sb-thread' >> $ltf
 	printf ' :sb-foreign-thread' >> $ltf
-	printf ' :sb-auto-fpu-switch' >> $ltf
+        # of course it doesn't provide dlopen, but there is
+        # roughly-equivalent magic nevertheless.
+        printf ' :os-provides-dlopen' >> $ltf
+        if [ $sbcl_arch = "x86" ]; then
+	    printf ' :sb-auto-fpu-switch' >> $ltf
+	fi
 	printf ' :sb-gc-safepoint' >> $ltf
 	printf ' :sb-dynamic-core' >> $ltf
         link_or_copy Config.$sbcl_arch-win32 Config
@@ -207,11 +212,6 @@ if [ "$sbcl_arch" = "x86" ]; then
     linux | freebsd | netbsd | openbsd | sunos | darwin | win32)
         printf ' :linkage-table' >> $ltf
     esac
-    if [ "$sbcl_os" = "win32" ]; then
-        # of course it doesn't provide dlopen, but there is
-        # roughly-equivalent magic nevertheless.
-        printf ' :os-provides-dlopen' >> $ltf
-    fi
     if [ "$sbcl_os" = "openbsd" ]; then
         rm -f src/runtime/openbsd-sigcontext.h
         sh tools-for-build/openbsd-sigcontext.sh > src/runtime/openbsd-sigcontext.h
