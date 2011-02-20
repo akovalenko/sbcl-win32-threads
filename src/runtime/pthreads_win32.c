@@ -74,8 +74,13 @@ static void freelist_return(struct freelist *fl, void*data)
 	}
 	pthread_mutex_unlock(&fl->lock);
     }
-    if (!cell)
-	cell = malloc(sizeof(*cell));
+    if (!cell) {
+	int i,n=32;
+	cell = malloc(sizeof(*cell)*n);
+	for (i=0; i<(n-1); ++i)
+	    cell[i].next = &cell[i+1];
+        cell[i].next = NULL;
+    }
 
     pthread_mutex_lock(&fl->lock);
     ++fl->count;
@@ -85,7 +90,6 @@ static void freelist_return(struct freelist *fl, void*data)
     fl->full = cell;
     pthread_mutex_unlock(&fl->lock);
 }
-
 
 int pthread_attr_init(pthread_attr_t *attr)
 {
@@ -989,6 +993,8 @@ int cv_wakeup_add(struct pthread_cond_t* cv, struct thread_wakeup* w)
 int cv_wakeup_remove(struct pthread_cond_t* cv, struct thread_wakeup* w)
 {
   int result = 0;
+  if (w->info == WAKEUP_HAPPENED || w->info == WAKEUP_BY_INTERRUPT)
+      goto finish;
   pthread_mutex_lock(&cv->wakeup_lock);
   {
     if (w->info == WAKEUP_HAPPENED || w->info == WAKEUP_BY_INTERRUPT)
@@ -1013,6 +1019,7 @@ int cv_wakeup_remove(struct pthread_cond_t* cv, struct thread_wakeup* w)
   }
  unlock:
   pthread_mutex_unlock(&cv->wakeup_lock);
+ finish:
   return result;
 }
 

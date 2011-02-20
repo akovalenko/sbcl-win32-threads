@@ -216,7 +216,8 @@
       ("Directory" ("Id" "TARGETDIR"
                     "Name" "SourceDir")
        ("Directory" ("Id" "ProgramMenuFolder")
-        ("Component" ("Id" "SBCL_Shortcut")
+        ("Component" ("Id" "SBCL_Shortcut"
+		      "Guid" ,(make-guid))
          ("Shortcut" ("Id" "sbcl.lnk"
                       "Name" ,(application-name)
                       "Target" "[INSTALLDIR]sbcl.exe"
