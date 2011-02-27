@@ -33,7 +33,12 @@
 ;;; compatible systems to return different values for getpagesize().
 ;;; -- JES, 2007-01-06
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (setf *backend-page-bytes* 4096))
+  (setf *backend-page-bytes*
+	(cond
+	  #!+win32 (t 32768)
+	  #!+linux (t 32768)
+	  (t 4096))))
+
 ;;; comment from CMU CL:
 ;;;
 ;;;   in case we ever wanted to do this for Windows NT..

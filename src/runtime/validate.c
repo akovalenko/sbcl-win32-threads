@@ -32,7 +32,7 @@ ensure_space(lispobj *start, unsigned long size)
         fprintf(stderr,
                 "ensure_space: failed to validate %ld bytes at 0x%08lx\n",
                 size,
-                (unsigned long)start);
+                (uword_t)start);
         fprintf(stderr,
                 "(hint: Try \"ulimit -a\"; maybe you should increase memory limits.)\n");
         exit(1);

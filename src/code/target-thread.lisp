@@ -132,13 +132,15 @@ any time."
   `(with-system-mutex (*all-threads-lock*)
      ,@body))
 
-(defun list-all-threads ()
+(defun list-all-threads (&key ephemeral-too)
   #!+sb-doc
   "Return a list of the live threads. Note that the return value is
 potentially stale even before the function returns, as new threads may be
 created and old ones may exit at any time."
-  (with-all-threads-lock
-    (copy-list *all-threads*)))
+  (delete-if
+   (if ephemeral-too 'null 'thread-%ephemeral-p)
+   (with-all-threads-lock
+     (copy-list *all-threads*))))
 
 (declaim (inline current-thread-sap))
 (defun current-thread-sap ()
@@ -167,7 +169,7 @@ created and old ones may exit at any time."
 
 (define-alien-routine "kill_safely"
     integer
-  (os-thread #!-alpha unsigned-long #!+alpha unsigned-int)
+  (os-thread #!-alpha (unsigned #.sb!vm:n-word-bits) #!+alpha unsigned-int)
   (signal int))
 
 #!+sb-thread
@@ -177,13 +179,13 @@ created and old ones may exit at any time."
   ;; that on Linux it's a pid, but it might not be on posix thread
   ;; implementations.
   (define-alien-routine ("create_thread" %create-thread)
-      unsigned-long (lisp-fun-address unsigned-long))
+      (unsigned #.sb!vm:n-word-bits) (lisp-fun-address (unsigned #.sb!vm:n-word-bits)))
 
   (declaim (inline %block-deferrable-signals))
   (define-alien-routine ("block_deferrable_signals" %block-deferrable-signals)
       void
-    (where sb!alien:unsigned-long)
-    (old sb!alien:unsigned-long))
+    (where (unsigned #.sb!vm:n-word-bits))
+    (old   (unsigned #.sb!vm:n-word-bits)))
 
   (defun block-deferrable-signals ()
     (%block-deferrable-signals 0 0))
@@ -346,11 +348,12 @@ HOLDING-MUTEX-P."
   (sb!ext:compare-and-swap (mutex-%owner mutex) nil nil))
 
 (defun get-mutex (mutex &optional (new-owner *current-thread*)
-                                  (waitp t) (timeout nil))
+                  (waitp t) (timeout nil))
   #!+sb-doc
   "Deprecated in favor of GRAB-MUTEX."
   (declare (type mutex mutex) (optimize (speed 3))
            #!-sb-thread (ignore waitp timeout))
+  ;; FIXME: reindent after merging windows-threads
   (unless new-owner
     (setq new-owner *current-thread*))
   (barrier (:read))
@@ -378,12 +381,12 @@ HOLDING-MUTEX-P."
       (when timeout
         (error "Mutex timeouts not supported on this platform."))
       (when (zerop (with-lutex-address (lutex (mutex-lutex mutex))
-                    (if waitp
-                        (with-interrupts (%lutex-lock lutex))
-                        (%lutex-trylock lutex))))
-       (setf (mutex-%owner mutex) new-owner)
-       (barrier (:write))
-       t))
+                     (if waitp
+                         (with-interrupts (%lutex-lock lutex))
+                         (%lutex-trylock lutex))))
+        (setf (mutex-%owner mutex) new-owner)
+        (barrier (:write))
+        t))
     #!-sb-lutex
     ;; This is a direct translation of the Mutex 2 algorithm from
     ;; "Futexes are Tricky" by Ulrich Drepper.
@@ -400,19 +403,19 @@ HOLDING-MUTEX-P."
                                                         +lock-contested+))))
              ;; Wait on the contested lock.
              (loop
-              (multiple-value-bind (to-sec to-usec stop-sec stop-usec deadlinep)
-                  (decode-timeout timeout)
-                (declare (ignore stop-sec stop-usec))
-                (case (with-pinned-objects (mutex)
-                        (futex-wait (mutex-state-address mutex)
-                                    (get-lisp-obj-address +lock-contested+)
-                                    (or to-sec -1)
-                                    (or to-usec 0)))
-                  ((1) (if deadlinep
-                           (signal-deadline)
-                           (return-from get-mutex nil)))
-                  ((2))
-                  (otherwise (return))))))
+               (multiple-value-bind (to-sec to-usec stop-sec stop-usec deadlinep)
+                   (decode-timeout timeout)
+                 (declare (ignore stop-sec stop-usec))
+                 (case (with-pinned-objects (mutex)
+                         (futex-wait (mutex-state-address mutex)
+                                     (get-lisp-obj-address +lock-contested+)
+                                     (or to-sec -1)
+                                     (or to-usec 0)))
+                   ((1) (if deadlinep
+                            (signal-deadline)
+                            (return-from get-mutex nil)))
+                   ((2))
+                   (otherwise (return))))))
            (setf old (sb!ext:compare-and-swap (mutex-state mutex)
                                               +lock-free+
                                               +lock-contested+))
@@ -656,7 +659,6 @@ this call."
   #!-sb-thread (error "Not supported in unithread builds.")
   #!+sb-thread
   (declare (type (and fixnum (integer 1)) n))
-  (/show0 "Entering CONDITION-NOTIFY")
   #!+sb-thread
   (progn
     #!+sb-lutex
@@ -939,7 +941,14 @@ have the foreground next."
 
 ;;;; The beef
 
-(defun make-thread (function &key name)
+;;; gc_safepoint is currently an epilogue of any foreign function
+;;; call; it is specifically designed to be called this way.  We call
+;;; gc_safepoint by defining an alien routine for "do_nothing" (no-op
+;;; C function).
+#!+sb-gc-safepoint
+(sb!alien:define-alien-routine ("do_nothing" gc-safepoint) sb!alien:void)
+
+(defun make-thread (function &key name ephemeral)
   #!+sb-doc
   "Create a new thread of NAME that runs FUNCTION. When the function
 returns the thread exits. The return values of FUNCTION are kept
@@ -947,7 +956,7 @@ around and can be retrieved by JOIN-THREAD."
   #!-sb-thread (declare (ignore function name))
   #!-sb-thread (error "Not supported in unithread builds.")
   #!+sb-thread
-  (let* ((thread (%make-thread :name name))
+  (let* ((thread (%make-thread :name name :%ephemeral-p ephemeral))
          (setup-sem (make-semaphore :name "Thread setup semaphore"))
          (real-function (coerce function 'function))
          (initial-function
@@ -1007,10 +1016,18 @@ around and can be retrieved by JOIN-THREAD."
                                ;; other threads, it's time to enable
                                ;; signals.
                                (sb!unix::unblock-deferrable-signals)
-                               (setf (thread-result thread)
-                                     (cons t
+                               #!+win32
+                               ;; FPU state, on win32 at least, is
+                               ;; per-thread and it isn't
+                               ;; automatically inherited. FIXME on
+                               ;; other platforms?
+                               (float-cold-init-or-reinit)
+                               (let ((r (cons t
                                            (multiple-value-list
-                                            (funcall real-function))))
+                                            (funcall real-function)))))
+                                  #!+win32
+                                  (gc-safepoint)
+                                  (setf (thread-result thread) r))
                                ;; Try to block deferrables. An
                                ;; interrupt may unwind it, but for a
                                ;; normal exit it prevents interrupt
@@ -1066,8 +1083,9 @@ return DEFAULT if given or else signal JOIN-THREAD-ERROR."
   `(with-system-mutex ((thread-interruptions-lock ,thread))
      ,@body))
 
+(defconstant +interrupt-signal+ #!-win32 sb!unix:sigpipe #!+win32 1)
+
 ;;; Called from the signal handler.
-#!-win32
 (defun run-interruption ()
   (let ((interruption (with-interruptions-lock (*current-thread*)
                         (pop (thread-interruptions *current-thread*)))))
@@ -1076,9 +1094,25 @@ return DEFAULT if given or else signal JOIN-THREAD-ERROR."
     ;; OS's point of view the signal we are in the handler for is no
     ;; longer pending, so the signal will not be lost.
     (when (thread-interruptions *current-thread*)
-      (kill-safely (thread-os-thread *current-thread*) sb!unix:sigpipe))
+      #!-(and win32 sb-gc-safepoint)
+      (kill-safely (thread-os-thread *current-thread*)
+                   +interrupt-signal+)
+      #!+(and win32 sb-gc-safepoint)
+      ;; This interrupt mechanism now works on win32, but it may be
+      ;; rather expensive and unpredictable, so we'd rather avoid
+      ;; it. Imagine there is a call to check_pending_interrupts()
+      ;; here and now, ahead of us. The only thing it could do is
+      ;; setting *INTERRUPT-PENDING* to T.  Then why not do it
+      ;; ourselves?
+      ;; 
+      ;; POSIX systems are another story: deferrables, blocked signal
+      ;; mask and GC interact on SBCL-for-UNIX in many subtle
+      ;; ways. Win32, for now, won't call the signal handler when
+      ;; deferrables are unblocked, and GC on Win32 doesn't block
+      ;; deferrables when pending. 
+      (setf *interrupt-pending* t))
     (when interruption
-      (funcall interruption))))
+      (invoke-interruption interruption))))
 
 (defun interrupt-thread (thread function)
   #!+sb-doc
@@ -1092,28 +1126,28 @@ enable interrupts (GET-MUTEX when contended, for instance) so the
 first thing to do is usually a WITH-INTERRUPTS or a
 WITHOUT-INTERRUPTS. Within a thread interrupts are queued, they are
 run in same the order they were sent."
-  #!+win32
-  (declare (ignore thread))
-  #!+win32
-  (with-interrupt-bindings
-    (with-interrupts (funcall function)))
-  #!-win32
-  (let ((os-thread (thread-os-thread thread)))
-    (cond ((not os-thread)
-           (error 'interrupt-thread-error :thread thread))
-          (t
-           (with-interruptions-lock (thread)
-             ;; Append to the end of the interruptions queue. It's
-             ;; O(N), but it does not hurt to slow interruptors down a
-             ;; bit when the queue gets long.
-             (setf (thread-interruptions thread)
-                   (append (thread-interruptions thread)
-                           (list (lambda ()
-                                   (without-interrupts
-                                     (allow-with-interrupts
-                                       (funcall function))))))))
-           (when (minusp (kill-safely os-thread sb!unix:sigpipe))
-             (error 'interrupt-thread-error :thread thread))))))
+  #!+(and (not sb-thread) win32)
+  (progn
+    (declare (ignore thread))
+    (with-interrupt-bindings
+      (with-interrupts (funcall function))))
+  #!-(and (not sb-thread) win32)
+  (without-interrupts
+    (let ((os-thread (thread-os-thread thread)))
+      (cond ((not os-thread)
+             (error 'interrupt-thread-error :thread thread))
+            (t
+             (unless
+                 (with-interruptions-lock (thread)
+                   ;; Append to the end of the interruptions queue. It's
+                   ;; O(N), but it does not hurt to slow interruptors down a
+                   ;; bit when the queue gets long.
+                   (shiftf (thread-interruptions thread)
+                           (append (thread-interruptions thread)
+                                   (list function))))
+               (when (minusp (kill-safely os-thread
+                                          +interrupt-signal+))
+                 (error 'interrupt-thread-error :thread thread))))))))
 
 (defun terminate-thread (thread)
   #!+sb-doc
@@ -1149,38 +1183,47 @@ SB-EXT:QUIT - the usual cleanup forms will be evaluated"
   (defun %symbol-value-in-thread (symbol thread)
     ;; Prevent the thread from dying completely while we look for the TLS
     ;; area...
-    (with-all-threads-lock
-      (loop
-        (if (thread-alive-p thread)
-            (let* ((epoch sb!kernel::*gc-epoch*)
-                   (offset (* sb!vm:n-word-bytes
-                              (sb!vm::symbol-tls-index symbol)))
-                   (tl-val (sap-ref-word (%thread-sap thread) offset)))
-              (cond ((zerop offset)
-                     (return (values nil :no-tls-value)))
-                    ((or (eql tl-val sb!vm:no-tls-value-marker-widetag)
-                         (eql tl-val sb!vm:unbound-marker-widetag))
-                     (return (values nil :unbound-in-thread)))
-                    (t
-                     (multiple-value-bind (obj ok) (make-lisp-obj tl-val nil)
-                       ;; The value we constructed may be invalid if a GC has
-                       ;; occurred. That is harmless, though, since OBJ is
-                       ;; either in a register or on stack, and we are
-                       ;; conservative on both on GENCGC -- so a bogus object
-                       ;; is safe here as long as we don't return it. If we
-                       ;; ever port threads to a non-conservative GC we must
-                       ;; pin the TL-VAL address before constructing OBJ, or
-                       ;; make WITH-ALL-THREADS-LOCK imply WITHOUT-GCING.
-                       ;;
-                       ;; The reason we don't just rely on TL-VAL pinning the
-                       ;; object is that the call to MAKE-LISP-OBJ may cause
-                       ;; bignum allocation, at which point TL-VAL might not
-                       ;; be alive anymore -- hence the epoch check.
-                       (when (eq epoch sb!kernel::*gc-epoch*)
-                         (if ok
-                             (return (values obj :ok))
-                             (return (values obj :invalid-tls-value))))))))
-            (return (values nil :thread-dead))))))
+    (loop
+      (with-all-threads-lock
+	(if (thread-alive-p thread)
+	    (let* (#!-sb-gc-safepoint (epoch sb!kernel::*gc-epoch*)
+		   (offset (* sb!vm:n-word-bytes
+			      (sb!vm::symbol-tls-index symbol)))
+		   #!-sb-gc-safepoint
+		   (tl-val (sap-ref-word (%thread-sap thread) offset))
+		   #!+sb-gc-safepoint
+		   (tl-pin (%make-lisp-obj (sap-ref-word (%thread-sap thread) offset)))
+		   #!+sb-gc-safepoint
+		   (tl-val (get-lisp-obj-address tl-pin)))
+	      (with-pinned-objects (#!+sb-gc-safepoint tl-pin)
+		(cond ((zerop offset)
+		       (return (values nil :no-tls-value)))
+		      ((or (eql tl-val sb!vm:no-tls-value-marker-widetag)
+			   (eql tl-val sb!vm:unbound-marker-widetag))
+		       (return (values nil :unbound-in-thread)))
+		      (t
+		       (multiple-value-bind (obj ok) (make-lisp-obj tl-val nil)
+			 ;; The value we constructed may be invalid if a GC has
+			 ;; occurred. That is harmless, though, since OBJ is
+			 ;; either in a register or on stack, and we are
+			 ;; conservative on both on GENCGC -- so a bogus object
+			 ;; is safe here as long as we don't return it. If we
+			 ;; ever port threads to a non-conservative GC we must
+			 ;; pin the TL-VAL address before constructing OBJ, or
+			 ;; make WITH-ALL-THREADS-LOCK imply WITHOUT-GCING.
+			 ;;
+			 ;; The reason we don't just rely on TL-VAL pinning the
+			 ;; object is that the call to MAKE-LISP-OBJ may cause
+			 ;; bignum allocation, at which point TL-VAL might not
+			 ;; be alive anymore -- hence the epoch check.
+			 #!+sb-gc-safepoint (aver (eql (get-lisp-obj-address tl-pin)
+						       tl-val))
+			 (when #!+sb-gc-safepoint t
+			       #!-sb-gc-safepoint (eq epoch sb!kernel::*gc-epoch*)
+			       (if ok
+				   (return (values obj :ok))
+				   (return (values obj :invalid-tls-value)))))))))
+	    (return (values nil :thread-dead))))))
 
   (defun %set-symbol-value-in-thread (symbol thread value)
     (with-pinned-objects (value)

@@ -118,7 +118,7 @@ char * sb_realpath (char *path)
 
     if ((ret = calloc(MAX_PATH, sizeof(char))) == NULL)
         return NULL;
-    if (GetFullPathName(path, MAX_PATH, ret, cp) == 0) {
+    if (GetFullPathName(path, MAX_PATH, ret, &cp) == 0) {
         errnum = errno;
         free(ret);
         errno = errnum;

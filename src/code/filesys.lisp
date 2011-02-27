@@ -292,10 +292,26 @@
                  (return-from query-file-system nil))))
       (let ((filename (native-namestring pathname :as-file t)))
         (multiple-value-bind (existsp errno ino mode nlink uid gid rdev size
-                                      atime mtime)
+                              atime mtime)
             (sb!unix:unix-stat filename)
           (declare (ignore ino nlink gid rdev size atime
                            #!+win32 uid))
+          #!+win32
+          ;; On win32, stat regards UNC pathnames and device names as
+          ;; nonexisting, so we check once more with windows API.
+          (unless existsp
+            (when (sb!win32:close-handle
+                   (sb!win32:create-file filename 0
+					 (logior sb!win32::file-share-read
+						 sb!win32::file-share-write) nil
+                                         sb!win32:file-open-existing
+                                         0 0))
+              (setf existsp t)
+              (let* ((attributes (sb!win32:get-file-attributes filename))
+                     (valid-attributes
+                      (/= attributes sb!win32:invalid-file-attributes)))
+                (when valid-attributes
+                  (setf mode (if (logbitp 4 attributes) sb!unix:s-ifdir 0))))))
           (if existsp
               (case query-for
                 (:existence (nth-value
@@ -304,8 +320,9 @@
                               filename
                               (pathname-host pathname)
                               (sane-default-pathname-defaults)
-                              :as-directory (eql (logand mode sb!unix:s-ifmt)
-                                                 sb!unix:s-ifdir))))
+                              :as-directory (and mode
+                                                 (eql (logand mode sb!unix:s-ifmt)
+                                                      sb!unix:s-ifdir)))))
                 (:truename (nth-value
                             0
                             (parse-native-namestring
@@ -321,11 +338,12 @@
                              (pathname-host pathname)
                              (sane-default-pathname-defaults)
                              ;; ... but without any trailing slash.
-                             :as-directory (eql (logand  mode sb!unix:s-ifmt)
-                                                sb!unix:s-ifdir))))
+                             :as-directory (and mode
+                                                (eql (logand  mode sb!unix:s-ifmt)
+                                                     sb!unix:s-ifdir)))))
                 (:author
-                 #!-win32
-                 (sb!unix:uid-username uid))
+                   #!-win32
+                   (sb!unix:uid-username uid))
                 (:write-date (+ unix-to-universal-time mtime)))
               (progn
                 ;; SBCL has for many years had a policy that a pathname
@@ -337,7 +355,7 @@
                 ;; containing directory.
                 #!-win32
                 (multiple-value-bind (linkp ignore ino mode nlink uid gid rdev
-                                            size atime mtime)
+                                      size atime mtime)
                     (sb!unix:unix-lstat filename)
                   (declare (ignore ignore ino mode nlink gid rdev size atime))
                   (when (and (or (= errno sb!unix:enoent)
@@ -346,50 +364,50 @@
                     (return-from query-file-system
                       (case query-for
                         (:existence
-                         ;; We do this reparse so as to return a
-                         ;; normalized pathname.
-                         (parse-native-namestring
-                          filename (pathname-host pathname)))
-                        (:truename
-                         ;; So here's a trick: since lstat succeded,
-                         ;; FILENAME exists, so its directory exists and
-                         ;; only the non-directory part is loopy.  So
-                         ;; let's resolve FILENAME's directory part with
-                         ;; realpath(3), in order to get a canonical
-                         ;; absolute name for the directory, and then
-                         ;; return a pathname having PATHNAME's name,
-                         ;; type, and version, but the rest from the
-                         ;; truename of the directory.  Since we turned
-                         ;; PATHNAME into FILENAME "as a file", FILENAME
-                         ;; does not end in a slash, and so we get the
-                         ;; directory part of FILENAME by reparsing
-                         ;; FILENAME and masking off its name, type, and
-                         ;; version bits.  But note not to call ourselves
-                         ;; recursively, because we don't want to
-                         ;; re-merge against *DEFAULT-PATHNAME-DEFAULTS*,
-                         ;; since PATHNAME may be a relative pathname.
-                         (merge-pathnames
-                          (nth-value
-                           0
+                           ;; We do this reparse so as to return a
+                           ;; normalized pathname.
                            (parse-native-namestring
-                            (multiple-value-bind (realpath errno)
-                                (sb!unix:unix-realpath
-                                 (native-namestring
-                                  (make-pathname
-                                   :name :unspecific
-                                   :type :unspecific
-                                   :version :unspecific
-                                   :defaults (parse-native-namestring
-                                              filename
-                                              (pathname-host pathname)
-                                              (sane-default-pathname-defaults)))))
-                              (if realpath
-                                  realpath
-                                  (fail "couldn't resolve ~A" filename errno)))
-                            (pathname-host pathname)
-                            (sane-default-pathname-defaults)
-                            :as-directory t))
-                          pathname))
+                            filename (pathname-host pathname)))
+                        (:truename
+                           ;; So here's a trick: since lstat succeded,
+                           ;; FILENAME exists, so its directory exists and
+                           ;; only the non-directory part is loopy.  So
+                           ;; let's resolve FILENAME's directory part with
+                           ;; realpath(3), in order to get a canonical
+                           ;; absolute name for the directory, and then
+                           ;; return a pathname having PATHNAME's name,
+                           ;; type, and version, but the rest from the
+                           ;; truename of the directory.  Since we turned
+                           ;; PATHNAME into FILENAME "as a file", FILENAME
+                           ;; does not end in a slash, and so we get the
+                           ;; directory part of FILENAME by reparsing
+                           ;; FILENAME and masking off its name, type, and
+                           ;; version bits.  But note not to call ourselves
+                           ;; recursively, because we don't want to
+                           ;; re-merge against *DEFAULT-PATHNAME-DEFAULTS*,
+                           ;; since PATHNAME may be a relative pathname.
+                           (merge-pathnames
+                            (nth-value
+                             0
+                             (parse-native-namestring
+                              (multiple-value-bind (realpath errno)
+                                  (sb!unix:unix-realpath
+                                   (native-namestring
+                                    (make-pathname
+                                     :name :unspecific
+                                     :type :unspecific
+                                     :version :unspecific
+                                     :defaults (parse-native-namestring
+                                                filename
+                                                (pathname-host pathname)
+                                                (sane-default-pathname-defaults)))))
+                                (if realpath
+                                    realpath
+                                    (fail "couldn't resolve ~A" filename errno)))
+                              (pathname-host pathname)
+                              (sane-default-pathname-defaults)
+                              :as-directory t))
+                            pathname))
                         (:author (sb!unix:uid-username uid))
                         (:write-date (+ unix-to-universal-time mtime))))))
                 ;; If we're still here, the file doesn't exist; error.

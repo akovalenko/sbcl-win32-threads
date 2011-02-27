@@ -231,6 +231,8 @@ run in any thread.")
                        ;; turn is a type-error.
                        (when (plusp run-time)
                          (incf *gc-run-time* run-time))))
+                   #!+(and win32 sb-thread)
+                   (setf *stop-for-gc-pending* nil)
                    (setf *gc-pending* nil
                          new-usage (dynamic-usage))
                    #!+sb-thread
@@ -351,7 +353,7 @@ collection is initiated. This can be set with SETF."
             (number-of-gcs int)
             (number-of-gcs-before-promotion int)
             (cum-sum-bytes-allocated unsigned-long)
-            (minimum-age-before-gc double)
+            (minimum-age-before-gc unsigned-long)
             ;; `struct lutex *' or `void *', depending.
             (lutexes (* char))))
 
@@ -431,6 +433,6 @@ Experimental: interface subject to change."
     (error "~S is a GENCGC only function and unavailable in this build."
            'generation-average-age)
     #!+gencgc
-    (alien-funcall (extern-alien "generation_average_age"
-                                 (function double generation-index-t))
-                   generation))
+    (/ (alien-funcall (extern-alien "generation_average_age"
+                                  (function (unsigned 32) generation-index-t))
+                      generation) (* 1024 256 1.0d0)))

@@ -5,6 +5,13 @@
 
 (eval-when (:load-toplevel :compile-toplevel :execute)
 
+
+;;; Winsock is different w.r.t errno
+(defun socket-errno ()
+  "Get socket error code, usually from errno, but see #+win32."
+  #+win32 (sb-win32::get-last-error)
+  #-win32 (sb-unix::get-errno))
+
 (defclass socket ()
   ((file-descriptor :initarg :descriptor
                     :reader socket-file-descriptor)
@@ -19,6 +26,8 @@ protocol. Other values are used as-is.")
    (type  :initarg :type
           :reader socket-type
           :documentation "Type of the socket: :STREAM or :DATAGRAM.")
+   #+win32
+   (non-blocking-p :type (member t nil) :initform nil)
    (stream))
   (:documentation "Common base class of all sockets, not meant to be
 directly instantiated.")))
@@ -109,7 +118,7 @@ values"))
                                (size-of-sockaddr socket))))
       (cond
         ((and (= fd -1)
-              (member (sb-unix::get-errno)
+              (member (socket-errno)
                       (list sockint::EAGAIN sockint::EINTR)))
          nil)
         ((= fd -1) (socket-error "accept"))
@@ -218,7 +227,7 @@ buffer was too small."))
                                         (sb-alien:addr sa-len))))
                 (cond
                   ((and (= len -1)
-                        (member (sb-unix::get-errno)
+                        (member (socket-errno)
                                 (list sockint::EAGAIN sockint::EINTR)))
                    nil)
                   ((= len -1) (socket-error "recvfrom"))
@@ -295,7 +304,7 @@ send(2) will be called instead. Returns the number of octets written."))
                                    flags)))))
     (cond
       ((and (= len -1)
-            (member (sb-unix::get-errno)
+            (member (socket-errno)
                     (list sockint::EAGAIN sockint::EINTR)))
        nil)
       ((= len -1)
@@ -436,7 +445,9 @@ and get an output stream in response\)."
                        (socket-error-syscall c)
                        (or (socket-error-symbol c) (socket-error-errno c))
                        #+cmu (sb-unix:get-unix-error-msg num)
-                       #+sbcl (sb-int:strerror num)))))
+                       #+sbcl
+                       #+win32 (sb-win32::get-last-error-message num)
+                       #-win32 (sb-int:strerror num)))))
   (:documentation "Common base class of socket related conditions."))
 
 ;;; watch out for slightly hacky symbol punning: we use both the value
@@ -488,7 +499,7 @@ and get an output stream in response\)."
   ;; FIXME: Our Texinfo documentation extracter need at least his to spit
   ;; out the signature. Real documentation would be better...
   ""
-  (let* ((errno  (sb-unix::get-errno))
+  (let* ((errno (socket-errno))
          (condition (condition-for-errno errno)))
     (error condition :errno errno  :syscall where)))
 

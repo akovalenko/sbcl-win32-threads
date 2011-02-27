@@ -26,9 +26,13 @@
  */
 
 #include <stdio.h>
-#include <signal.h>
 #include <string.h>
 #include "sbcl.h"
+#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
+#include "pthreads_win32.h"
+#else
+#include <signal.h>
+#endif
 #include "runtime.h"
 #include "os.h"
 #include "interr.h"
@@ -98,7 +102,7 @@ unsigned long bytes_consed_between_gcs = 12*1024*1024;
  */
 static
 lispobj
-gc_general_copy_object(lispobj object, long nwords, int page_type_flag)
+gc_general_copy_object(lispobj object, sword_t nwords, int page_type_flag)
 {
     int tag;
     lispobj *new;
@@ -120,13 +124,13 @@ gc_general_copy_object(lispobj object, long nwords, int page_type_flag)
 
 /* to copy a boxed object */
 lispobj
-copy_object(lispobj object, long nwords)
+copy_object(lispobj object, sword_t nwords)
 {
     return gc_general_copy_object(object, nwords, BOXED_PAGE_FLAG);
 }
 
 lispobj
-copy_code_object(lispobj object, long nwords)
+copy_code_object(lispobj object, sword_t nwords)
 {
     return gc_general_copy_object(object, nwords, CODE_PAGE_FLAG);
 }
@@ -256,8 +260,8 @@ trans_code(struct code *code)
 {
     struct code *new_code;
     lispobj first, l_code, l_new_code;
-    long nheader_words, ncode_words, nwords;
-    unsigned long displacement;
+    uword_t nheader_words, ncode_words, nwords;
+    uword_t displacement;
     lispobj fheaderl, *prev_pointer;
 
     /* if object has already been transported, just return pointer */
@@ -437,7 +441,7 @@ trans_return_pc_header(lispobj object)
     offset = HeaderValue(return_pc->header) * N_WORD_BYTES;
 
     /* Transport the whole code object */
-    code = (struct code *) ((unsigned long) return_pc - offset);
+    code = (struct code *) ((uword_t) return_pc - offset);
     ncode = trans_code(code);
 
     return ((lispobj) LOW_WORD(ncode) + offset) | OTHER_POINTER_LOWTAG;
@@ -484,7 +488,7 @@ static lispobj
 trans_fun_header(lispobj object)
 {
     struct simple_fun *fheader;
-    unsigned long offset;
+    uword_t offset;
     struct code *code, *ncode;
 
     fheader = (struct simple_fun *) native_pointer(object);
@@ -492,7 +496,7 @@ trans_fun_header(lispobj object)
     offset = HeaderValue(fheader->header) * N_WORD_BYTES;
 
     /* Transport the whole code object */
-    code = (struct code *) ((unsigned long) fheader - offset);
+    code = (struct code *) ((uword_t) fheader - offset);
     ncode = trans_code(code);
 
     return ((lispobj) LOW_WORD(ncode) + offset) | FUN_POINTER_LOWTAG;
@@ -1714,7 +1718,7 @@ scav_hash_table_entries (struct hash_table *hash_table)
 long
 scav_vector (lispobj *where, lispobj object)
 {
-    unsigned long kv_length;
+    uword_t kv_length;
     lispobj *kv_vector;
     struct hash_table *hash_table;
 
@@ -1736,11 +1740,11 @@ scav_vector (lispobj *where, lispobj object)
          * sets the header in %%PUTHASH.
          */
         fprintf(stderr,
-                "Warning: no pointer at %lx in hash table: this indicates "
+                "Warning: no pointer at %p in hash table: this indicates "
                 "non-fatal corruption caused by concurrent access to a "
                 "hash-table from multiple threads. Any accesses to "
                 "hash-tables shared between threads should be protected "
-                "by locks.\n", (unsigned long)&where[2]);
+                "by locks.\n", (uword_t)&where[2]);
         // We've scavenged three words.
         return 3;
     }
@@ -2403,6 +2407,8 @@ gc_search_space(lispobj *start, size_t words, lispobj *pointer)
     return (NULL);
 }
 
+#include "dynbind.h"
+
 boolean
 maybe_gc(os_context_t *context)
 {
@@ -2432,7 +2438,7 @@ maybe_gc(os_context_t *context)
      * A kludgy alternative is to propagate the sigmask change to the
      * outer context.
      */
-#ifndef LISP_FEATURE_WIN32
+#if !defined(LISP_FEATURE_WIN32) || defined(LISP_FEATURE_SB_THREAD)
     check_gc_signals_unblocked_or_lose(os_context_sigmask_addr(context));
     unblock_gc_signals(0, 0);
 #endif
@@ -2453,7 +2459,7 @@ maybe_gc(os_context_t *context)
          * here. */
         ((SymbolValue(INTERRUPTS_ENABLED,thread) != NIL) ||
          (SymbolValue(ALLOW_WITH_INTERRUPTS,thread) != NIL))) {
-#ifndef LISP_FEATURE_WIN32
+#if !defined(LISP_FEATURE_WIN32) || defined(LISP_FEATURE_SB_THREAD)
         sigset_t *context_sigmask = os_context_sigmask_addr(context);
         if (!deferrables_blocked_p(context_sigmask)) {
             thread_sigmask(SIG_SETMASK, context_sigmask, 0);
@@ -2461,7 +2467,7 @@ maybe_gc(os_context_t *context)
 #endif
             FSHOW((stderr, "/maybe_gc: calling POST_GC\n"));
             funcall0(StaticSymbolFunction(POST_GC));
-#ifndef LISP_FEATURE_WIN32
+#if !defined(LISP_FEATURE_WIN32) || defined(LISP_FEATURE_SB_THREAD)
         } else {
             FSHOW((stderr, "/maybe_gc: punting on POST_GC due to blockage\n"));
         }
@@ -2526,23 +2532,23 @@ scrub_control_stack(void)
 #ifdef LISP_FEATURE_STACK_GROWS_DOWNWARD_NOT_UPWARD
     do {
         *sp = 0;
-    } while (((unsigned long)sp--) & (BYTES_ZERO_BEFORE_END - 1));
+    } while (((uword_t)sp--) & (BYTES_ZERO_BEFORE_END - 1));
     if ((os_vm_address_t)sp < (hard_guard_page_address + os_vm_page_size))
         return;
     do {
         if (*sp)
             goto scrub;
-    } while (((unsigned long)sp--) & (BYTES_ZERO_BEFORE_END - 1));
+    } while (((uword_t)sp--) & (BYTES_ZERO_BEFORE_END - 1));
 #else
     do {
         *sp = 0;
-    } while (((unsigned long)++sp) & (BYTES_ZERO_BEFORE_END - 1));
+    } while (((uword_t)++sp) & (BYTES_ZERO_BEFORE_END - 1));
     if ((os_vm_address_t)sp >= hard_guard_page_address)
         return;
     do {
         if (*sp)
             goto scrub;
-    } while (((unsigned long)++sp) & (BYTES_ZERO_BEFORE_END - 1));
+    } while (((uword_t)++sp) & (BYTES_ZERO_BEFORE_END - 1));
 #endif
 }
 

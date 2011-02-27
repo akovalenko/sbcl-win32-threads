@@ -27,9 +27,13 @@
   (xmm-args 0)
   (stack-frame-size 0))
 
+(defconstant max-int-args #!+win32 4 #!-win32 6)
+(defconstant max-xmm-args #!+win32 4 #!-win32 8)
+
 (defun int-arg (state prim-type reg-sc stack-sc)
-  (let ((reg-args (arg-state-register-args state)))
-    (cond ((< reg-args 6)
+  (let ((reg-args (max (arg-state-register-args state)
+		       #!+win32 (arg-state-xmm-args state))))
+    (cond ((< reg-args max-int-args)
            (setf (arg-state-register-args state) (1+ reg-args))
            (my-make-wired-tn prim-type reg-sc
                              (nth reg-args *c-call-register-arg-offsets*)))
@@ -48,8 +52,9 @@
   (int-arg state 'system-area-pointer 'sap-reg 'sap-stack))
 
 (defun float-arg (state prim-type reg-sc stack-sc)
-  (let ((xmm-args (arg-state-xmm-args state)))
-    (cond ((< xmm-args 8)
+  (let ((xmm-args (max (arg-state-xmm-args state)
+		        #!+win32 (arg-state-register-args state))))
+    (cond ((< xmm-args max-xmm-args)
            (setf (arg-state-xmm-args state) (1+ xmm-args))
            (my-make-wired-tn prim-type reg-sc
                              (nth xmm-args *float-regs*)))
@@ -257,7 +262,22 @@
          (args :more t))
   (:results (results :more t))
   (:temporary (:sc unsigned-reg :offset rax-offset :to :result) rax)
-  (:ignore results)
+  ;; for safepoint builds: non-volatiles
+  #!+sb-gc-safepoint
+  (:temporary (:sc unsigned-reg :offset rdi-offset) rdi)
+  #!+sb-gc-safepoint
+  (:temporary (:sc unsigned-reg :offset rsi-offset) rsi)
+  #!+sb-gc-safepoint
+  (:temporary (:sc unsigned-reg :offset r13-offset) r13)
+  #!+sb-gc-safepoint
+  (:temporary (:sc unsigned-reg :offset r14-offset) r14)
+  #!+sb-gc-safepoint
+  (:temporary (:sc unsigned-reg :offset r15-offset) r15)
+  (:ignore results
+	   ;; #!+sb-gc-safepoint rbx
+	   #!+(and sb-gc-safepoint win32) rdi
+	   #!+(and sb-gc-safepoint win32) rsi
+	   #!+sb-gc-safepoint r15)
   (:vop-var vop)
   (:save-p t)
   (:generator 0
@@ -265,12 +285,43 @@
     (inst cld)
     ;; ABI: AL contains amount of arguments passed in XMM registers
     ;; for vararg calls.
+    #!+sb-gc-safepoint
+    (progn
+      ;; Current PC - don't rely on function to keep it in a form that
+      ;; GC understands
+      (let ((label (gen-label)))
+	(inst lea r14 (make-fixup nil :code-object label))
+	(emit-label label))
+      ;; Stack top for GC conservation
+      (inst lea r13 (make-ea :qword :base rsp-tn :disp #x-20))
+      ;; Save PC in thread struct
+      (storew r14 thread-base-tn thread-pc-around-foreign-call-slot)
+      ;; Save stack top at the assigned place (which may trap,
+      ;; providing asymmetric synchronization)
+      (loadw r14 thread-base-tn thread-csp-around-foreign-call-slot)
+      (storew r13 r14))
     (move-immediate rax
                     (loop for tn-ref = args then (tn-ref-across tn-ref)
                        while tn-ref
                        count (eq (sb-name (sc-sb (tn-sc (tn-ref-tn tn-ref))))
                                  'float-registers)))
+
+    ;; MS_ABI: shadow zone
+    #!+win32 (inst sub rsp-tn #x20)
     (inst call function)
+    #!+win32 (inst add rsp-tn #x20)
+
+    #!+sb-gc-safepoint
+    (progn
+      ;; Reload stack-top-place, as it could have changed
+      (loadw r14 thread-base-tn thread-csp-around-foreign-call-slot)
+      (inst xor r13 r13)
+      ;; Zero the stack storage place. May trap and wait for GC end.
+      (storew r13 r14)
+      ;; Zero PC storage place. NB. CSP-then-PC: same sequence on
+      ;; entry/exit, is actually corrent.
+      (storew r13 thread-base-tn thread-pc-around-foreign-call-slot))
+    
     ;; To give the debugger a clue. XX not really internal-error?
     (note-this-location vop :internal-error)))
 
@@ -370,7 +421,9 @@
   `(deref (sap-alien (sap+ ,sp ,offset) (* ,type))))
 
 #-sb-xc-host
-(defun alien-callback-assembler-wrapper (index result-type argument-types)
+(defun alien-callback-assembler-wrapper (index result-type argument-types
+					 &optional call-type-info)
+  (declare (ignorable call-type-info))
   (labels ((make-tn-maker (sc-name)
              (lambda (offset)
                (make-random-tn :kind :normal

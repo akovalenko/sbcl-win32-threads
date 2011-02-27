@@ -71,6 +71,22 @@
 #define SIZE(name)
 #endif
 
+#if defined(LISP_FEATURE_WIN32)
+	
+#define	TEB_STATIC_TLS_SLOTS_OFFSET	0xE10
+#define TEB_SBCL_THREAD_BASE_OFFSET	(TEB_STATIC_TLS_SLOTS_OFFSET+(63*4))
+#define	SBCL_THREAD_BASE_EA %fs:TEB_SBCL_THREAD_BASE_OFFSET
+	
+#define	LoadTlSymbolValueAddress(symbol,reg) ; 		\
+	movl	SBCL_THREAD_BASE_EA, reg ; 		\
+	addl	(symbol+SYMBOL_TLS_INDEX_OFFSET), reg ; \
+	
+#define	LoadCurrentThreadSlot(offset,reg);		\
+	movl	SBCL_THREAD_BASE_EA, reg ;		\
+	movl	offset(reg), reg ;			\
+	
+#endif	
+	
 /*
  * x86/darwin (as of MacOS X 10.4.5) doesn't reliably file signal
  * handlers (SIGTRAP or Mach exception handlers) for 0xCC, wo we have
@@ -86,7 +102,19 @@
 #define END() .end
 #define TRAP int3
 #endif
-
+	
+#if !defined(LISP_FEATURE_SB_AUTO_FPU_SWITCH)
+#define CLEAR_FPU_STACK \
+	;fstp %st(0);fstp %st(0);fstp %st(0);fstp %st(0); \
+	fstp %st(0);fstp %st(0);fstp %st(0);fstp %st(0);
+	
+#define FILL_FPU_STACK	\
+	;fldz;fldz;fldz;fldz;fldz;fldz;fldz;fldz;
+#else
+#define CLEAR_FPU_STACK
+#define FILL_FPU_STACK	
+#endif
+	
 	.text
 	.globl	GNAME(all_threads)
 
@@ -109,65 +137,158 @@
 	.globl GNAME(call_into_c)
 	TYPE(GNAME(call_into_c))
 GNAME(call_into_c):
+	cld
+/* Setup the NPX for C */
+	CLEAR_FPU_STACK
+#if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
+	
+/* On :sb-gc-safepoint platforms, vop call-out is defined to clobber
+   everything, so all live Lisp TNs are forced to stack. The purpose of
+   that is to provide context information for conservative GC
+   cooperatively, without forcing it to do GetThreadContext()
+   or something like that. With clobber-everything VOP CALL-OUT,
+   the only value needed by cooperative GC would be the top of stack
+   (for the moment of entering foreign function). Almost.
+
+   Because after function returns, there has to be an enclosing call
+   to gc_leave_foreign_call() or something like that; before that call
+   another thread's GC may be in progress because it thinks that this
+   thread is in foreign code and won't touch the Lisp heap. Thus we 
+   have to make the return address "unmovable" by conservative GC
+   as well.
+   
+   The problem as described above applies to "inline" version of VOP
+   CALL-OUT body, but it has an equivalent for non-inline version
+   (the one that you see here). In order to present the stack of
+   arguments as our foreign function expects them, call_into_c has to pop
+   Lisp return address into a register first; this register
+   has to preserved by GENCGC separately: our return address is not in
+   the stack anymore.
+	
+   Thus gc_enter_foreign_call takes two args: top of stack and return
+   PC to preserve. */
+
+	pushl 	%esp
+	movl 	%ecx,%esi
+	movl	4(%esp),%ebx
+	call	GNAME(gc_enter_foreign_call)
+	leal	8(%esp),%esp
+	
+	/* foreign call, preserving ESI, EDI, and EBX */
+	call	*%esi
+	
+	/* save and restore result (up to 64 bits); now that we
+	declared VOP call-out to trash ESI and EDI, we can use them
+	for this purpose. */
+	
+	movl	%eax, %esi
+	movl	%edx, %edi
+
+	/* gc_safepoint will clear out CSP field, unmarking this
+	thread as phase1-safe. */
+	
+	call	GNAME(gc_leave_foreign_call)
+
+	movl	%esi, %eax
+	movl	%edi, %edx
+
+	FILL_FPU_STACK
+	jmp	*%ebx
+
+#else	
 /* Save the return Lisp address in ebx. */
 	popl	%ebx
-
-/* Setup the NPX for C */
-	fstp	%st(0)
-	fstp	%st(0)
-	fstp	%st(0)
-	fstp	%st(0)
-	fstp	%st(0)
-	fstp	%st(0)
-	fstp	%st(0)
-	fstp	%st(0)
-
-	call	*%eax		  # normal callout using Lisp stack
-	movl	%eax,%ecx	  # remember integer return value
-
-/* Check for a return FP value. */
-	fxam
-	fnstsw	%ax
-	andl	$0x4500,%eax
-	cmpl	$0x4100,%eax
-	jne	Lfp_rtn_value
-
-/* The return value is in eax, or eax,edx? */
+	call	*%ecx		  # normal callout using Lisp stack
+	
 /* Set up the NPX stack for Lisp. */
-	fldz			# Ensure no regs are empty.
-	fldz
-	fldz
-	fldz
-	fldz
-	fldz
-	fldz
-	fldz
-
-/* Restore the return value. */
-	movl	%ecx,%eax	# maybe return value
-
+	FILL_FPU_STACK
 /* Return. */
 	jmp	*%ebx
-
-Lfp_rtn_value:
-/* The return result is in st(0). */
-/* Set up the NPX stack for Lisp, placing the result in st(0). */
-	fldz			# Ensure no regs are empty.
-	fldz
-	fldz
-	fldz
-	fldz
-	fldz
-	fldz
-	fxch	%st(7)		# Move the result back to st(0).
-
-/* We don't need to restore eax, because the result is in st(0). */
-
-/* Return. FIXME: It would be nice to restructure this to use RET. */	
-	jmp	*%ebx
-
+	
+#endif	
 	SIZE(GNAME(call_into_c))
+
+	
+/* call_into_c_fp_result --
+	
+   Variation of call_into_c for calling functions with floating-point
+   result (in %st(0), a.k.a FR0-TN).
+	
+   Why have both? call_into_c used to have a smart code managing to
+   check FP result presence by asking FPU directly.  The reason for
+   replacing it with a separate wrapper was, frankly, :SB-AUTO-FPU-SWITCH
+   support (which is a questionable feature by itself, of course).
+	
+   Current implementation of :SB-AUTO-FPU-SWITCH (win32-only)
+   reacts on "floating stack check" exception, switching transparently between
+   "Lisp mode" (no registers empty + some control word settings) and "C mode"
+   (all registers empty on call-out + some other control word settings).
 
+   It works for normal C code, but, as of auto-detection of return
+   type, it would require to distinguish between "1 register used" and
+   "all registers used", which is more complicated than empty/non-empty check
+   that used to be in call_into_c. And it would completely defeat the purpose
+   of :SB-AUTO-FPU-SWITCH, as the point is not to save time on 7
+   fldz's here and there, but to be able to run with TS bit in CR0 for
+   some measurable intervals. Modern OSes switch FPU context lazily,
+   and each event of "using FPU after not using it for a long time"
+   costs more like a syscall (with user/kernel/user mode switching) than
+   like a seven non-privileged assembler instructions. */
+	.text
+	.align	align_16byte,0x90
+	.globl GNAME(call_into_c_fp_result)
+	TYPE(GNAME(call_into_c_fp_result))
+GNAME(call_into_c_fp_result):
+	cld
+/* Setup the NPX for C */
+	CLEAR_FPU_STACK
+#if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
+	pushl 	%esp
+	movl 	%ecx,%esi
+	movl	4(%esp),%ebx
+	call	GNAME(gc_enter_foreign_call)
+	leal	8(%esp),%esp
+	
+	call	*%esi /* foreign call, preserving ESI, EDI, and EBX */
+	
+	leal	-16(%esp),%esp
+	fstpt	(%esp)
+	
+	call	GNAME(gc_leave_foreign_call) /* it may interrupt (though not GC itself) */
+	
+	fldz;fldz;fldz;fldz;fldz;fldz;fldz; /* 7 elements */
+	fldt	(%esp)			    /* and topmost one */
+#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
+	movl	SBCL_THREAD_BASE_EA, %esi
+	fldcw	THREAD_SAVED_LISP_FPU_MODE_OFFSET(%esi)
+	or	$4, THREAD_IN_LISP_FPU_MODE_OFFSET(%esi)
+#endif	
+	jmp	*%ebx	/* without stack adjustment (esp overwrite allowed) */
+#else	
+/* Save the return Lisp address in ebx. */
+	popl	%ebx
+	call	*%eax		  # normal callout using Lisp stack
+	fldz;fldz;fldz;fldz;fldz;fldz;fldz;
+	fxch	%st(7)
+#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
+	movl	SBCL_THREAD_BASE_EA,%eax
+	fldcw	THREAD_SAVED_LISP_FPU_MODE_OFFSET(%eax)
+	or	$4, THREAD_IN_LISP_FPU_MODE_OFFSET(%eax)
+#endif	
+/* Return. */
+	jmp	*%ebx
+#endif /* LISP_FEATURE_SB_GC_SAFEPOINT */	
+	SIZE(GNAME(call_into_c_fp_result))
+	
+
+	.text	
+	.align	align_16byte,0x90
+	.globl GNAME(do_nothing)
+	TYPE(GNAME(do_nothing))
+GNAME(do_nothing):	
+	ret
+	SIZE(GNAME(do_nothing))
+	
 
 	.text	
 	.globl GNAME(call_into_lisp_first_time)
@@ -181,14 +302,11 @@ Lfp_rtn_value:
 GNAME(call_into_lisp_first_time):
 	pushl	%ebp		# Save old frame pointer.
 	movl	%esp,%ebp	# Establish new frame.
-#ifndef LISP_FEATURE_WIN32
 	movl    GNAME(all_threads),%eax
 	/* pthread machinery takes care of this for other threads */
+#ifndef LISP_FEATURE_WIN32	
 	movl    THREAD_CONTROL_STACK_END_OFFSET(%eax) ,%esp
-#else
-/* Win32 -really- doesn't like you switching stacks out from under it. */
-	movl	GNAME(all_threads),%eax
-#endif
+#endif	
 	jmp     Lstack
 
 	.text	
@@ -203,26 +321,6 @@ GNAME(call_into_lisp):
 	pushl	%ebp		# Save old frame pointer.
 	movl	%esp,%ebp	# Establish new frame.
 Lstack:
-/* Save the NPX state */
-	fwait			# Catch any pending NPX exceptions.
-	subl	$108,%esp	# Make room for the NPX state.
-	fnsave	(%esp)		# save and reset NPX
-
-	movl	(%esp),%eax	# Load NPX control word.
-	andl	$0xfffff2ff,%eax	# Set rounding mode to nearest.
-	orl	$0x00000200,%eax	# Set precision to 64 bits.  (53-bit mantissa)
-	pushl	%eax
-	fldcw	(%esp)		# Recover modes.
-	popl	%eax
-
-	fldz			# Ensure no FP regs are empty.
-	fldz
-	fldz
-	fldz
-	fldz
-	fldz
-	fldz
-	fldz
 	
 /* Save C regs: ebx esi edi. */
 	pushl	%ebx
@@ -241,7 +339,7 @@ Lstack:
 	movl	%esp,%ebx	# remember current stack
 	pushl	%ebx		# Save entry stack on (maybe) new stack.
 
-	/* Establish Lisp args. */
+/* Establish Lisp args. */
 	movl	 8(%ebp),%eax	# lexenv?
 	movl	12(%ebp),%ebx	# address of arg vec
 	movl	16(%ebp),%ecx	# num args
@@ -258,39 +356,32 @@ Lstack:
 Ldone:	
 	/* Registers eax, ecx, edx, edi, and esi are now live. */
 
-#ifdef LISP_FEATURE_WIN32
-	/* Establish an SEH frame. */
-#ifdef LISP_FEATURE_SB_THREAD
-	/* FIXME: need to save BSP here. */
-#error "need to save BSP here, but don't know how yet."
-#else
-	pushl	BINDING_STACK_POINTER + SYMBOL_VALUE_OFFSET
-#endif
-	pushl	$GNAME(exception_handler_wrapper)
-	pushl	%fs:0
-	movl	%esp, %fs:0
-#endif
-
 	/* Alloc new frame. */
 	push	%ebp            # Dummy for return address
 	push	%ebp		# fp in save location S1
 	mov	%esp,%ebp	# The current sp marks start of new frame.
 	sub	$4,%esp		# Ensure 3 slots are allocated, two above.
 
-	call	*CLOSURE_FUN_OFFSET(%eax)
+	/* For win32, SEH used to be installed here.  As we don't care
+	about unwinds in win32 SEH, it's now unnecessary: one
+	wos_install_interrupt_handlers() per thread (or fiber) is
+	enough.
+
+	Additionally, uwp_seh_handler_gate -- the Lisp-side SEH
+	handling Lisp nlxes -- now jumps to exception_handler_wrapper
+	for non-EH_UNWINDING|EH_EXIT_UNWIND case; it's just an
+        optimization, so our handler can run without entire record
+	list having been traversed. */
 	
+	call	*CLOSURE_FUN_OFFSET(%eax)
+.globl GNAME(call_into_lisp_return_site)
+GNAME(call_into_lisp_return_site):
+	jnc	LsingleValue
 	/* If the function returned multiple values, it will return to
 	   this point.  Lose them */
-	jnc	LsingleValue
 	mov	%ebx, %esp
 LsingleValue:
-	/* A singled value function returns here */
-
-#ifdef LISP_FEATURE_WIN32
-	/* Remove our SEH frame. */
-	popl	%fs:0
-	add	$8, %esp
-#endif
+/* A singled value function returns here */
 
 /* Restore the stack, in case there was a stack change. */
 	popl	%esp		# c-sp
@@ -299,11 +390,8 @@ LsingleValue:
 	popl	%edi
 	popl	%esi
 	popl	%ebx
-
-/* Restore the NPX state. */
-	frstor  (%esp)
-	addl	$108, %esp
 	
+/* Restore the NPX state. */
 	popl	%ebp		# c-sp
 	movl	%edx,%eax	# c-val
 	ret
@@ -328,6 +416,7 @@ GNAME(fpu_restore):
 	frstor	(%eax)		# Restore the NPX state.
 	ret
 	SIZE(GNAME(fpu_restore))
+	
 
 /*
  * the undefined-function trampoline
@@ -415,7 +504,14 @@ GNAME(do_pending_interrupt):
 	.byte 	trap_PendingInterrupt
 	ret
 	SIZE(GNAME(do_pending_interrupt))
-
+
+	
+	.globl	GNAME(reenter_into_lisp)
+	TYPE(GNAME(reenter_into_lisp))
+	.align	align_16byte,0x90
+
+
+	
 /* Allocate bytes and return the start of the allocated space
  * in the specified destination register.
  *
@@ -443,6 +539,7 @@ GNAME(do_pending_interrupt):
 #else
 #define ALLOC(size)                                             \
         pushl   size;              /* Argument to alloc      */ \
+        cld     ; 						\
         call    GNAME(alloc);                                   \
         addl    $4,%esp;           /* Pop argument           */
 #endif
@@ -539,10 +636,19 @@ DEFINE_ALLOC_TO_REG(alloc_16_to_edi,%edi,$16)
 #define START_REGION GNAME(boxed_region)
 #endif
 
-#define ALLOC_OVERFLOW(size)                                    \
-        /* Calculate the size for the allocation. */            \
-        subl    START_REGION,size;                              \
-        ALLOC(size)
+/* FIXME Win32 */
+#if defined(LISP_FEATURE_SB_THREAD) && defined(LISP_FEATURE_WIN32)
+#define ALLOC_OVERFLOW(size,scratch)				\
+	/* Calculate the size for the allocation. */		\
+	movl %fs:0xE10+(4*63), scratch;			\
+	subl THREAD_ALLOC_REGION_OFFSET(scratch),size;	\
+	ALLOC(size)
+#else	
+#define ALLOC_OVERFLOW(size,scratch)			\
+	  /* Calculate the size for the allocation. */	\
+	  subl    START_REGION,size;			\
+	  ALLOC(size)
+#endif
 
 /* This routine handles an overflow with eax=crfp+size. So the
    size=eax-crfp. */
@@ -552,7 +658,7 @@ DEFINE_ALLOC_TO_REG(alloc_16_to_edi,%edi,$16)
 GNAME(alloc_overflow_eax):
         pushl   %ecx            # Save ecx
         pushl   %edx            # Save edx
-	ALLOC_OVERFLOW(%eax)
+	ALLOC_OVERFLOW(%eax,%edx)
         popl    %edx    # Restore edx.
         popl    %ecx    # Restore ecx.
         ret
@@ -564,7 +670,7 @@ GNAME(alloc_overflow_eax):
 GNAME(alloc_overflow_ecx):
         pushl   %eax            # Save eax
         pushl   %edx            # Save edx
-	ALLOC_OVERFLOW(%ecx)
+	ALLOC_OVERFLOW(%ecx,%edx)
         movl    %eax,%ecx       # setup the destination.
         popl    %edx    # Restore edx.
         popl    %eax    # Restore eax.
@@ -577,7 +683,7 @@ GNAME(alloc_overflow_ecx):
 GNAME(alloc_overflow_edx):
         pushl   %eax            # Save eax
         pushl   %ecx            # Save ecx
-	ALLOC_OVERFLOW(%edx)
+	ALLOC_OVERFLOW(%edx,%ecx)
         movl    %eax,%edx       # setup the destination.
         popl    %ecx    # Restore ecx.
         popl    %eax    # Restore eax.
@@ -593,7 +699,7 @@ GNAME(alloc_overflow_ebx):
         pushl   %eax            # Save eax
         pushl   %ecx            # Save ecx
         pushl   %edx            # Save edx
-	ALLOC_OVERFLOW(%ebx)
+	ALLOC_OVERFLOW(%ebx,%edx)
         movl    %eax,%ebx       # setup the destination.
         popl    %edx    # Restore edx.
         popl    %ecx    # Restore ecx.
@@ -610,7 +716,7 @@ GNAME(alloc_overflow_esi):
         pushl   %eax            # Save eax
         pushl   %ecx            # Save ecx
         pushl   %edx            # Save edx
-	ALLOC_OVERFLOW(%esi)
+	ALLOC_OVERFLOW(%esi,%edx)
         movl    %eax,%esi       # setup the destination.
         popl    %edx    # Restore edx.
         popl    %ecx    # Restore ecx.
@@ -625,7 +731,7 @@ GNAME(alloc_overflow_edi):
         pushl   %eax            # Save eax
         pushl   %ecx            # Save ecx
         pushl   %edx            # Save edx
-	ALLOC_OVERFLOW(%edi)
+	ALLOC_OVERFLOW(%edi,%edx)
         movl    %eax,%edi       # setup the destination.
         popl    %edx    # Restore edx.
         popl    %ecx    # Restore ecx.
@@ -645,6 +751,15 @@ GNAME(alloc_overflow_edi):
 	.globl	GNAME(exception_handler_wrapper)
 	TYPE(GNAME(exception_handler_wrapper))
 GNAME(exception_handler_wrapper):
+	/* handle_exception doesn't care of unwinding now, so we
+	   return */
+	movl 	4(%esp), %eax
+	testb 	$6, 4(%eax)
+	jz 	1f
+	movl	$1,%eax
+	ret
+1:
+	cld
 	/* Context layout is: */
 	/* 7 dwords before FSA. (0x1c) */
 	/* 8 dwords and 0x50 bytes in the FSA. (0x70/0x8c) */
@@ -665,7 +780,7 @@ GNAME(exception_handler_wrapper):
 	pushl	0x1c(%esp)
 	pushl	0x1c(%esp)
 	call	GNAME(handle_exception)
-	lea	8(%ebp), %esp
+	lea	8(%ebp),%esp
 	popl	%ebp
 	ret
 	SIZE(GNAME(exception_handler_wrapper))
@@ -816,10 +931,11 @@ GNAME(fast_bzero_sse):
         mov 12(%esp), %edi        /* Parameter: start address */
         shr $6, %esi              /* Amount of 64-byte blocks to copy */
         jz Lend_sse               /* If none, stop */
-        movups %xmm7, -16(%esp)   /* Save XMM register */
+	subl $16,%esp
+        movups %xmm7, (%esp)   /* Save XMM register */
         xorps  %xmm7, %xmm7       /* Zero the XMM register */
         jmp Lloop_sse
-        .align align_16byte
+        .align align_16byte,0x90
 Lloop_sse:
 
         /* Copy the 16 zeroes from xmm7 to memory, 4 times. MOVNTDQ is the
@@ -835,10 +951,11 @@ Lloop_sse:
         add $64, %edi /* Advance pointer */
         dec %esi      /* Decrement 64-byte block count */
         jnz Lloop_sse
-        movups -16(%esp), %xmm7 /* Restore the XMM register */
+        movups (%esp), %xmm7 /* Restore the XMM register */
+	add $16, %esp
         sfence        /* Ensure that weakly ordered writes are flushed. */
 Lend_sse:
-        mov 12(%esp), %esi      /* Parameter: start address */
+        mov 16(%esp), %esi      /* Parameter: start address */
         prefetcht0 0(%esi)      /* Prefetch the start of the block into cache,
                                  * since it's likely to be used immediately. */
         pop %edi      /* Restore temp registers */
@@ -875,6 +992,32 @@ Lend_base:
         pop %eax
 	ret
 	SIZE(GNAME(fast_bzero_base))
-        
+	
+#ifdef LISP_FEATURE_WIN32
+	.globl GNAME(uwp_seh_handler_gate)
+	TYPE(GNAME(uwp_seh_handler_gate))
+	
+GNAME(uwp_seh_handler_gate):
+	movl 	4(%esp), %eax
+	testb 	$6, 4(%eax)
+	jnz 	Lunwinding
+	jmp	GNAME(exception_handler_wrapper)
+Lunwinding:
+	pushal
+	movl	%esp,%ebp
+	movl	0x28(%ebp),%eax   /* seh frame */
+	lea	-12(%eax),%eax    /* uwp block */
+	movl	(%eax),%ebx	  /* prev uwp block */
+	LoadTlSymbolValueAddress(CURRENT_UNWIND_PROTECT_BLOCK,%ecx)
+	movl	%ebx,(%ecx)
+	xor	%ecx,%ecx
+	movl	%ebp,%ebx
+	movl	4(%eax),%ebp
+	jmp	*8(%eax)
+	
+	SIZE(GNAME(uwp_seh_handler_gate))
+#endif	
+
+	#include "x86-fpu-insn.S"
 	
         END()

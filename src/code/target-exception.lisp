@@ -52,8 +52,8 @@
      (cons +exception-flt-underflow+         'floating-point-underflow)
      (cons +exception-flt-overflow+          'floating-point-overflow)
      (cons +exception-flt-inexact-result+    'floating-point-inexact)
-     (cons +exception-flt-denormal-operand+  'floating-point-exception)
-     (cons +exception-flt-stack-check+       'floating-point-exception)
+     (cons +exception-flt-denormal-operand+  'sb!kernel::floating-point-exception)
+     (cons +exception-flt-stack-check+       'sb!kernel::floating-point-exception)
      ;; Stack overflow
      (cons +exception-stack-overflow+        'sb!kernel::control-stack-exhausted)
      ;; Various
@@ -86,10 +86,34 @@
 (defun sb!kernel:handle-win32-exception (context-sap exception-record-sap)
   (let* ((record (deref (sap-alien exception-record-sap (* (struct exception-record)))))
          (code (slot record 'exception-code))
+         (number-parameters (slot record 'number-parameters))
          (condition-name (cdr (assoc code *exception-code-map*)))
-         (sb!debug:*stack-top-hint* (nth-value 1 (sb!kernel:find-interrupted-name-and-frame))))
+         (sb!debug:*stack-top-hint*
+          (nth-value 1 (sb!kernel:find-interrupted-name-and-frame))))
+    (when (and (eql code +exception-access-violation+)
+               (> number-parameters 1)
+               (sap= (sap-ref-sap
+                      (alien-sap (addr (slot record 'exception-information)))
+                      (alien-size system-area-pointer :bytes))
+                     (extern-alien "undefined_alien_address"
+                                   system-area-pointer)))
+      (setf condition-name 'sb!kernel::undefined-alien-variable-error))
     (if condition-name
-        (error condition-name)
+        (typecase condition-name
+	  (string
+	     (error "~S at ~S info ~S eip ~S"
+		    condition-name
+		    (slot record 'exception-address)
+		    (sap-ref-sap
+                      (alien-sap (addr (slot record 'exception-information)))
+                      (alien-size system-area-pointer :bytes))
+		    (sap-ref-sap
+		     (alien-funcall (extern-alien "os_context_pc_addr"
+						  (function system-area-pointer
+							    system-area-pointer))
+				    context-sap) 0)))
+	  (t
+	     (error condition-name)))
         (error "An exception occurred in context ~S: ~S. (Exception code: ~S)"
                context-sap exception-record-sap code))))
 
@@ -101,3 +125,111 @@
 ;;;   I don't know if we still need this or not. Better safe for now.
 (defun receive-pending-interrupt ()
   (receive-pending-interrupt))
+
+(in-package "SB!UNIX")
+
+#!+sb-thread
+(progn
+  (defun receive-pending-interrupt ()
+    (receive-pending-interrupt))
+
+  (defmacro with-interrupt-bindings (&body body)
+    `(let*
+         ;; KLUDGE: Whatever is on the PCL stacks before the interrupt
+         ;; handler runs doesn't really matter, since we're not on the
+         ;; same call stack, really -- and if we don't bind these (esp.
+         ;; the cache one) we can get a bogus metacircle if an interrupt
+         ;; handler calls a GF that was being computed when the interrupt
+         ;; hit.
+         ((sb!pcl::*cache-miss-values-stack* nil)
+          (sb!pcl::*dfun-miss-gfs-on-stack* nil))
+       ,@body))
+
+;;; Evaluate CLEANUP-FORMS iff PROTECTED-FORM does a non-local exit.
+  (defmacro nlx-protect (protected-form &rest cleanup-froms)
+    (with-unique-names (completep)
+      `(let ((,completep nil))
+         (without-interrupts
+           (unwind-protect
+                (progn
+                  (allow-with-interrupts
+                    ,protected-form)
+                  (setq ,completep t))
+             (unless ,completep
+               ,@cleanup-froms))))))
+
+  (declaim (inline %unblock-deferrable-signals %unblock-gc-signals))
+  (sb!alien:define-alien-routine ("unblock_deferrable_signals"
+                                  %unblock-deferrable-signals)
+      sb!alien:void
+    (where sb!alien:unsigned-long)
+    (old sb!alien:unsigned-long))
+  (sb!alien:define-alien-routine ("unblock_gc_signals" %unblock-gc-signals)
+      sb!alien:void
+    (where sb!alien:unsigned-long)
+    (old sb!alien:unsigned-long))
+
+  (defun block-deferrable-signals ()
+    (%block-deferrable-signals 0 0))
+
+  (defun unblock-deferrable-signals ()
+    (%unblock-deferrable-signals 0 0))
+
+  (defun unblock-gc-signals ()
+    (%unblock-gc-signals 0 0))
+
+  (declaim (inline %block-deferrables-and-return-mask %apply-sigmask))
+  (sb!alien:define-alien-routine ("block_deferrables_and_return_mask"
+                                  %block-deferrables-and-return-mask)
+      sb!alien:unsigned-long)
+  (sb!alien:define-alien-routine ("apply_sigmask"
+                                  %apply-sigmask)
+      sb!alien:void
+    (mask sb!alien:unsigned-long))
+
+  (defmacro without-interrupts/with-deferrables-blocked (&body body)
+    (let ((mask-var (gensym)))
+      `(without-interrupts
+         (let ((,mask-var (%block-deferrables-and-return-mask)))
+           (unwind-protect
+                (progn ,@body)
+             (%apply-sigmask ,mask-var))))))
+
+  (defun invoke-interruption (function)
+    (without-interrupts
+      ;; Reset signal mask: the C-side handler has blocked all
+      ;; deferrable signals before funcalling into lisp. They are to be
+      ;; unblocked the first time interrupts are enabled. With this
+      ;; mechanism there are no extra frames on the stack from a
+      ;; previous signal handler when the next signal is delivered
+      ;; provided there is no WITH-INTERRUPTS.
+      (let ((sb!unix::*unblock-deferrables-on-enabling-interrupts-p* t))
+        (with-interrupt-bindings
+	  (let ((sb!debug:*stack-top-hint*
+		 (nth-value 1 (sb!kernel:find-interrupted-name-and-frame))))	  
+	    (allow-with-interrupts
+	      (nlx-protect
+	       (funcall function)
+	       ;; We've been running with deferrables
+	       ;; blocked in Lisp called by a C signal
+	       ;; handler. If we return normally the sigmask
+	       ;; in the interrupted context is restored.
+	       ;; However, if we do an nlx the operating
+	       ;; system will not restore it for us.
+	       (when sb!unix::*unblock-deferrables-on-enabling-interrupts-p*
+		 ;; This means that storms of interrupts
+		 ;; doing an nlx can still run out of stack.
+		 (unblock-deferrable-signals)))))))))
+
+  (defmacro in-interruption ((&key) &body body)
+    #!+sb-doc
+    "Convenience macro on top of INVOKE-INTERRUPTION."
+    `(dx-flet ((interruption () ,@body))
+       (invoke-interruption #'interruption)))
+
+  (defun sb!kernel:signal-cold-init-or-reinit ()
+    #!+sb-doc
+    "Enable all the default signals that Lisp knows how to deal with."
+    (unblock-gc-signals)
+    (unblock-deferrable-signals)
+    (values)))

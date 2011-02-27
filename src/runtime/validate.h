@@ -21,11 +21,24 @@
 #define ALIEN_STACK_SIZE (1024*1024)     /* chosen at random */
 
 /* eventually choosable per-thread: */
+#ifdef LISP_FEATURE_WIN32
+/* with new os_protect, we don't have to commit all 2MB at once.
+ * let's use executable default, that is 4K committed and 2MB reserved. */
+#define DEFAULT_CONTROL_STACK_SIZE 0
+#else
 #define DEFAULT_CONTROL_STACK_SIZE (2*1024*1024)
+#endif
 
 /* constants derived from the fundamental constants in passed by GENESIS */
 #ifdef LISP_FEATURE_GENCGC
+#ifdef LISP_FEATURE_WIN32
+#ifdef LISP_FEATURE_X86_64
+#define DEFAULT_DYNAMIC_SPACE_SIZE (14ULL<<30)
+#else
 #define DEFAULT_DYNAMIC_SPACE_SIZE (DYNAMIC_SPACE_END - DYNAMIC_SPACE_START)
+#else
+#define DEFAULT_DYNAMIC_SPACE_SIZE (DYNAMIC_SPACE_END - DYNAMIC_SPACE_START)
+#endif
 #else
 #define DEFAULT_DYNAMIC_SPACE_SIZE (DYNAMIC_0_SPACE_END - DYNAMIC_0_SPACE_START)
 #endif

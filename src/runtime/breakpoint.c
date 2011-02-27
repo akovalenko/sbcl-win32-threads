@@ -10,9 +10,13 @@
  */
 
 #include <stdio.h>
-#include <signal.h>
 
 #include "sbcl.h"
+#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
+#include "pthreads_win32.h"
+#else
+#include <signal.h>
+#endif
 #include "runtime.h"
 #include "os.h"
 #include "interrupt.h"
@@ -102,20 +106,20 @@ static long compute_offset(os_context_t *context, lispobj code)
     if (code == NIL)
         return 0;
     else {
-        unsigned long code_start;
+        pointer_sized_uint_t code_start;
         struct code *codeptr = (struct code *)native_pointer(code);
 #ifdef LISP_FEATURE_HPPA
-        unsigned long pc = *os_context_pc_addr(context) & ~3;
+        pointer_sized_uint_t pc = *os_context_pc_addr(context) & ~3;
 #else
-        unsigned long pc = *os_context_pc_addr(context);
+        pointer_sized_uint_t pc = *os_context_pc_addr(context);
 #endif
 
-        code_start = (unsigned long)codeptr
+        code_start = (pointer_sized_uint_t)codeptr
             + HeaderValue(codeptr->header)*sizeof(lispobj);
         if (pc < code_start)
             return 0;
         else {
-            unsigned long offset = pc - code_start;
+            pointer_sized_uint_t offset = pc - code_start;
             if (offset >= codeptr->code_size)
                 return 0;
             else
@@ -134,7 +138,7 @@ void handle_breakpoint(os_context_t *context)
     context_sap = alloc_sap(context);
     code = find_code(context);
 
-#ifndef LISP_FEATURE_WIN32
+#if !defined(LISP_FEATURE_WIN32) || defined(LISP_FEATURE_SB_THREAD)
     /* Don't disallow recursive breakpoint traps. Otherwise, we can't
      * use debugger breakpoints anywhere in here. */
     thread_sigmask(SIG_SETMASK, os_context_sigmask_addr(context), 0);
@@ -160,7 +164,7 @@ void *handle_fun_end_breakpoint(os_context_t *context)
     code = find_code(context);
     codeptr = (struct code *)native_pointer(code);
 
-#ifndef LISP_FEATURE_WIN32
+#if !defined(LISP_FEATURE_WIN32) || defined(LISP_FEATURE_SB_THREAD)
     /* Don't disallow recursive breakpoint traps. Otherwise, we can't
      * use debugger breakpoints anywhere in here. */
     thread_sigmask(SIG_SETMASK, os_context_sigmask_addr(context), 0);
@@ -199,7 +203,7 @@ handle_single_step_trap (os_context_t *context, int kind, int register_offset)
 {
     fake_foreign_function_call(context);
 
-#ifndef LISP_FEATURE_WIN32
+#if !defined(LISP_FEATURE_WIN32) || defined(LISP_FEATURE_SB_THREAD)
     thread_sigmask(SIG_SETMASK, os_context_sigmask_addr(context), 0);
 #endif
 

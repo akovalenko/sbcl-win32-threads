@@ -216,6 +216,7 @@ main(int argc, char *argv[])
     defconstant("o_append", _O_APPEND);
     defconstant("o_excl",   _O_EXCL);
     defconstant("o_binary", _O_BINARY);
+    defconstant("o_noinherit", _O_NOINHERIT);
 
     defconstant("enoent", ENOENT);
     defconstant("eexist", EEXIST);
