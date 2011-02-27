@@ -1362,6 +1362,9 @@ futex_wait(volatile int *lock_word, int oldval, long sec, unsigned long usec)
   sigset_t pendset, blocked;
   int maybeINTR;
 
+  sigpending(&pendset);
+  if (pendset & ~self->blocked_signal_set)
+      return FUTEX_EINTR;
   w.uaddr = lock_word;
   w.uval = oldval;
   
@@ -1379,7 +1382,7 @@ futex_wait(volatile int *lock_word, int oldval, long sec, unsigned long usec)
       if (!cv_wakeup_remove(&futex_pseudo_cond,&w)) {
 	  /* timeout, but someone other removed wakeup. */
 	  result = maybeINTR;
-	  ResetEvent(w.event);
+	  WaitForSingleObject(w.event,INFINITE);
       } else {
 	  result = FUTEX_ETIMEDOUT;
       }

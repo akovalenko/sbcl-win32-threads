@@ -90,8 +90,9 @@ int arch_os_thread_init(struct thread *thread)
 
 #ifdef LISP_FEATURE_SB_THREAD
     pthread_setspecific(specials,thread);
-    thread->csp_around_foreign_call = PTR_ALIGN_UP(((lispobj*)thread) + TLS_SIZE,
-						   os_vm_page_size);
+    thread->csp_around_foreign_call =
+	PTR_ALIGN_UP((void*)(((lispobj*)thread) + TLS_SIZE), os_vm_page_size) +
+	((void*)thread - PTR_ALIGN_DOWN((void*)thread,os_vm_page_size));
 #endif
     return 1;
 }

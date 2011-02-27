@@ -364,6 +364,8 @@ void push_gcing_safety(struct gcing_safety *into)
 	into->pc_around_foreign_call = th->pc_around_foreign_call;
 	th->pc_around_foreign_call = 0;
 	asm volatile ("");
+    } else {
+	into->pc_around_foreign_call = 0;
     }
 }
 
@@ -397,5 +399,6 @@ void pop_gcing_safety(struct gcing_safety *from)
 #endif
 
 extern void create_initial_thread(lispobj);
+extern void thread_register_gc_trigger();
 
 #endif /* _INCLUDE_THREAD_H_ */

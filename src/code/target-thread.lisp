@@ -169,7 +169,7 @@ created and old ones may exit at any time."
 
 (define-alien-routine "kill_safely"
     integer
-  (os-thread #!-alpha unsigned-long #!+alpha unsigned-int)
+  (os-thread #!-alpha (unsigned #.sb!vm:n-word-bits) #!+alpha unsigned-int)
   (signal int))
 
 #!+sb-thread
@@ -179,13 +179,13 @@ created and old ones may exit at any time."
   ;; that on Linux it's a pid, but it might not be on posix thread
   ;; implementations.
   (define-alien-routine ("create_thread" %create-thread)
-      unsigned-long (lisp-fun-address unsigned-long))
+      (unsigned #.sb!vm:n-word-bits) (lisp-fun-address (unsigned #.sb!vm:n-word-bits)))
 
   (declaim (inline %block-deferrable-signals))
   (define-alien-routine ("block_deferrable_signals" %block-deferrable-signals)
       void
-    (where sb!alien:unsigned-long)
-    (old sb!alien:unsigned-long))
+    (where (unsigned #.sb!vm:n-word-bits))
+    (old   (unsigned #.sb!vm:n-word-bits)))
 
   (defun block-deferrable-signals ()
     (%block-deferrable-signals 0 0))

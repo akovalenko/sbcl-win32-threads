@@ -316,8 +316,8 @@ void odprintf_(const char * fmt, ...)
     struct thread * self = arch_os_get_current_thread();
 #if defined(LISP_FEATURE_SB_THREAD)
     if (self) {
-        sprintf(buf, "[0x%p] [0x%04lx] %s, %s, %s, %s ", pthread_self(),
-		GetCurrentThreadId(),
+        sprintf(buf, "[0x%p] [0x%04lx] [x%p] %s, %s, %s, %s ", pthread_self(),
+		GetCurrentThreadId(), self,
 		t_nil_s(GC_SAFE), t_nil_s(GC_INHIBIT), t_nil_s(INTERRUPTS_ENABLED), t_nil_s(IN_SAFEPOINT));
     } else {
         sprintf(buf, "[0x%p] [0x%04lx] (arch_os_get_current_thread() is NULL) ", pthread_self(),GetCurrentThreadId());
@@ -2822,6 +2822,8 @@ LONG veh(EXCEPTION_POINTERS *ep)
 
     volatile uword_t slots[4]={ep->ContextRecord->Rbp,
 			       ep->ContextRecord->Rbp};
+    if (!pthread_self())
+	return EXCEPTION_CONTINUE_SEARCH;
     ep->ContextRecord->Rbp = (uword_t)&slots[2];
 
     

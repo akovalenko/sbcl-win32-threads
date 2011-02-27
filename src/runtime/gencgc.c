@@ -4720,7 +4720,12 @@ general_alloc_internal(sword_t nbytes, int page_type_flag, struct alloc_region *
              * section */
             SetSymbolValue(GC_PENDING,T,thread);
             if (SymbolValue(GC_INHIBIT,thread) == NIL) {
+#ifdef LISP_FEATURE_SB_GC_SAFEPOINT
+		thread_register_gc_trigger();
+#else
                 set_pseudo_atomic_interrupted(thread);
+#endif
+		
 #ifdef LISP_FEATURE_PPC
                 /* PPC calls alloc() from a trap or from pa_alloc(),
                  * look up the most context if it's from a trap. */

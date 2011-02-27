@@ -363,6 +363,19 @@ static inline int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset
   }
   return 0;
 }
+
+/* Make speed-critical TLS access inline.
+
+   We don't check key range or validity here: (1) pthread spec is
+   explicit about undefined behavior for bogus keys, (2)
+   setspecific/getspecific should be as fast as possible.   */
+#define pthread_getspecific pthread_getspecific_np_inline
+
+static inline void *pthread_getspecific_np_inline(pthread_key_t key)
+{
+  return pthread_self()->specifics[key];
+}
+
 #ifdef PTHREAD_DEBUG_OUTPUT
 #define pthread_mutex_lock(mutex)               \
   pthread_mutex_lock_annotate_np(mutex, __FILE__, __LINE__ )
@@ -390,19 +403,8 @@ static inline int pthread_mutex_unlock_np_inline(pthread_mutex_t *mutex)
     return 0;
 }
 
-/* Make speed-critical TLS access inline.
-
-   We don't check key range or validity here: (1) pthread spec is
-   explicit about undefined behavior for bogus keys, (2)
-   setspecific/getspecific should be as fast as possible.   */
-static inline void *pthread_getspecific_np_inline(pthread_key_t key)
-{
-  return pthread_self()->specifics[key];
-}
-
 #define pthread_mutex_lock pthread_mutex_lock_np_inline
 #define pthread_mutex_unlock pthread_mutex_unlock_np_inline
-#define pthread_getspecific pthread_getspecific_np_inline
 
 #endif	/* !PTHREAD_DEBUG_OUTPUT */
 #endif	/* !PTHREAD_INTERNALS */
