@@ -973,6 +973,19 @@ UNIX epoch: January 1st 1970."
   (mask dword)
   (flags dword))
 
+(define-alien-routine getsockopt int
+  (handle handle)
+  (level int)
+  (opname int)
+  (dataword int-ptr :in-out)
+  (socklen int :in-out))
+
+(defconstant sol_socket #xFFFF)
+(defconstant so_type #x1008)
+
+(defun socket-handle-p (handle)
+  (zerop (getsockopt handle sol_socket so_type 0 (alien-size int :bytes))))
+
 (defconstant ebadf 9)
 
 ;;; For sockets, CloseHandle first and closesocket() afterwards is
@@ -989,33 +1002,17 @@ UNIX epoch: January 1st 1970."
 
 (defun unixlike-close (fd)
   (let ((handle (get-osfhandle fd)))
-    (if (= handle invalid-handle)
-	(values nil ebadf)
-        (let ((socketp
-               (and
-		(member (get-file-type handle) `(,file-type-pipe ,file-type-remote))
-		(zerop (shutdown-socket handle 2)))))
-	  (if (and socketp ; right answer from get-file-type AND shutdown succeeded
-		   (set-handle-information handle 2 2))	; protected from close => T
-	      (progn
-		(multiple-value-bind (falsehood code) (sb!unix:unix-close fd)
-		  (if falsehood ;; we protected the handle, but
-		      ;; unix-close reports success [never
-		      ;; seen it in real life].
-		      ;; return unix-close result without doing any more
-		      ;; to avoid double close. 
-		      (return-from unixlike-close (values falsehood code))
-		      (progn
-			;; unprotect:
-			(set-handle-information handle 2 0)
-			(if (or (zerop (close-socket handle)) ; as socket
-				(close-handle handle)) ; ws2 call failed => close as file
-			    (values t 0)	       ; success
-			    (values nil ebadf))))))
-	      ;; Either non-socket FD, or we couldn't protect the handle from close;
-	      ;; in the latter case, we'd better leak. Double close is much worse.
-	      (sb!unix:unix-close fd))))))
-
+    (flet ((close-protection (enable)
+	     (set-handle-information handle 2 (if enable 2 0))))
+      (if (= handle invalid-handle)
+	  (values nil ebadf)
+	  (progn
+	    (when (and (socket-handle-p handle) (close-protection t))
+	      (shutdown-socket handle 2)
+	      (alien-funcall (extern-alien "_dup2" (function int int int)) 0 fd)
+	      (close-protection nil)
+	      (close-socket handle))
+	    (sb!unix:unix-close fd))))))
 
 (define-alien-routine ("GetExitCodeProcess" get-exit-code-process)
     int

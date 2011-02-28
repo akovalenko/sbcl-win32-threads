@@ -2398,13 +2398,13 @@ handle_exception(EXCEPTION_RECORD *exception_record,
     if (!context) return ExceptionContinueSearch;
     if (exception_record->ExceptionFlags & (EH_UNWINDING|EH_EXIT_UNWIND))
 	return  ExceptionContinueSearch;
+    DWORD lastError = GetLastError();
+    DWORD lastErrno = errno;
     DWORD code = exception_record->ExceptionCode;
     EXCEPTION_DISPOSITION disposition = ExceptionContinueExecution;
     void* fault_address = (void*)exception_record->ExceptionInformation[1];
     os_context_t ctx, *oldctx;
     struct thread* self = arch_os_get_current_thread();
-    DWORD lastError = GetLastError();
-    DWORD lastErrno = errno;
     odxprint(seh,
 	     "SEH: rec %p, frame %p, ctxptr %p, disp %p, rip %p, fault %p\n"
 	     "... thread %p, code %p, rcx %p\n\n",
@@ -2822,15 +2822,18 @@ LONG veh(EXCEPTION_POINTERS *ep)
 
     volatile uword_t slots[4]={ep->ContextRecord->Rbp,
 			       ep->ContextRecord->Rbp};
+    EXCEPTION_DISPOSITION disp;
+    PUSH_ERRNO;
+
     if (!pthread_self())
 	return EXCEPTION_CONTINUE_SEARCH;
+    POP_ERRNO;
     ep->ContextRecord->Rbp = (uword_t)&slots[2];
 
     
     /* uword_t oldfp = *(uword_t*)__builtin_frame_address(0); */
     /* *(uword_t*)__builtin_frame_address(0) = ep->ContextRecord->Rbp; */
-    EXCEPTION_DISPOSITION disp =
-        handle_exception(ep->ExceptionRecord,NULL,ep->ContextRecord,NULL);
+    disp = handle_exception(ep->ExceptionRecord,NULL,ep->ContextRecord,NULL);
 
     ep->ContextRecord->Rbp = slots[0];
 

@@ -4764,7 +4764,7 @@ general_alloc_internal(sword_t nbytes, int page_type_flag, struct alloc_region *
                         (context ? os_context_sigmask_addr(context) : NULL);
                 }
 #else
-#ifndef LISP_FEATURE_WIN32
+#ifndef LISP_FEATURE_SB_GC_SAFEPOINT
                 maybe_save_gc_mask_and_block_deferrables(NULL);
 #endif
 #endif

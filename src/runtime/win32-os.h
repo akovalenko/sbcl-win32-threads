@@ -124,8 +124,8 @@ void odprintf_(const char * fmt, ...);
 
 #define bcopy(src,dest,n) memmove(dest,src,n)
 
-#define NT_GetLastError() (*(DWORD*)(0x34+(char*)NtCurrentTeb()))
-#define NT_SetLastError(code) do {(*(DWORD*)(0x34+(char*)NtCurrentTeb()))=code;} while(0)
+#define NT_GetLastError() (*(DWORD*)(0x0D*sizeof(LPVOID)+(char*)NtCurrentTeb()))
+#define NT_SetLastError(code) do {(*(DWORD*)(0x0D*sizeof(LPVOID)+(char*)NtCurrentTeb()))=code;} while(0)
 
 #define PUSH_ERRNO				\
     {						\
