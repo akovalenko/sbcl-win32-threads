@@ -277,7 +277,10 @@
 	   ;; #!+sb-gc-safepoint rbx
 	   #!+(and sb-gc-safepoint win32) rdi
 	   #!+(and sb-gc-safepoint win32) rsi
-	   #!+sb-gc-safepoint r15)
+	   #!+win32 args
+	   #!+win32 rax
+	   #!+sb-gc-safepoint r15
+	   #!+sb-gc-safepoint r13)
   (:vop-var vop)
   (:save-p t)
   (:generator 0
@@ -291,15 +294,8 @@
       ;; GC understands
       (let ((label (gen-label)))
 	(inst lea r14 (make-fixup nil :code-object label))
-	(emit-label label))
-      ;; Stack top for GC conservation
-      (inst lea r13 (make-ea :qword :base rsp-tn :disp #x-20))
-      ;; Save PC in thread struct
-      (storew r14 thread-base-tn thread-pc-around-foreign-call-slot)
-      ;; Save stack top at the assigned place (which may trap,
-      ;; providing asymmetric synchronization)
-      (loadw r14 thread-base-tn thread-csp-around-foreign-call-slot)
-      (storew r13 r14))
+	(emit-label label)))
+    #!-win32
     (move-immediate rax
                     (loop for tn-ref = args then (tn-ref-across tn-ref)
                        while tn-ref
@@ -307,21 +303,27 @@
                                  'float-registers)))
 
     ;; MS_ABI: shadow zone
-    #!+win32 (inst sub rsp-tn #x20)
+    #!+win32
+    (inst sub rsp-tn #x20)
+    ;; Store used stack top
+    #!+sb-gc-safepoint
+    (storew rsp-tn thread-base-tn thread-saved-csp-offset)
+    ;; Save PC in thread struct
+    #!+sb-gc-safepoint
+    (storew r14 thread-base-tn thread-pc-around-foreign-call-slot)
+    ;; Any ABI: call function
     (inst call function)
-    #!+win32 (inst add rsp-tn #x20)
-
+    ;; MS_ABI: remove shadow space
+    #!+win32
+    (inst add rsp-tn #x20)
     #!+sb-gc-safepoint
     (progn
-      ;; Reload stack-top-place, as it could have changed
-      (loadw r14 thread-base-tn thread-csp-around-foreign-call-slot)
-      (inst xor r13 r13)
-      ;; Zero the stack storage place. May trap and wait for GC end.
-      (storew r13 r14)
+      ;; Zeroing out
+      (inst xor r14 r14)
       ;; Zero PC storage place. NB. CSP-then-PC: same sequence on
       ;; entry/exit, is actually corrent.
-      (storew r13 thread-base-tn thread-pc-around-foreign-call-slot))
-    
+      (storew r14 thread-base-tn thread-saved-csp-offset)
+      (storew r14 thread-base-tn thread-pc-around-foreign-call-slot))
     ;; To give the debugger a clue. XX not really internal-error?
     (note-this-location vop :internal-error)))
 
