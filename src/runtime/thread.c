@@ -1350,8 +1350,8 @@ static inline void thread_pitstop(os_context_t *ctxptr)
 	   pit-stop always waits for GC end) */
 	set_thread_csp_access(self,1);
     } else {
-	if (maybe_become_stw_initiator(0) && !in_race_p()) {
-	    SetTlSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
+	if (SymbolTlValue(GC_PENDING,self)!=NIL &&
+	    maybe_become_stw_initiator(0) && !in_race_p()) {
 	    gc_stop_the_world();
 	    check_pending_gc();
 	    gc_start_the_world();
