@@ -446,15 +446,26 @@ GNAME(post_signal_tramp):
 	.globl  GNAME(fast_bzero)
 	TYPE(GNAME(fast_bzero))
         
+	#ifdef LISP_FEATURE_WIN32
+	#define xmmreg xmm7
+	#define redsave(reg,off) movups reg,-off(%rsp)
+	#define redrestore(reg,off) movups -off(%rsp),reg
+	#else
+	#define xmmreg xmm0
+	#define redsave(reg,off)
+	#define redrestore(reg,off)
+	#endif
+	
 GNAME(fast_bzero):
+	
         /* A fast routine for zero-filling blocks of memory that are
          * guaranteed to start and end at a 4096-byte aligned address.
          */
         shr $6, %rsi              /* Amount of 64-byte blocks to copy */
         jz Lend                   /* If none, stop */
         mov %rsi, %rcx            /* Save start address */
-        movups %xmm7, -16(%rsp)   /* Save XMM register */
-        xorps  %xmm7, %xmm7       /* Zero the XMM register */
+	redsave(%xmmreg,16)
+        xorps  %xmmreg, %xmmreg       /* Zero the XMM register */
         jmp Lloop
         .align align_16byte                 
 Lloop:
@@ -464,17 +475,17 @@ Lloop:
          * we're touching are not fetched into the L1 cache, since we're just
          * going to overwrite the memory soon anyway.
          */
-        movntdq %xmm7, 0(%rdi)
-        movntdq %xmm7, 16(%rdi)
-        movntdq %xmm7, 32(%rdi)
-        movntdq %xmm7, 48(%rdi)
+        movntdq %xmmreg, 0(%rdi)
+        movntdq %xmmreg, 16(%rdi)
+        movntdq %xmmreg, 32(%rdi)
+        movntdq %xmmreg, 48(%rdi)
 
         add $64, %rdi  /* Advance pointer */
         dec %rsi       /* Decrement 64-byte block count */
         jnz Lloop
         mfence         /* Ensure that the writes are globally visible, since
                         * MOVNTDQ is weakly ordered */
-        movups -16(%rsp), %xmm7 /* Restore the XMM register */
+	redrestore(%xmmreg,16)
         prefetcht0 0(%rcx)      /* Prefetch the start of the block into cache,
                                  * since it's likely to be used immediately. */
 Lend:        

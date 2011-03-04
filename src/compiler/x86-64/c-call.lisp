@@ -27,7 +27,7 @@
   (xmm-args 0)
   (stack-frame-size 0))
 
-(defconstant max-int-args #!+win32 4 #!-win32 6)
+(defconstant max-int-args #.(length *c-call-register-arg-offsets*))
 (defconstant max-xmm-args #!+win32 4 #!-win32 8)
 
 (defun int-arg (state prim-type reg-sc stack-sc)
