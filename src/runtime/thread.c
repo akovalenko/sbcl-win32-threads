@@ -1158,22 +1158,27 @@ static inline boolean maybe_become_stw_initiator(boolean interrupt)
 {
     struct thread* self = arch_os_get_current_thread();
     if (!gc_dispatcher.th_gpunmapper) {
+	odxprint(misc,"NULL STW BEFORE GPTRANSITION",self);
 	pthread_mutex_lock(&gc_dispatcher.mx_gptransition);
 	if (!gc_dispatcher.th_gpunmapper) {
+	    odxprint(misc,"NULL STW IN GPTRANSITION, REPLACING",self);
 	    /* Register */
 	    gc_dispatcher.th_gpunmapper = self;
 	    gc_dispatcher.interrupt = interrupt;
 	    /* take a lock, released after GC page is mapped. */
-	    pthread_mutex_lock(&gc_dispatcher.mx_gpunmapped);
 	    pthread_mutex_lock(&gc_dispatcher.mx_gcing);
+	    pthread_mutex_lock(&gc_dispatcher.mx_gpunmapped);
+	    unmap_gc_page();
+	    gc_dispatcher.stopped = 0;
+	} else {
+	    odxprint(misc,"!NULL STW (%p) IN GPTRANSITION, NOT REPLACING",gc_dispatcher.th_gpunmapper);
 	}
-	gc_dispatcher.stopped = 0;
 	pthread_mutex_unlock(&gc_dispatcher.mx_gptransition);
 	/* Moved past unlock to make locking interval shorter */
-	unmap_gc_page();
     }
     return gc_dispatcher.th_gpunmapper == self;
 }
+
 
 /* maybe_let_the_world_go -- if current thread is a GC initiator,
    unlock internal GC structures and return true. */
@@ -1183,9 +1188,9 @@ static inline boolean maybe_let_the_world_go()
     if (gc_dispatcher.th_gpunmapper == self) {
 	pthread_mutex_lock(&gc_dispatcher.mx_gptransition);
 	if (gc_dispatcher.th_gpunmapper == self) {
-	    pthread_mutex_unlock(&gc_dispatcher.mx_gcing);
 	    gc_dispatcher.th_gpunmapper = NULL;
 	}
+	pthread_mutex_unlock(&gc_dispatcher.mx_gcing);
 	pthread_mutex_unlock(&gc_dispatcher.mx_gptransition);
 	return 1;
     } else {
@@ -1204,11 +1209,12 @@ static inline boolean maybe_let_the_world_go()
 void gc_stop_the_world()
 {
     struct thread* self = arch_os_get_current_thread(), *p;
-    boolean interrupt;
+    boolean interrupt = 0;
     while (!maybe_become_stw_initiator(0)) {
 	pthread_mutex_lock(&gc_dispatcher.mx_gcing);
 	pthread_mutex_unlock(&gc_dispatcher.mx_gcing);
     }
+    gc_assert(self == gc_dispatcher.th_gpunmapper);
     interrupt = gc_dispatcher.interrupt;
     if (!gc_dispatcher.stopped++) {
 	pthread_mutex_lock(&all_threads_lock);
@@ -1235,8 +1241,6 @@ void gc_stop_the_world()
 	    } else {
 		if (!interrupt) {
 		    if (SymbolTlValue(GC_INHIBIT,p)==T) {
-			pthread_mutex_lock(p->state_lock);
-			pthread_mutex_unlock(p->state_lock);
 			SetTlSymbolValue(STOP_FOR_GC_PENDING,T,p);
 			set_thread_csp_access(p,1);
 			SetTlSymbolValue(GC_SAFE,NIL,p);
@@ -1250,7 +1254,7 @@ void gc_stop_the_world()
 	pthread_mutex_unlock(&gc_dispatcher.mx_gpunmapped);
 	/* All threads with GP unmapped are rolling further. */
 	odxprint(safepoints,"after remapping GC page %p",self);
-	    
+
 	SetTlSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
 	if (!interrupt) {
 	    for_each_thread(p) {
@@ -1266,8 +1270,6 @@ void gc_stop_the_world()
 		    pthread_mutex_unlock(thread_qrl(p));
 		    pthread_mutex_unlock(p->state_lock);
 		}
-		SetTlSymbolValue(STOP_FOR_GC_PENDING,NIL,p);
-		SetTlSymbolValue(GC_PENDING,NIL,p);
 	    }
 	}
     }
@@ -1281,6 +1283,12 @@ void gc_start_the_world()
 {
     struct thread* self = arch_os_get_current_thread(), *p;
     boolean interrupt = gc_dispatcher.interrupt;
+    if (gc_dispatcher.th_gpunmapper != self) {
+	odxprint(misc,"Unmapper %p self %p",gc_dispatcher.th_gpunmapper,self);
+    }
+	
+    gc_assert(gc_dispatcher.th_gpunmapper == self);
+	
     if (!--gc_dispatcher.stopped) {
 	for_each_thread(p) {
 	    if (!interrupt) {
@@ -1292,12 +1300,36 @@ void gc_start_the_world()
 		set_thread_csp_access(p,1);
 	}
 	pthread_mutex_unlock(&all_threads_lock);
-	    
 	/* Release everyone */
 	maybe_let_the_world_go();
     }
 }
 
+
+/* in_race_p() -- return TRUE if no other thread is inside SUB-GC with
+   GC-PENDING :IN-PROGRESS. Used to prevent deadlock between manual
+   SUB-GC, auto-gc and interrupt. */
+static inline boolean in_race_p()
+{
+    struct thread* self = arch_os_get_current_thread(), *p;
+    boolean result = 0;
+    pthread_mutex_lock(&all_threads_lock);
+    for_each_thread(p) {
+	if (p!=self &&
+	    SymbolTlValue(GC_PENDING,p)!=T &&
+	    SymbolTlValue(GC_PENDING,p)!=NIL) {
+	    result = 1;
+	    break;
+	}
+    }
+    pthread_mutex_unlock(&all_threads_lock);
+    if (result) {
+	map_gc_page();
+	pthread_mutex_unlock(&gc_dispatcher.mx_gpunmapped);
+	maybe_let_the_world_go();
+    }
+    return result;
+}
 
 static inline void thread_pitstop(os_context_t *ctxptr)
 {
@@ -1318,8 +1350,8 @@ static inline void thread_pitstop(os_context_t *ctxptr)
 	   pit-stop always waits for GC end) */
 	set_thread_csp_access(self,1);
     } else {
-	if (maybe_become_stw_initiator(0)) {
-	    odxprint(safepoints,"pitstop initiator [%p]", ctxptr);
+	if (maybe_become_stw_initiator(0) && !in_race_p()) {
+	    SetTlSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
 	    gc_stop_the_world();
 	    check_pending_gc();
 	    gc_start_the_world();
@@ -1447,7 +1479,7 @@ void wake_thread(struct thread * thread)
 
     pthread_mutex_unlock(&all_threads_lock);
 
-    if (maybe_become_stw_initiator(1)) {
+    if (maybe_become_stw_initiator(1) && !in_race_p()) {
 	gc_stop_the_world();
 	gc_start_the_world();
     }

@@ -114,6 +114,7 @@ extern int dyndebug_skip_averlax;
 extern int dyndebug_survive_aver;
 extern int dyndebug_runtime_link;
 extern int dyndebug_safepoints;
+extern int dyndebug_misc;
 
 void odprintf_(const char * fmt, ...);
 

@@ -112,6 +112,7 @@ int dyndebug_safepoints = 0;
 int dyndebug_pagefaults = 0;
 int dyndebug_io = 0;
 int dyndebug_seh = 0;
+int dyndebug_misc = 0;
 
 int dyndebug_to_filestream = 1;
 int dyndebug_to_odstring = 0;
