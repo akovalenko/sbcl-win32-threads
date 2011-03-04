@@ -58,4 +58,8 @@
 #define PSEUDO_ATOMIC_FLUSH_LOWLEVEL do {} while(0)
 #endif
 
+#ifndef AMD64_SYSV_ABI
+#define AMD64_SYSV_ABI
+#endif
+
 #endif /* SBCL_INCLUDED_OS_DEFAULT_H */

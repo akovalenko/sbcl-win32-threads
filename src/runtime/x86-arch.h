@@ -92,6 +92,7 @@ swap_lispobjs(volatile lispobj *dest, lispobj value)
 
 extern void fast_bzero_detect(void *, size_t);
 extern void (*fast_bzero_pointer)(void *, size_t);
+extern void fast_bzero(void *, size_t);
 
 extern void arch_write_linkage_table_jmp(char * reloc, void * fun);
 extern void arch_write_linkage_table_ref(void * reloc, void * data);

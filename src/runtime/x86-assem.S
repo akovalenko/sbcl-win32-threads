@@ -114,6 +114,8 @@
 #define CLEAR_FPU_STACK
 #define FILL_FPU_STACK	
 #endif
+
+#define THREAD_SAVED_CSP_OFFSET (TLS_SIZE*N_WORD_BYTES + 32768)
 	
 	.text
 	.globl	GNAME(all_threads)
@@ -167,31 +169,18 @@ GNAME(call_into_c):
 	
    Thus gc_enter_foreign_call takes two args: top of stack and return
    PC to preserve. */
-
-	pushl 	%esp
-	movl 	%ecx,%esi
-	movl	4(%esp),%ebx
-	call	GNAME(gc_enter_foreign_call)
-	leal	8(%esp),%esp
 	
+	movl 	%ecx,%esi
+	movl	SBCL_THREAD_BASE_EA,%edi
+	popl	%ebx
+	movl	%esp,THREAD_SAVED_CSP_OFFSET(%edi)
+	movl	%ebx,THREAD_PC_AROUND_FOREIGN_CALL_OFFSET(%edi)
 	/* foreign call, preserving ESI, EDI, and EBX */
 	call	*%esi
 	
-	/* save and restore result (up to 64 bits); now that we
-	declared VOP call-out to trash ESI and EDI, we can use them
-	for this purpose. */
-	
-	movl	%eax, %esi
-	movl	%edx, %edi
-
-	/* gc_safepoint will clear out CSP field, unmarking this
-	thread as phase1-safe. */
-	
-	call	GNAME(gc_leave_foreign_call)
-
-	movl	%esi, %eax
-	movl	%edi, %edx
-
+	xor	%esi,%esi
+	movl	%esi,THREAD_SAVED_CSP_OFFSET(%edi)
+	movl	%esi,THREAD_PC_AROUND_FOREIGN_CALL_OFFSET(%edi)
 	FILL_FPU_STACK
 	jmp	*%ebx
 
@@ -243,21 +232,17 @@ GNAME(call_into_c_fp_result):
 /* Setup the NPX for C */
 	CLEAR_FPU_STACK
 #if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
-	pushl 	%esp
 	movl 	%ecx,%esi
-	movl	4(%esp),%ebx
-	call	GNAME(gc_enter_foreign_call)
-	leal	8(%esp),%esp
-	
+	movl	SBCL_THREAD_BASE_EA,%edi
+	popl	%ebx
+	movl	%esp,THREAD_SAVED_CSP_OFFSET(%edi)
+	movl	%ebx,THREAD_PC_AROUND_FOREIGN_CALL_OFFSET(%edi)
 	call	*%esi /* foreign call, preserving ESI, EDI, and EBX */
-	
-	leal	-16(%esp),%esp
-	fstpt	(%esp)
-	
-	call	GNAME(gc_leave_foreign_call) /* it may interrupt (though not GC itself) */
-	
+	xor	%esi,%esi
+	movl	%esi,THREAD_SAVED_CSP_OFFSET(%edi)
+	movl	%esi,THREAD_PC_AROUND_FOREIGN_CALL_OFFSET(%edi)
 	fldz;fldz;fldz;fldz;fldz;fldz;fldz; /* 7 elements */
-	fldt	(%esp)			    /* and topmost one */
+	fxch	%st(7)			    /* and topmost one */
 #ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
 	movl	SBCL_THREAD_BASE_EA, %esi
 	fldcw	THREAD_SAVED_LISP_FPU_MODE_OFFSET(%esi)
@@ -279,15 +264,6 @@ GNAME(call_into_c_fp_result):
 	jmp	*%ebx
 #endif /* LISP_FEATURE_SB_GC_SAFEPOINT */	
 	SIZE(GNAME(call_into_c_fp_result))
-	
-
-	.text	
-	.align	align_16byte,0x90
-	.globl GNAME(do_nothing)
-	TYPE(GNAME(do_nothing))
-GNAME(do_nothing):	
-	ret
-	SIZE(GNAME(do_nothing))
 	
 
 	.text	

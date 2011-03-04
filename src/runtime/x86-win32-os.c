@@ -36,10 +36,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "thread.h"             /* dynamic_values_bytes */
-
+#include "cpputil.h"		/* PTR_ALIGN... */
 
 #include "validate.h"
-size_t os_vm_page_size;
 
 int arch_os_thread_init(struct thread *thread)
 {
@@ -74,6 +73,9 @@ int arch_os_thread_init(struct thread *thread)
          */
         thread->control_stack_start = cur_stack_start;
         thread->control_stack_end = top_exception_frame;
+	thread->csp_around_foreign_call =
+	    PTR_ALIGN_UP((void*)(((lispobj*)thread) + TLS_SIZE), os_vm_page_size) +
+	    ((void*)thread - PTR_ALIGN_DOWN((void*)thread,os_vm_page_size));
 
 #ifndef LISP_FEATURE_SB_THREAD
         /*

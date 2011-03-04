@@ -384,9 +384,8 @@ new_thread_trampoline(struct thread *th)
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
     *th->csp_around_foreign_call = (lispobj)&function;
     odxprint(safepoints, "New thread to be linked: %p\n", th);
-#endif
     pthread_mutex_lock(thread_qrl(th));
-
+#endif
     lock_ret = pthread_mutex_lock(&all_threads_lock);
     gc_assert(lock_ret == 0);
     link_thread(th);
@@ -1176,12 +1175,18 @@ static inline boolean maybe_become_stw_initiator(boolean interrupt)
     return gc_dispatcher.th_gpunmapper == self;
 }
 
+/* maybe_let_the_world_go -- if current thread is a GC initiator,
+   unlock internal GC structures and return true. */
 static inline boolean maybe_let_the_world_go()
 {
     struct thread* self = arch_os_get_current_thread();
     if (gc_dispatcher.th_gpunmapper == self) {
-	gc_dispatcher.th_gpunmapper = NULL;
-	pthread_mutex_unlock(&gc_dispatcher.mx_gcing);
+	pthread_mutex_lock(&gc_dispatcher.mx_gptransition);
+	if (gc_dispatcher.th_gpunmapper == self) {
+	    pthread_mutex_unlock(&gc_dispatcher.mx_gcing);
+	    gc_dispatcher.th_gpunmapper = NULL;
+	}
+	pthread_mutex_unlock(&gc_dispatcher.mx_gptransition);
 	return 1;
     } else {
 	return 0;
@@ -1189,6 +1194,13 @@ static inline boolean maybe_let_the_world_go()
 }
 
 
+/* gc_stop_the_world -- become GC initiator (waiting for other GCs to
+   complete if necessary), and make sure all other threads are either
+   stopped or gc-safe (i.e. running foreign calls).
+
+   Code sections bounded by gc_stop_the_world and gc_start_the_world
+   may be nested; inner calls don't stop or start threads,
+   decrementing or incrementing the stop counter instead. */
 void gc_stop_the_world()
 {
     struct thread* self = arch_os_get_current_thread(), *p;
@@ -1223,6 +1235,8 @@ void gc_stop_the_world()
 	    } else {
 		if (!interrupt) {
 		    if (SymbolTlValue(GC_INHIBIT,p)==T) {
+			pthread_mutex_lock(p->state_lock);
+			pthread_mutex_unlock(p->state_lock);
 			SetTlSymbolValue(STOP_FOR_GC_PENDING,T,p);
 			set_thread_csp_access(p,1);
 			SetTlSymbolValue(GC_SAFE,NIL,p);
@@ -1247,8 +1261,10 @@ void gc_stop_the_world()
 		       it with pending interrupt, so CSP locking is
 		       not needed */
 		    odxprint(safepoints,"waiting final parking %p (qrl %p)",p, thread_qrl(p));
+		    pthread_mutex_lock(p->state_lock);
 		    pthread_mutex_lock(thread_qrl(p));
 		    pthread_mutex_unlock(thread_qrl(p));
+		    pthread_mutex_unlock(p->state_lock);
 		}
 		SetTlSymbolValue(STOP_FOR_GC_PENDING,NIL,p);
 		SetTlSymbolValue(GC_PENDING,NIL,p);
@@ -1257,6 +1273,10 @@ void gc_stop_the_world()
     }
 }
 
+
+/* gc_start_the_world() -- restart all other threads if the call
+   matches the _outermost_ gc_stop_the_world(), or decrement the stop
+   counter. */
 void gc_start_the_world()
 {
     struct thread* self = arch_os_get_current_thread(), *p;
@@ -1288,10 +1308,12 @@ static inline void thread_pitstop(os_context_t *ctxptr)
     if (inhibitor) {
 	SetTlSymbolValue(STOP_FOR_GC_PENDING,T,self);
 	/* Free qrl to let know we're ready... */
+	pthread_mutex_lock(self->state_lock);
 	pthread_mutex_unlock(thread_qrl(self));
 	pthread_mutex_lock(&gc_dispatcher.mx_gpunmapped);
 	pthread_mutex_lock(thread_qrl(self));
 	pthread_mutex_unlock(&gc_dispatcher.mx_gpunmapped);
+	pthread_mutex_unlock(self->state_lock);
 	/* Enable FF-CSP recording (not hurt: will gc at pit-stop, and
 	   pit-stop always waits for GC end) */
 	set_thread_csp_access(self,1);

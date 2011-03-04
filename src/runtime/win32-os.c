@@ -59,7 +59,7 @@
 #include "thread.h"
 #include "cpputil.h"
 
-size_t os_vm_page_size;
+os_vm_size_t os_vm_page_size;
 
 #include "gc.h"
 #include "gencgc-internal.h"
@@ -2384,6 +2384,11 @@ void establish_c_fpu_world() { }
 
 #endif	/* LISP_FEATURE_X86 */
 
+#ifdef LISP_FEATURE_X86
+#define voidreg(ctxptr,name) ((void*)((ctxptr)->E##name))
+#else
+#define voidreg(ctxptr,name) ((void*)((ctxptr)->R##name))
+#endif
 /*
  * A good explanation of the exception handling semantics is
  * http://win32assembly.online.fr/Exceptionhandling.html .
@@ -2410,11 +2415,11 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 	     "... thread %p, code %p, rcx %p\n\n",
 	     exception_record, exception_frame,
 	     context, dispatcher_context,
-	     context->Rip,
+	     voidreg(context,ip),
 	     fault_address,
 	     self,
 	     (void*)(intptr_t)code,
-	     context->Rcx);
+	     voidreg(context,cx));
     
 #ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
     int contextual_fpu_state = self ? self->in_lisp_fpu_mode : 0;
@@ -2817,6 +2822,7 @@ finish:
     return disposition;
 }
 
+#ifdef LISP_FEATURE_X86_64
 LONG veh(EXCEPTION_POINTERS *ep)
 {
 
@@ -2850,6 +2856,7 @@ LONG veh(EXCEPTION_POINTERS *ep)
 	ExitProcess(0);
     }
 }
+#endif
 
 void
 wos_install_interrupt_handlers(struct lisp_exception_frame *handler)

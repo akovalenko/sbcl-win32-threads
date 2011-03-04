@@ -72,9 +72,7 @@ swap_lispobjs(volatile lispobj *dest, lispobj value)
 }
 
 #ifdef _WIN64
-#define SYSV_ABI __attribute__((sysv_abi))
-#else
-#define SYSV_ABI 
+#define AMD64_SYSV_ABI __attribute__((sysv_abi))
 #endif
 
 void arch_write_linkage_table_ref(void * reloc, void * data);
