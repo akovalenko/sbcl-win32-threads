@@ -67,7 +67,7 @@
 
 (define-alien-type uuid
     (struct uuid
-            (data1 unsigned-long)
+            (data1 unsigned-int)
             (data2 unsigned-short)
             (data3 unsigned-short)
             (data4 (array unsigned-char 8))))
@@ -199,6 +199,7 @@
                   "Manufacturer" "http://www.sbcl.org"
                   "InstallerVersion" 200
                   "Compressed" "yes"
+		  #+x86-64 "Platform" #+x86-64 "x64"
                   "InstallScope" "perMachine"))
       ("Media" ("Id" 1
                 "Cabinet" "sbcl.cab"
@@ -228,32 +229,38 @@
                            "Type" "integer"
                            "Value" "1"
                            "KeyPath" "yes"))))
-       ("Directory" ("Id" "ProgramFilesFolder"
+       ("Directory" ("Id" #-x86-64 "ProgramFilesFolder" #+x86-64 "ProgramFiles64Folder"
                      "Name" "PFiles")
         ("Directory" ("Id" "BaseFolder"
                       "Name" "Steel Bank Common Lisp")
          ("Directory" ("Id" "VersionFolder"
                        "Name" ,(lisp-implementation-version))
           ("Directory" ("Id" "INSTALLDIR")
+           ("Component" ("Id" "SBCL_SetHOME"
+			 "Guid" ,(make-guid)
+			 "DiskId" 1)
+            ("Environment" ("Id" "Env_SBCL_HOME"
+                            "System" "yes"
+                            "Action" "set"
+                            "Name" "SBCL_HOME"
+                            "Part" "all"
+                            "Value" "[INSTALLDIR]")))
+
+           ("Component" ("Id" "SBCL_SetPATH"
+			 "Guid" ,(make-guid)
+			 "DiskId" 1)
+            ("Environment" ("Id" "Env_PATH"
+                            "System" "yes"
+                            "Action" "set"
+                            "Name" "PATH"
+                            "Part" "last"
+                            "Value" "[INSTALLDIR]")))
            ("Component" ("Id" "SBCL_Base"
                          "Guid" ,(make-guid)
                          "DiskId" 1)
 			;; SBCL :win32 will find core in the executable's directory,
 			;; even without SBCL_HOME. Let's not clobber user environment
 			;; more than necessary.
-	    #-(and)
-            ("Environment" ("Id" "Env_SBCL_HOME"
-                            "System" "yes"
-                            "Action" "set"
-                            "Name" "SBCL_HOME"
-                            "Part" "all"
-                            "Value" "[INSTALLDIR]"))
-            ("Environment" ("Id" "Env_PATH"
-                            "System" "yes"
-                            "Action" "set"
-                            "Name" "PATH"
-                            "Part" "last"
-                            "Value" "[INSTALLDIR]"))
             ;; If we want to associate files with SBCL, this
             ;; is how it's done -- but doing this by default
             ;; and without asking the user for permission Is
@@ -267,12 +274,18 @@
                      "Source" "sbcl.core")))
            ,@(collect-contrib-components))))))
       ("Feature" ("Id" "Minimal"
+		  "Title" "SBCL Executable"
                   "ConfigurableDirectory" "INSTALLDIR"
                   "Level" 1)
        ("ComponentRef" ("Id" "SBCL_Base"))
        ("ComponentRef" ("Id" "SBCL_Shortcut"))
-       ,@(ref-all-components))
+       ("Feature" ("Id" "Contrib" "Level" 1 "Title" "Contributed Modules")
+		  ,@(ref-all-components))
+       ("Feature" ("Id" "SetPath" "Level" 1 "Title" "Set Environment Variable: PATH")
+		  ("ComponentRef" ("Id" "SBCL_SetPATH")))
+       ("Feature" ("Id" "SetHome" "Level" 3 "Title" "Set Environment Variable: SBCL_HOME")
+		  ("ComponentRef" ("Id" "SBCL_SetHOME"))))
       ("WixVariable" ("Id" "WixUILicenseRtf"
                       "Value" "License.rtf"))
       ("Property" ("Id" "WIXUI_INSTALLDIR" "Value" "INSTALLDIR"))
-      ("UIRef" ("Id" "WixUI_InstallDir"))))))
+      ("UIRef" ("Id" "WixUI_FeatureTree"))))))
