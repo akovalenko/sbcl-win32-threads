@@ -1466,6 +1466,8 @@ void gc_stop_the_world()
 		    pthread_mutex_lock(&gc_dispatcher.mx_subgc);
 		    /* Lock myself */
 		    pthread_mutex_lock(thread_qrl(self));
+		    /* Unlock sub-gc */
+		    pthread_mutex_unlock(&gc_dispatcher.mx_subgc);
 		}
 	    }
 	}
