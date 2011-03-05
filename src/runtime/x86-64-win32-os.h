@@ -21,5 +21,6 @@ static inline DWORD NT_GetLastError() {
 
 unsigned long os_context_fp_control(os_context_t *context);
 void os_restore_fp_control(os_context_t *context);
+os_context_register_t * os_context_fp_addr(os_context_t *context);
 
 #endif /* _X86_64_WIN32_OS_H */
