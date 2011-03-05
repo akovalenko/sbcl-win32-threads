@@ -2579,15 +2579,6 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 
     if (IS_TRAP_EXCEPTION(exception_record, ctx)) {
 	unsigned trap;
-	
-
-#if defined(LISP_FEATURE_X86)
-	if (self) {
-	    self->pseudo_atomic_bits |= (*(char*)context->Ebp & 0x03);
-	    (*(char*)context->Ebp) &= ~0x03;
-	}
-#endif
-
 
 	/* Unlike some other operating systems, Win32 leaves EIP
 	 * pointing to the breakpoint instruction. */
