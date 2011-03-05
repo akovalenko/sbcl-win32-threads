@@ -138,13 +138,15 @@ void odprintf_(const char * fmt, ...);
     NT_SetLastError(sbcl__lastError);		\
     }
 
-#define PSEUDO_ATOMIC_SET_HIGHLEVEL				\
-    do {							\
-	set_pseudo_atomic_atomic(arch_os_get_current_thread());	\
-    } while(0)
+#define PSEUDO_ATOMIC_SET_HIGHLEVEL					\
+    {									\
+	boolean pap = !!						\
+	    get_pseudo_atomic_atomic(arch_os_get_current_thread());	\
+	if (!pap)							\
+	    set_pseudo_atomic_atomic(arch_os_get_current_thread());	\
 
 #define PSEUDO_ATOMIC_FLUSH_LOWLEVEL					\
-    do {								\
+    if (!pap)								\
 	clear_pseudo_atomic_atomic(arch_os_get_current_thread());	\
     } while(0)
 

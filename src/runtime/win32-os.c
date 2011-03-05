@@ -1725,7 +1725,7 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
     if (!addr) {
         /* the simple case first */
         return
-            AVERLAX(VirtualAlloc(addr, len, MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+            AVERLAX(VirtualAlloc(addr, len, MEM_RESERVE|MEM_COMMIT, PAGE_EXECUTE_READWRITE));
     }
 
     RECURSIVE_REDUCE_TO_ONE_SPACE_ADDR(os_validate,addr,len);
@@ -1958,11 +1958,23 @@ os_map(int fd, int offset, os_vm_address_t addr, os_vm_size_t len)
 }
 
 
+
+/* FIXME: Now that FOO_END, rather than FOO_SIZE, is the fundamental
+ * description of a space, we could probably punt this and just do
+ * (FOO_START <= x && x < FOO_END) everywhere it's called. */
+static boolean
+in_range_p(os_vm_address_t a, lispobj sbeg, size_t slen)
+{
+    char* beg = (char*)((uword_t)sbeg);
+    char* end = (char*)((uword_t)sbeg) + slen;
+    char* adr = (char*)a;
+    return (adr >= beg && adr < end);
+}
+
 void
 os_protect(os_vm_address_t address, os_vm_size_t length, os_vm_prot_t prot)
 {
     DWORD old_prot;
-    boolean localp = local_thread_stack_address_p(address);
 
     RECURSIVE_REDUCE_TO_ONE_SPACE_VOID(os_protect,address,length,,prot);
 
@@ -1981,7 +1993,7 @@ os_protect(os_vm_address_t address, os_vm_size_t length, os_vm_prot_t prot)
                             &old_prot));
 #endif
     } else {
-	if (mwwFlag && !localp && length != sizeof(lispobj)) {
+	if (mwwFlag && in_range_p(address, DYNAMIC_SPACE_START, dynamic_space_size)) {
 #ifdef WRITE_WATCH_RESET_ON_WP
 	    ptr_ResetWriteWatch(address,length);
 #endif
@@ -1991,7 +2003,7 @@ os_protect(os_vm_address_t address, os_vm_size_t length, os_vm_prot_t prot)
 	    AVER(VirtualProtect(address, length, new_prot, &old_prot)||
 		 (VirtualAlloc(address, length, MEM_COMMIT, new_prot) &&
 		  VirtualProtect(address, length, new_prot, &old_prot)));
-	    odxprint(safepoints,"Protecting %p + %p vmaccess %d "
+	    odxprint(misc,"Protecting %p + %p vmaccess %d "
 		     "newprot %08x oldprot %08x",
 		     address,length,prot,new_prot,old_prot
 		);
@@ -2009,20 +2021,6 @@ os_vm_prot_t os_current_protection(os_vm_address_t address)
             return prot;
     }
     return OS_VM_PROT_NONE;
-}
-
-
-
-/* FIXME: Now that FOO_END, rather than FOO_SIZE, is the fundamental
- * description of a space, we could probably punt this and just do
- * (FOO_START <= x && x < FOO_END) everywhere it's called. */
-static boolean
-in_range_p(os_vm_address_t a, lispobj sbeg, size_t slen)
-{
-    char* beg = (char*)((uword_t)sbeg);
-    char* end = (char*)((uword_t)sbeg) + slen;
-    char* adr = (char*)a;
-    return (adr >= beg && adr < end);
 }
 
 boolean
