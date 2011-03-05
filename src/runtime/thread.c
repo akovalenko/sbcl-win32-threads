@@ -681,7 +681,6 @@ create_thread_struct(lispobj initial_function) {
                 (FREE_TLS_INDEX,
                  make_fixnum(FIRST_TLS_INDEX), 0);
             SetSymbolValue(TLS_INDEX_LOCK,make_fixnum(0),0);
-	    fprintf(stderr, "FIRST TLS INDEX %d\n",FIRST_TLS_INDEX);
         }
 #define STATIC_TLS_INIT(sym,field) \
   ((struct symbol *)(sym-OTHER_POINTER_LOWTAG))->tls_index= \
