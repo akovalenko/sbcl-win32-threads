@@ -50,7 +50,6 @@
 #define THREAD_ALIEN_RESERVE (0)
 #endif
 
-<<<<<<< HEAD
 #ifndef PSEUDO_ATOMIC_SET_HIGHLEVEL
 #define PSEUDO_ATOMIC_SET_HIGHLEVEL do {} while(0)
 #endif
