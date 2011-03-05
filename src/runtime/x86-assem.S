@@ -298,6 +298,22 @@ GNAME(call_into_lisp):
 	movl	%esp,%ebp	# Establish new frame.
 Lstack:
 	
+#ifndef LISP_FEATURE_SB_AUTO_FPU_SWITCH
+	fwait
+	pushl	%eax
+	pushl	%eax
+	fnstcw	(%esp)
+	popl	%eax
+	andl	$0xfffff2ff,%eax
+	orl	$0x0200,%eax
+	pushl	%eax
+	fldcw	(%esp)
+	popl	%eax
+	popl 	%eax
+	emms
+	FILL_FPU_STACK
+#endif
+	
 /* Save C regs: ebx esi edi. */
 	pushl	%ebx
 	pushl	%esi
@@ -369,6 +385,18 @@ LsingleValue:
 	
 /* Restore the NPX state. */
 	popl	%ebp		# c-sp
+#ifndef LISP_FEATURE_SB_AUTO_FPU_SWITCH
+	fwait
+	pushl	%eax
+	fnstcw	(%esp)
+	popl	%eax
+	andl	$0xf2ff,%eax
+	orl	$0x0300,%eax
+	pushl	%eax
+	fldcw	(%esp)
+	popl	%eax
+	CLEAR_FPU_STACK
+#endif
 	movl	%edx,%eax	# c-val
 	ret
 	SIZE(GNAME(call_into_lisp))
@@ -1024,6 +1052,7 @@ GNAME(uwp_seh_handler_gate):
 Lunwinding:
 	pushal
 	movl	%esp,%ebp
+	FILL_FPU_STACK
 	movl	0x28(%ebp),%eax   /* seh frame */
 	lea	-12(%eax),%eax    /* uwp block */
 	movl	(%eax),%ebx	  /* prev uwp block */
