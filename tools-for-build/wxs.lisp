@@ -38,7 +38,7 @@
      (print-xml sexp xml)))
 
 (defun application-name ()
-  (format nil "Steel Bank Common Lisp ~A" (lisp-implementation-version)))
+  (format nil "Steel Bank Common Lisp ~A (~A)" (lisp-implementation-version) (machine-type)))
 
 (defun version-digits (&optional (horrible-thing (lisp-implementation-version)))
   "Turns something like 0.pre7.14.flaky4.13 (see version.lisp-expr)
