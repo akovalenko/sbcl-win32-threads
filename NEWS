@@ -4,6 +4,12 @@ changes relative to sbcl-1.0.46:
   * enhancement: redefinition warnings for macros from different files. (lp#434657)
   * enhancement: better MACHINE-VERSION on Darwin x86 and x86-64. (lp#668332)
   * enhancement: (FORMAT "foo" ...) and similar signal a compile-time warning. (lp#327223)
+  * enhancement: no more "in: LAMBDA NIL" messages from the compiler for forms
+    processed using EVAL -- now the appropriate toplevel form is reported instead.
+  * enhancement: more legible style-warnings for inappropriate IGNORE and IGNORABLE
+    declarations. (lp#726331)
+  * enhancement: :NOT-NULL option has been added to alien C-STRING type to indicate
+    that NIL/NULL is excluded from the type.
   * optimization: SLOT-VALUE &co are faster in the presence of SLOT-VALUE-USING-CLASS
     and its compatriots.
   * optimization: core startup time is reduced by 30% on x86-64. (lp#557357)
@@ -17,6 +23,14 @@ changes relative to sbcl-1.0.46:
     are detected. (lp#520607)
   * bug fix: constant keyword argument checking didn't take :ALLOW-OTHER-KEYS
     into account.
+  * bug fix: SLOT-BOUNDP information is correct during MAKE-INSTANCE in the
+    presence of (SETF SLOT-VALUE-USING-CLASS) and SLOT-BOUNDP-USING-CLASS
+    methods. (regression from 1.0.45.18)
+  * bug fix: INITIALIZE-INSTANCE :AROUND methods supplying initargs via
+    CALL-NEXT-METHOD work correctly. (regression from 1.0.45.19)
+  * bug fix: several foreign functions accepting string also accepted NIL and
+    consequently caused a memory fault at 0 now signal a type-error instead.
+    (lp#721087)
 
 changes in sbcl-1.0.46 relative to sbcl-1.0.45:
   * enhancement: largefile support on Solaris.
