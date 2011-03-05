@@ -299,6 +299,10 @@
 
 #!+sb-thread
 (defmacro pseudo-atomic (&rest forms)
+  #!+sb-gc-safepoint
+  `(progn ,@forms
+	  (inst test al-tn (make-ea :byte :disp sb!vm::gc-safepoint-page-addr)))
+  #!-sb-gc-safepoint
   (with-unique-names (label)
     `(let ((,label (gen-label)))
        (inst mov (make-ea :qword
@@ -314,9 +318,7 @@
        ;; if PAI was set, interrupts were disabled at the same time
        ;; using the process signal mask.
        (inst break pending-interrupt-trap)
-       (emit-label ,label)
-       #!+win32
-       (inst test al-tn (make-ea :byte :disp sb!vm::gc-safepoint-page-addr)))))
+       (emit-label ,label))))
 
 
 #!-sb-thread

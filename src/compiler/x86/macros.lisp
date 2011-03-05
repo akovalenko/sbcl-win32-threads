@@ -407,38 +407,34 @@
 ;;; pa section.
 #!+sb-thread
 (defmacro %clear-pseudo-atomic ()
-  #!+win32
-  '(inst and (make-ea :byte :disp 0 :base ebp-tn) #xFE)
   #!-win32
   '(inst mov (make-ea :dword :disp (* 4 thread-pseudo-atomic-bits-slot)) 0 :fs))
 
 #!+sb-thread
 (defmacro pseudo-atomic (&rest forms)
+  #!+sb-gc-safepoint
+  ;; 1. Without signals, we can rely on pseudo-atomic being really
+  ;; atomic.  2. When interrupted flag used to be set earlier,
+  ;; GC-SAFEPOINT-PAGE-ADDR is instantly unmapped instead. It makes
+  ;; all Lisp threads interrupt eventually; the thread where it
+  ;; happens, itself, interrupts at the end of [pseudo-]atomic
+  ;; section..
+  `(progn ,@forms
+	  (inst test al-tn (make-ea :byte :disp sb!vm::gc-safepoint-page-addr)))
+  #!-sb-gc-safepoint
   (with-unique-names (label)
     `(let ((,label (gen-label)))
-       #!+win32
-       (inst or (make-ea :dword :disp 0 :base ebp-tn) 2)
-       #!-win32
        (inst mov (make-ea :dword :disp (* 4 thread-pseudo-atomic-bits-slot))
              ebp-tn :fs)
        ,@forms
-       #!+win32
-       (progn
-	 (inst and (make-ea :dword :disp 0 :base ebp-tn) (lognot 2))
-	 (inst test (make-ea :dword :disp 0 :base ebp-tn) 1))
-       #!-win32
        (progn
 	 (inst xor (make-ea :dword :disp (* 4 thread-pseudo-atomic-bits-slot))
 	       ebp-tn :fs))
+       (inst jmp :z ,label)
        ;; if PAI was set, interrupts were disabled at the same time
        ;; using the process signal mask.
-       (inst jmp :z ,label)
        (inst break pending-interrupt-trap)
-       (emit-label ,label)
-       ;; IA-32: Byte-wide load shouldn't cause stalls, and seems to
-       ;; guarantee the absense of false dependencies here
-       #!+win32
-       (inst test al-tn (make-ea :byte :disp sb!vm::gc-safepoint-page-addr)))))
+       (emit-label ,label))))
 
 #!-sb-thread
 (defmacro pseudo-atomic (&rest forms)

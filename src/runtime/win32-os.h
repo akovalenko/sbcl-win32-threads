@@ -138,20 +138,15 @@ void odprintf_(const char * fmt, ...);
     NT_SetLastError(sbcl__lastError);		\
     }
 
-#ifdef LISP_FEATURE_X86
 #define PSEUDO_ATOMIC_SET_HIGHLEVEL				\
     do {							\
-	(arch_os_get_current_thread()->pseudo_atomic_bits) =	\
-	    (**(lispobj**)__builtin_frame_address(0))&0x03;	\
+	set_pseudo_atomic_atomic(arch_os_get_current_thread());	\
     } while(0)
 
 #define PSEUDO_ATOMIC_FLUSH_LOWLEVEL					\
     do {								\
-	(**(lispobj**)__builtin_frame_address(0)) |=			\
-	    (arch_os_get_current_thread()->pseudo_atomic_bits)&0x01;	\
-	(arch_os_get_current_thread()->pseudo_atomic_bits)&=~0x03;	\
-    } while (0)
-#endif
+	clear_pseudo_atomic_atomic(arch_os_get_current_thread());	\
+    } while(0)
 
 
 struct thread;

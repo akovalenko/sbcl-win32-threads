@@ -1117,6 +1117,10 @@ const char * t_nil_s(lispobj symbol)
 }
 
 
+/* Several ideas on interthread signalling should be
+   tried. Implementation below was chosen for its small size.
+ */
+
 struct gc_dispatcher {
     pthread_mutex_t mx_initiator;
     pthread_mutex_t mx_gpunmapped;
@@ -1446,21 +1450,8 @@ void thread_register_gc_trigger()
 
 
 
-/* GC exception handlers, preliminary:
-   
-   When any gc-inhibitor traps on LD(GSPA), it sets
-   STOP_FOR_GC_PENDING, then waits for gc page remapping and returns.
-
-   When !gc-inhibitor thread traps on LD(GSPA), it compares itself
-   (electorally) to th_actor. If there is no th_actor yet, it wins and
-   takes mx_initiator. If there is th_actor and current thread is
-   better, current thread doesn't complete QRL release until
-   gc_start_the_world(): this way, thread owning mx_initiator always
-   releases it after GC end.
-
-   [STW] Elected actor should wait for each of the rest threads.  
- */
-
+/* wake_thread(thread) -- ensure an interrupt delivery to
+   `thread'. */
 void wake_thread(struct thread * thread)
 {
     struct thread * p;
