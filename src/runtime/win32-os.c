@@ -1788,8 +1788,10 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
 os_vm_address_t
 os_validate_recommit(os_vm_address_t addr, os_vm_size_t len)
 {
-    if (addr_in_mmapped_core(addr))
+    RECURSIVE_REDUCE_TO_ONE_SPACE_ADDR(os_validate_recommit,addr,len);
+    if (addr_in_mmapped_core(addr)) {
 	return addr;
+    }
     return
         AVERLAX(VirtualAlloc(addr, len, MEM_COMMIT, PAGE_EXECUTE_READWRITE));
 }
@@ -1827,7 +1829,7 @@ os_invalidate(os_vm_address_t addr, os_vm_size_t len)
         fast_bzero(addr, len);
     } else {
         AVERLAX(VirtualFree(addr, len, MEM_DECOMMIT));
-    }
+    } 
 }
 
 void
@@ -1855,19 +1857,22 @@ static char* non_external_self_name = "//////<SBCL executable>";
 int win32_open_for_mmap(const char* fileName)
 {
     HANDLE handle;
-    if (strcmp(fileName,non_external_self_name)) {
-	handle = CreateFileA(fileName,GENERIC_READ|GENERIC_EXECUTE,
-			     FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,
-			     OPEN_EXISTING,0,NULL);
-    } else {
-	WCHAR mywpath[MAX_PATH+1];
-	DWORD gmfnResult = GetModuleFileNameW(NULL,mywpath,MAX_PATH+1);
-	AVER(gmfnResult>0 && gmfnResult<(MAX_PATH+1));
-	handle = CreateFileW(mywpath,GENERIC_READ|GENERIC_EXECUTE,
-			     FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,
-			     OPEN_EXISTING,0,NULL);
+    int retries = 1;
+    do {
+	if (strcmp(fileName,non_external_self_name)) {
+	    handle = CreateFileA(fileName,FILE_GENERIC_READ|FILE_GENERIC_EXECUTE,
+				 FILE_SHARE_READ,NULL,
+				 OPEN_EXISTING,0,NULL);
+	} else {
+	    WCHAR mywpath[MAX_PATH+1];
+	    DWORD gmfnResult = GetModuleFileNameW(NULL,mywpath,MAX_PATH+1);
+	    AVER(gmfnResult>0 && gmfnResult<(MAX_PATH+1));
+	    handle = CreateFileW(mywpath,FILE_GENERIC_READ|FILE_GENERIC_EXECUTE,
+				 FILE_SHARE_READ,NULL,
+				 OPEN_EXISTING,0,NULL);
 	
-    }
+	}
+    } while (handle == INVALID_HANDLE_VALUE && retries--);
     AVER(handle && (handle!=INVALID_HANDLE_VALUE));
     return _open_osfhandle((intptr_t)handle,O_BINARY);
 }
@@ -2092,11 +2097,14 @@ extern void exception_handler_wrapper();
      return th && dyndebug_lazy_fpu_careful && (th->in_lisp_fpu_mode&0xFF0000);
  }
 
+#define USE_MMX
+
  void establish_c_fpu_world()
  {
      struct thread* th = arch_os_get_current_thread();
      if (fpu_world_unknown_p()) {
          x87_fldcw(th->saved_c_fpu_mode);
+#ifndef USE_MMX
 	 asm("ffree %st(7);");
 	 asm("ffree %st(6);");
 	 asm("ffree %st(5);");
@@ -2105,7 +2113,9 @@ extern void exception_handler_wrapper();
 	 asm("ffree %st(2);");
 	 asm("ffree %st(1);");
 	 asm("ffree %st(0);");
-	 asm("fwait");
+#else
+         asm("emms");
+#endif
 	 th->in_lisp_fpu_mode = 0;
      }
      if (fpu_world_lispy_p()) {
@@ -2113,10 +2123,14 @@ extern void exception_handler_wrapper();
 	 asm("fnstcw %0": "=m"(mode));
          th->saved_lisp_fpu_mode = mode;
          x87_fldcw(th->saved_c_fpu_mode);
+#ifndef USE_MMX
 	 asm("fstp %st(0); fstp %st(0)");
 	 asm("fstp %st(0); fstp %st(0)");
 	 asm("fstp %st(0); fstp %st(0)");
 	 asm("fstp %st(0); fstp %st(0)");
+#else
+         asm("emms");
+#endif
 	 th->in_lisp_fpu_mode = 0;
      }
      AVERLAX(!fpu_world_unknown_p());
@@ -3425,8 +3439,6 @@ int win32_unix_read(int fd, void * buf, int count)
     odprintf("read(%d, 0x%p, %d)", fd, buf, count);
     handle = (HANDLE)_get_osfhandle(fd);
 
-    
-
     if (console_handle_p(handle)) {
         /* 1. Console is a singleton.
            2. The only way to cancel console handle I/O is to close it.
@@ -3511,6 +3523,202 @@ int win32_wait_object_or_signal(HANDLE waitFor)
     handles[1] = self->private_events.events[1];
     return
         WaitForMultipleObjects(2,handles, FALSE,INFINITE);
+}
+
+/* Support routines for statistical profiler (contrib/sb-sprof).
+ * (despite its `contribness', upstream SBCL already includes some
+ * code for sb-sprof support, at least apparently).
+ *
+ * We do some tricks here to avoid deadlocks with GC; however, current
+ * implementation is still potentially fragile -- a chunk of Lisp code
+ * analyzing the stack runs between SuspendThread(otherthread) and
+ * ResumeThread(otherthread), and it smells danger.
+ *
+ * WITHOUT-GCING is required, of course. Also, Lisp code in
+ * resume-suspend shouldn't malloc() under the hood, and its probably
+ * not the end of story. But it seems to work at least thus far so I
+ * can profile HUNCHENTOOT threaded server in :TIME (wallclock) mode
+ * without hanging [and even get informative results].
+ *
+ * Using SuspendThread and ResumeThread (as a replacement for SIGPROF)
+ * seems to be required for representative result; we may issue a
+ * `controlled software interrupt' (with page unmapping), and it would
+ * be much safer, but the accuracy will suffer greatly (to the point
+ * where sb-sprof becomes pretty useless, IMHO).
+ *
+ * Other threads may attempt malloc() and (gc); it does no harm,
+ * they'll just be blocked until we are done with current SB-SPROF
+ * sample. */
+
+
+/* Data structure which is allocated before retrieving thread context
+ * information and freed after the thread is resumed */
+
+struct ctx_package {
+    /* Runtime functions below operate with a pointer to ctx member,
+     * calculating the entire structure address by subtracting offset
+     * of &ctx. Thus we pass and accept only one argument -- context
+     * SAP, and avoid mentioning _any_ auxilary data for the
+     * context in SPROF<->runtime interface. */
+    os_context_t ctx;
+    
+    /* on Win32, os_context_t doesn't include register set but a
+     * pointer to CONTEXT where the registers reside. We have to pass
+     * all this stuff to upper frames, so CONTEXT is allocated
+     * dynamically as well. */
+    CONTEXT win32_context;
+    
+    /* Pthread identifier of a target thread (to resume it). */
+    os_thread_t os_thread;
+
+    /* Low-level variant of pseudo-atomic bits is currently
+     * represented by misaligned frame pointer below the pseudo-atomic
+     * frame. We've no idea where SuspendThread() will freeze the
+     * target (and I'd like to avoid rolling/deferring, both for
+     * accuracy and simplicity), so we fix frame pointer chain after
+     * suspend and restore it on resume.
+     *
+     * paframe: address of flagged frame pointer in target stack */
+    os_vm_address_t paframe;
+    
+    /* pacont: original frame pointer, containing "pseudo-atomic
+     * misalignment", that should be restored. */
+    os_context_register_t pacont;
+};
+
+os_context_t* win32_suspend_get_context(pthread_t os_thread)
+{
+    struct ctx_package *data = NULL;
+    extern pthread_mutex_t all_threads_lock;
+    struct thread* p;
+    
+    /* Not only GC shouldn't happen -- any attempt to stop the world
+     * results in deadlock (including interruption). However,
+     * concurrent stop-the-world may have begun at this point; we use
+     * trylock, and back off (returning NULL) when this situation is
+     * detected. */
+    if (pthread_mutex_trylock(&suspend_info.world_lock))
+	return NULL;
+    
+    /* That one below should be replaced with unconditional lock, as
+     * soon as I'll review and simplify complicated locking schemes in
+     * thread.c. It may be safe to lock unconditionally even now, but
+     * I can't know for sure. */
+    if (pthread_mutex_trylock(&all_threads_lock))
+	goto error_cleanup;
+
+    /* Our pthread compatibility layer, unlike real pthreads, abhors
+     * any invalid pthread_t in _any_ call, and can't check validity.
+     * It's fixable and should be fixed, but until then we have to
+     * validate any pthread_t at SBCL runtime level, by looking it up
+     * in all_threads. */
+    
+    for_each_thread (p) {
+	if (p->os_thread == os_thread) {
+	    /* Suspend thread immediately when we found it, so
+	     * all_threads_lock may be released and the thread still
+	     * won't die in our hands. */
+	    pthread_np_suspend(os_thread);
+	    break;
+	}
+    }
+    pthread_mutex_unlock(&all_threads_lock);
+    /* for_each_thread terminates with p==NULL unless break is
+     * issued. It may be regarded as implementation detail, but it's
+     * not the only opinion possible: I grasped it immediately without
+     * looking at the definition of for_each_thread. */
+    if (!p)
+	goto error_cleanup;
+
+    data = calloc(sizeof(*data),1); /* allocate with zero-fill */
+    data->ctx.win32_context = &data->win32_context;
+    pthread_np_get_thread_context(os_thread,&data->win32_context);
+
+    /* Getting context of inactive fiber now fails. As any inactive
+     * fiber is `in foreign call' from the Lisp point of view, we are
+     * able to provide stack pointer, frame pointer and PC,
+     * i.e. everything expected from foreign call context by
+     * SB-SPROF.
+     *
+     * We regard zero PC as an indicator of invalid context. Zero ESP
+     * would be just as good. */
+    if (!*os_context_pc_addr(&data->ctx)) {
+	struct thread* sap = os_thread->specifics[save_lisp_tls_key];
+	/* If pthread_t happens to be reused for non-lisp fiber, lisp
+	 * TSD pointer is empty. We have to back off and cleanup... */
+	if (!sap) {
+	    /* ...but, as we've already suspended an innocent foreign
+	     * thread, we have to resume it as well. */
+	    pthread_np_resume(os_thread);
+	    goto error_cleanup;
+	}
+	/* csp_around_foreign_call == stack pointer before CALL insn.
+	 * When CALL happens, this address contains return PC.
+	 * A word below contains outer frame pointer. */
+	void **csp = (void**)sap->csp_around_foreign_call;
+	void **topfp = *(csp-1);
+	void *toppc = *csp;
+	*os_context_pc_addr(&data->ctx) = (os_context_register_t)toppc;
+	*os_context_fp_addr(&data->ctx) = (os_context_register_t)topfp;
+	/* SB-SPROF shouldn't expect anything sensible from SP, at
+	 * least in foreign calls, except that it `covers' the frame
+	 * pointer (BTW, using `below/above' terms for stack locations
+	 * results in an awful mess almost inevitably, so I'd continue
+	 * to use `covers' / `covered by' for logical stack ordering
+	 * predicates) */
+	*os_context_sp_addr(&data->ctx) = (os_context_register_t)csp;
+    } else {
+	os_vm_address_t fp = *os_context_fp_addr(&data->ctx);
+
+	/* Fix low-level pseudo-atomic representation: traverse frame
+	 * pointer chain and fix first misaligned address we meet,
+	 * remembering its location. */
+	while ((void*)fp < (void*)p->control_stack_end &&
+	       (void*)fp > (void*)p->control_stack_start &&
+	       /* Avoid infinite loop if the chain happens to be
+		* circular */
+	       *(void**)fp > fp) {
+	    if ((*(os_context_register_t*)fp)&3) {
+		data->pacont = *(os_context_register_t*)fp;
+		data->paframe = fp;
+		*(os_context_register_t*)fp &= ~((intptr_t)3);
+		break;
+	    }
+	    fp = *(os_vm_address_t*)fp;
+	}
+    }
+    data->os_thread = os_thread;
+    return &data->ctx;
+
+error_cleanup:
+    if (data)
+	free(data);
+    pthread_mutex_unlock(&suspend_info.world_lock);
+    return NULL;
+}
+
+void win32_resume(void *ctx)
+{
+    if (ctx) {
+	/* Given CTX member, calculate entire data block address
+	 * (actually no-op on X86 as soon as CTX is at the beginning) */
+	struct ctx_package *data = ctx - offsetof(struct ctx_package,ctx);
+
+	/* Restore pseudo-atomic misalignment in the `beautified'
+	 * frame pointer (if any) */
+	if (data->paframe)
+	    *(os_context_register_t*)data->paframe = data->pacont;
+
+	/* Resume (for inactive fibers it means `unlock and allow
+	 * activation'). NB os_thread may become invalid after that
+	 * point. */
+	pthread_np_resume(data->os_thread);
+	free(data);
+
+	/* Allow GC stop-the-world and interrupt signalling to take
+	 * place */
+	pthread_mutex_unlock(&suspend_info.world_lock);
+    }
 }
 
 /* EOF */

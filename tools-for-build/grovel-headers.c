@@ -205,6 +205,14 @@ main(int argc, char *argv[])
     DEFTYPE("uint",    UINT);
     DEFTYPE("ulong",   ULONG);
 
+    printf(";;; File Desired Access\n");
+    defconstant ("FILE_GENERIC_READ", FILE_GENERIC_READ);
+    defconstant ("FILE_GENERIC_WRITE", FILE_GENERIC_WRITE);
+    defconstant ("FILE_GENERIC_EXECUTE", FILE_GENERIC_EXECUTE);
+    defconstant ("FILE_SHARE_READ", FILE_SHARE_READ);
+    defconstant ("FILE_SHARE_WRITE", FILE_SHARE_WRITE);
+    defconstant ("FILE_SHARE_DELETE", FILE_SHARE_DELETE);
+
     /* FIXME: SB-UNIX and SB-WIN32 really need to be untangled. */
     printf("(in-package \"SB!UNIX\")\n\n");
     printf(";;; Unix-like constants and types on Windows\n");

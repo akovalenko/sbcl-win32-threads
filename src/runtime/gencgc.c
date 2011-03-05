@@ -588,7 +588,8 @@ zero_dirty_pages(page_index_t start, page_index_t end) {
 
     for (i = start; i <= end; i++) {
         if (page_table[i].need_to_zero == 1) {
-            zero_pages(start, end);
+            zero_pages_with_mmap(start, end);
+	    os_validate_recommit(page_address(start),npage_bytes(end-start+1));
             break;
         }
     }
@@ -801,12 +802,6 @@ gc_alloc_new_region(sword_t nbytes, int page_type_flag, struct alloc_region *all
                OS_VM_PROT_ALL);
 #endif
 
-    /* Precommit (w32) */
-#ifdef LISP_FEATURE_WIN32
-    os_validate_recommit(page_address(first_page),
-			 npage_bytes(1+last_page-first_page));
-#endif
-
     /* If the first page was only partial, don't check whether it's
      * zeroed (it won't be) and don't zero it (since the parts that
      * we're interested in are guaranteed to be zeroed).
@@ -816,7 +811,7 @@ gc_alloc_new_region(sword_t nbytes, int page_type_flag, struct alloc_region *all
     }
 
     zero_dirty_pages(first_page, last_page);
-
+    
     /* we can do this after releasing free_pages_lock */
     if (gencgc_zero_check) {
         long *p;
@@ -1168,6 +1163,11 @@ gc_alloc_large(sword_t nbytes, int page_type_flag, struct alloc_region *alloc_re
     os_protect(page_address(first_page),
                npage_bytes(1+last_page-first_page),
                OS_VM_PROT_ALL);
+#endif
+    /* Precommit (w32) */
+#ifdef LISP_FEATURE_WIN32
+    os_validate_recommit(page_address(first_page),
+			 npage_bytes(1+last_page-first_page));
 #endif
 
     zero_dirty_pages(first_page, last_page);

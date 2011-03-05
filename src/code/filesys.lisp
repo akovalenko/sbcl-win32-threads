@@ -304,8 +304,8 @@
                    (sb!win32:create-file filename 0
 					 (logior sb!win32::file-share-read
 						 sb!win32::file-share-write) nil
-                                         sb!win32:file-open-existing
-                                         0 0))
+						 sb!win32:file-open-existing
+						 0 0))
               (setf existsp t)
               (let* ((attributes (sb!win32:get-file-attributes filename))
                      (valid-attributes

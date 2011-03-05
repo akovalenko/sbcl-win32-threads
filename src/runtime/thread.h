@@ -110,8 +110,8 @@ set_thread_state(struct thread *thread, lispobj state)
 {
     pthread_mutex_lock(thread->state_lock);
     thread->state = state;
-    pthread_cond_broadcast(thread->state_cond);
     pthread_mutex_unlock(thread->state_lock);
+    pthread_cond_broadcast(thread->state_cond);
 }
 
 static inline void

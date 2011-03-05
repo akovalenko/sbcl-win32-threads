@@ -50,6 +50,7 @@
 #define THREAD_ALIEN_RESERVE (0)
 #endif
 
+<<<<<<< HEAD
 #ifndef PSEUDO_ATOMIC_SET_HIGHLEVEL
 #define PSEUDO_ATOMIC_SET_HIGHLEVEL do {} while(0)
 #endif
@@ -60,6 +61,15 @@
 
 #ifndef AMD64_SYSV_ABI
 #define AMD64_SYSV_ABI
+#endif
+
+#ifndef fast_aligned_fill_words
+static inline void fast_aligned_fill_words(void*addr, size_t len, lispobj pattern)
+{
+    lispobj* ptr = addr;
+    while(len--)
+	*(ptr++) = pattern;
+}
 #endif
 
 #endif /* SBCL_INCLUDED_OS_DEFAULT_H */

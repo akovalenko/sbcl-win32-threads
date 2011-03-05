@@ -179,12 +179,14 @@ static inline pthread_mutex_t* thread_qrl(struct thread* p)
 }
 
 lispobj reset_dynamic_values[TLS_SIZE];
+static int last_initially_bound_dynamic_value_index;
 
 static int
 initial_thread_trampoline(struct thread *th)
 {
     lispobj function;
-    unsigned int i,j;
+    unsigned int i;
+    lispobj *dynamic_values = (void*)th;
 #ifdef LISP_FEATURE_SB_THREAD
     pthread_setspecific(lisp_thread, (void *)1);
 #endif
@@ -206,7 +208,10 @@ initial_thread_trampoline(struct thread *th)
     protect_alien_stack_guard_page(1, NULL);
 
     memcpy(reset_dynamic_values, th, sizeof(reset_dynamic_values));
-
+    for (i=last_initially_bound_dynamic_value_index; i<TLS_SIZE;++i) {
+	if (dynamic_values[i]!=NO_TLS_VALUE_MARKER_WIDETAG)
+	    last_initially_bound_dynamic_value_index = i;
+    }
     return run_lisp_function(function);
 }
 
@@ -231,6 +236,15 @@ initial_thread_trampoline(struct thread *th)
                             32 * SIGSTKSZ +				\
                             THREAD_ALIGNMENT_BYTES +			\
 			    THREAD_CSP_PAGE_SIZE)
+
+#define FIRST_TLS_INDEX							\
+    (ALIGN_UP(MAX_INTERRUPTS+						\
+	      (sizeof(struct thread)/sizeof(lispobj)), 1024)		\
+     -									\
+     (THREAD_STATE_LOCK_SIZE)/sizeof(lispobj))				\
+    
+static int last_initially_bound_dynamic_value_index = FIRST_TLS_INDEX;
+
 
 #ifdef LISP_FEATURE_SB_THREAD
 /* THREAD POST MORTEM CLEANUP
@@ -333,7 +347,7 @@ pthread_mutex_t resurrected_lock = PTHREAD_MUTEX_INITIALIZER;
 struct thread *resurrected_thread;
 
 unsigned int resurrectable_waiters = 0;
-unsigned int max_resurrectable_waiters = 0;
+unsigned int max_resurrectable_waiters = 16;
 
 #endif
 
@@ -347,8 +361,8 @@ new_thread_trampoline(struct thread *th)
 {
     lispobj function;
     int result, lock_ret;
+    int i,j;
 #if defined(LISP_FEATURE_WIN32)
-    int i;
     struct lisp_exception_frame exception_frame;
 #endif
 #if defined(LISP_FEATURE_SB_AUTO_FPU_SWITCH)
@@ -422,7 +436,32 @@ new_thread_trampoline(struct thread *th)
     lock_ret = pthread_mutex_unlock(&all_threads_lock);
     gc_assert(lock_ret == 0);
 
+<<<<<<< HEAD
     pthread_mutex_unlock(thread_qrl(th));
+=======
+    /* If we are a GC-blocker, wake GC */
+    {
+	int maybe_wake_gc = 0;
+	pthread_mutex_lock(th->state_lock);
+	if (th->state == STATE_PHASE1_BLOCKER||
+	    th->state == STATE_PHASE2_BLOCKER||
+	    th->state == STATE_INTERRUPT_BLOCKER) {
+	    maybe_wake_gc = 1;
+	    /* If GC waits for th, it's going to close its alloc
+	       region => we may just go on. */
+	}
+	th->state = STATE_DEAD;
+	pthread_mutex_unlock(th->state_lock);
+	pthread_cond_broadcast(th->state_cond);
+	
+	if (maybe_wake_gc) {
+	    lock_suspend_info(__FILE__,__LINE__);
+	    int gcwake = maybe_wake_gc_begin();
+	    unlock_suspend_info(__FILE__,__LINE__);
+	    maybe_wake_gc_end(gcwake);
+	}
+    }
+>>>>>>> 0cf1b0c6e33912f3848ff3b624ffffa460ce910f
 
 #ifdef LISP_FEATURE_WIN32
     if (th->os_thread->created_as_fiber) {
@@ -437,8 +476,9 @@ new_thread_trampoline(struct thread *th)
     th->prev = NULL;
     struct timespec deadline;
     int ret;
-    int relative = 5000;
+    int relative = 10000;
     struct timeval tv;
+<<<<<<< HEAD
     ret = gettimeofday(&tv, NULL);
     if (ret)
 	goto die;
@@ -447,51 +487,82 @@ new_thread_trampoline(struct thread *th)
 
     if (pthread_mutex_trylock(&resurrected_lock)) {
 	odxprint(safepoints, "Resurrect lock busy at %p, dying", th);
+=======
+    boolean responsible_awakener = 0;
+    lispobj* dynamic_values = (void*)th;
+    
+    if (pthread_mutex_trylock(&resurrected_lock))
+>>>>>>> 0cf1b0c6e33912f3848ff3b624ffffa460ce910f
 	goto die;
-    }
-    odxprint(safepoints, "Resurrect lock taken by %p", th);
     ++resurrectable_waiters;
     
-    struct thread* lastwaiter;
+    th->next = resurrected_thread;
+    resurrected_thread = th;
+    responsible_awakener = (th->next==0);
+    pthread_mutex_unlock(&resurrected_lock);
+
+    fast_aligned_fill_words(&dynamic_values[FIRST_TLS_INDEX],
+			    ALIGN_UP(sizeof(lispobj)*
+				     (fixnum_value(SymbolValue(FREE_TLS_INDEX,0))
+				      - FIRST_TLS_INDEX),64),
+			    NO_TLS_VALUE_MARKER_WIDETAG);
+
+    for (i=FIRST_TLS_INDEX; i<last_initially_bound_dynamic_value_index; ++i)
+	dynamic_values[i] = reset_dynamic_values[i];
     
-    if (resurrected_thread) {
-	for (lastwaiter = resurrected_thread; lastwaiter->next;
-	     lastwaiter = lastwaiter->next);
-	th->prev = lastwaiter;
-	lastwaiter->next = th;
-    } else {
-	th->prev = NULL;
-	resurrected_thread = th;
-    }
-
+    lispobj newstate;
+ wait_again:
+    pthread_mutex_lock(th->state_lock);
     odxprint(safepoints, "Before timed wait %p", th);
-    pthread_cond_timedwait(th->state_cond, &resurrected_lock, &deadline);
-    odxprint(safepoints, "After timed wait %p", th);
-
-    --resurrectable_waiters;
-    /* owning reslock */
-    if (th->state == STATE_DEAD) {
-	odxprint(safepoints, "State DEAD, final unlinking.. %p", th);
-	/* no change, unlink */
-	if (th->next)
-	    th->next->prev = th->prev;
-	if (th->prev)
-	    th->prev->next = th->next;
-	else
-	    resurrected_thread = th->next;
-	odxprint(safepoints, "State DEAD, dying.. %p", th);
-	pthread_mutex_unlock(&resurrected_lock);
-	goto die;
+    while (th->state == STATE_DEAD) {
+	if (responsible_awakener) {
+	    ret = gettimeofday(&tv, NULL);
+	    deadline.tv_sec = tv.tv_sec + relative/1000;
+	    deadline.tv_nsec = 0;
+	    if (pthread_cond_timedwait(th->state_cond, th->state_lock, &deadline)
+		==ETIMEDOUT)
+		break;
+	} else {
+	    pthread_cond_wait(th->state_cond, th->state_lock);
+	}
     }
+    newstate = th->state;
+    pthread_mutex_unlock(th->state_lock);
+    
+    odxprint(safepoints, "After timed wait %p", th);
+    
+    if (responsible_awakener) {
+	if (newstate == STATE_DEAD) {
+	    if (!pthread_mutex_trylock(&resurrected_lock)) {
+		struct thread* victim = resurrected_thread;
+		if (victim) {
+		    if (victim->next || victim == th) {
+			--resurrectable_waiters;
+			odxprint(safepoints, "State DEAD, final unlinking.. %p",
+				 victim);
+			resurrected_thread = victim->next;
+		    } else {
+			victim = NULL;
+		    }
+		}
+		pthread_mutex_unlock(&resurrected_lock);
+		if (victim) {
+		    pthread_mutex_lock(victim->state_lock);
+		    victim->state = STATE_SUSPENDED;
+		    pthread_mutex_unlock(victim->state_lock);
+		    pthread_cond_broadcast(victim->state_cond);
+		}
+	    }
+	}
+    }
+    if (newstate == STATE_SUSPENDED) goto die;
+    if (newstate == STATE_DEAD) goto wait_again;
 
     odxprint(safepoints, "State UNDEAD - Resurrecting, %p", th);
-
-
-    /* odxprint(safepoints, "Resurrecting, %p", th); */
-    pthread_mutex_unlock(&resurrected_lock);
     
     function = th->no_tls_value_marker;
 
+<<<<<<< HEAD
 #ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
     unsigned int fpu_mode = th->in_lisp_fpu_mode;
 #endif
@@ -508,6 +579,9 @@ new_thread_trampoline(struct thread *th)
 #ifdef LISP_FEATURE_GENCGC
     gc_set_region_empty(&th->alloc_region);
 #endif
+=======
+    th->no_tls_value_marker = NO_TLS_VALUE_MARKER_WIDETAG;
+>>>>>>> 0cf1b0c6e33912f3848ff3b624ffffa460ce910f
     goto resurrect;
 
 
@@ -652,11 +726,9 @@ create_thread_struct(lispobj initial_function) {
         if(SymbolValue(FREE_TLS_INDEX,0)==UNBOUND_MARKER_WIDETAG) {
             SetSymbolValue
                 (FREE_TLS_INDEX,
-                 /* FIXME: should be MAX_INTERRUPTS -1 ? */
-                 make_fixnum(MAX_INTERRUPTS+
-                             sizeof(struct thread)/sizeof(lispobj)),
-                 0);
+                 make_fixnum(FIRST_TLS_INDEX), 0);
             SetSymbolValue(TLS_INDEX_LOCK,make_fixnum(0),0);
+	    fprintf(stderr, "FIRST TLS INDEX %d\n",FIRST_TLS_INDEX);
         }
 #define STATIC_TLS_INIT(sym,field) \
   ((struct symbol *)(sym-OTHER_POINTER_LOWTAG))->tls_index= \
@@ -907,23 +979,27 @@ os_thread_t create_thread(lispobj initial_function) {
 #else
     if (1) {
 #endif
-	if (resurrected_thread && !pthread_mutex_trylock(&resurrected_lock)) {
+	if (resurrected_thread) {
+	    pthread_mutex_lock(&resurrected_lock);
 	    if (resurrected_thread) {
+		--resurrectable_waiters;
 		th = resurrected_thread;
-		odxprint(safepoints, "%p reused by %p", th,
-			 arch_os_get_current_thread());
-		if (th->next) th->next->prev = NULL;
 		resurrected_thread = th->next;
 		th->no_tls_value_marker = initial_function;
+		pthread_mutex_lock(th->state_lock);
 		th->state = STATE_RUNNING;
-		pthread_cond_signal(th->state_cond);
 	    } else {
 		th = NULL;
 	    }
 	    pthread_mutex_unlock(&resurrected_lock);
+	    
 	    if (th) {
-		/* wait_for_thread_state_change(th,STATE_SUSPENDED); */
-		return th->os_thread;
+		odxprint(safepoints, "%p reused by %p", th,
+			 arch_os_get_current_thread());
+		pthread_cond_broadcast(th->state_cond);
+		kid_tid = th->os_thread;
+		pthread_mutex_unlock(th->state_lock);
+		return kid_tid;
 	    }
 	}
     }
@@ -1095,7 +1171,494 @@ int check_pending_gc()
     return done;
 }
 
+<<<<<<< HEAD
 lispobj fn_by_pc(uword_t pc)
+=======
+
+/* gc_abandon_pending --
+
+   Called from several places when other thread's desire to GC or to
+   stop the world became detected (or is known). Multiple instances of
+   GC_PENDING == T (in consing threads) are triggered by the _same_
+   event, so one thread collecting garbage is enough. */
+static inline
+void gc_abandon_pending(struct thread *th)
+{
+    if (SymbolTlValue(GC_PENDING,th)==T &&
+    	(SymbolTlValue(IN_SAFEPOINT,th)!=T ||
+    	 SymbolTlValue(GC_SAFE,th)==T))
+    	SetSymbolValue(GC_PENDING,NIL,th);
+}
+
+/* Get the thread into appropriate suspend state depending on the
+   current gc/interrupt action in progress. Doesn't wait (see
+   gc_accept_thread_state() which does).
+
+   Useful for threads whose state wasn't modified by a thread
+   responsible for the action. Currently it's (1) a thread without
+   pending interrupt signal, for interrupt's wake_the_world(), and (2)
+   a thread linking into all_threads after gc_stop_the_world released
+   all_threads_lock. */
+
+static inline
+void gc_suspend_willfully(struct thread *th)
+{
+    boolean full_suspend_possible = (SymbolTlValue(GC_INHIBIT,th)!=T);
+    if (suspend_info.suspend && suspend_info.gc_thread!=th) {
+	lock_suspend_info(__FILE__,__LINE__);
+	if (suspend_info.suspend) {
+	    switch (suspend_info.reason) {
+	    case SUSPEND_REASON_GCING:
+		gc_assert(full_suspend_possible);
+		gc_abandon_pending(th);
+		th->state = STATE_SUSPENDED;
+		break;
+	    case SUSPEND_REASON_GC:
+		th->state = full_suspend_possible ?
+		    STATE_SUSPENDED : STATE_SUSPENDED_BRIEFLY;
+		gc_abandon_pending(th);
+		break;
+	    case SUSPEND_REASON_INTERRUPT:
+		th->state = STATE_SUSPENDED_BRIEFLY;
+		break;
+	    case SUSPEND_REASON_NONE:
+		break;
+	    }
+	}
+	unlock_suspend_info(__FILE__,__LINE__);
+    }
+}
+
+/* Get the thread into appropriate suspend state if it's in
+   appropriate blocker state; return true if it left the blocker
+   state.
+   
+   Supposed to be used either by the thread itself or by
+   gc_stop_the_world() on other threads.
+
+   Requires state_lock to be taken.
+ */
+static inline
+boolean gc_adjust_thread_state(struct thread *th)
+{
+    struct thread* self = arch_os_get_current_thread();
+    boolean external = (self != th);
+    boolean full_suspend_possible = (SymbolTlValue(GC_INHIBIT,th)!=T);
+    boolean result = 0;
+
+    /* External state adjustment from blocker to suspend requires
+       thread being in foreign call */
+    if (external) {
+	if (th->gc_safepoint_context == (void*)-1)
+	    return 0;
+	if (!th->csp_around_foreign_call)
+	    return 0;
+    }
+
+    /* For X86_MEMORY_MODEL variant */
+    COMPILER_BARRIER;
+    if (external && (th->gc_safepoint_context == (void*)-1))
+	return 0;
+    COMPILER_BARRIER;
+
+    switch (th->state) {
+    case STATE_PHASE1_BLOCKER:
+	result = 1;
+	th->state = full_suspend_possible ?
+	    STATE_SUSPENDED : STATE_SUSPENDED_BRIEFLY;
+	if (full_suspend_possible) {
+	    SetSymbolValue(STOP_FOR_GC_PENDING,NIL,th);
+	} else {
+	    SetSymbolValue(STOP_FOR_GC_PENDING,T,th);
+	}
+	gc_abandon_pending(th);
+	break;
+    case STATE_PHASE2_BLOCKER:
+	result = full_suspend_possible;
+	if (result) {
+	    th->state = STATE_SUSPENDED;
+	    SetSymbolValue(STOP_FOR_GC_PENDING,NIL,th);
+	} else {
+	    SetSymbolValue(STOP_FOR_GC_PENDING,T,th);
+	}
+	gc_abandon_pending(th);
+	break;
+    case STATE_INTERRUPT_BLOCKER:
+	th->state = STATE_SUSPENDED_BRIEFLY;
+	result = 1;
+	break;
+    case STATE_RUNNING:
+	gc_suspend_willfully(th);
+	break;
+    }
+    return result;
+}
+
+#if defined(LISP_FEATURE_X86)||defined(LISP_FEATURE_X86_64)
+#define X86_MEMORY_MODEL
+#endif
+
+
+/* Applies GC wake if appropriate. */
+static inline
+void gc_wake_wakeable()
+{
+    int gcwake = 0;
+    lock_suspend_info(__FILE__,__LINE__);
+    gcwake = maybe_wake_gc_begin();
+    unlock_suspend_info(__FILE__,__LINE__);
+    if (gcwake)
+	maybe_wake_gc_end(gcwake);
+}
+
+
+/* If thread is in suspend state, wait for its state change.
+   Called in target thread.
+
+   @arg wakep - whether to check `blockers' counter and wake GC
+   enqueued on this thread
+
+   @return whether we had to wait
+*/
+static inline
+boolean gc_accept_thread_state(boolean wakep)
+{
+    struct thread* self = arch_os_get_current_thread();
+    lispobj oldstate = self->state;
+    boolean waitp = 0;
+
+    switch (oldstate) {
+    case STATE_SUSPENDED:
+	waitp = 1;
+	break;
+    case STATE_SUSPENDED_BRIEFLY:
+	waitp = 1;
+	break;
+    }
+    if (waitp) {
+	if (wakep) {
+	    /* 1. wakep requires waitp now (only suspend states are
+	       waking -- when replacing blocker states)
+	       2. we unlock around GC wake to lower contention for state_lock
+	       (not needed after phase 2, btw)
+	    */
+	    
+	    pthread_mutex_unlock(self->state_lock);
+	    gc_wake_wakeable();
+	    pthread_mutex_lock(self->state_lock);
+	}
+	volatile char scrubbing[1024];
+	/* We may be calling SSE routine here, hence the alignment  */
+	fast_bzero_pointer(PTR_ALIGN_UP(&scrubbing,64), sizeof(scrubbing)-64);
+	/* Wait while GC starts the thread.  As we unlock before
+	   waking GC, it could have happened already.. */
+	while (self->state == oldstate)
+	    pthread_cond_wait(self->state_cond, self->state_lock);
+    }
+    return waitp;
+}
+
+#undef DELAY_GC_PAGE_UNMAPPING
+
+#ifdef X86_MEMORY_MODEL
+
+static inline void store_to_gc_page() {
+    *(((volatile unsigned char*)(intptr_t)GC_SAFEPOINT_PAGE_ADDR)+
+      /* Offset inside GC page, entirely arbitrary w.r.t correctness,
+	 but w.r.t performance: 1. constant for each thread, 2. not
+	 commonly shared between threads (cache-line scale) */
+      ((((u64)(arch_os_get_current_thread()))>>16)&
+       (BACKEND_PAGE_BYTES-1)&(~127))) = 0;
+}
+
+static inline int load_with_dep_on_gc_page(int* data) {
+    volatile int *vdata = (volatile int*)data;
+    /* Dereference the same address as above, introducing data
+       dependency on the previous store. X86 rules + postulated TLB
+       coherency = ordering. */
+    return
+	vdata [
+	       *(((volatile unsigned char*)(intptr_t)GC_SAFEPOINT_PAGE_ADDR)+
+		 ((((u64)(arch_os_get_current_thread()))>>16)&
+		  (BACKEND_PAGE_BYTES-1)&(~127)))];
+}
+
+#define COMPILER_SFENCE do { asm volatile (""); } while(0)
+
+void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
+{
+    struct thread* self = arch_os_get_current_thread();
+    *(volatile lispobj**)&self->pc_around_foreign_call = pc;
+
+#ifdef DELAY_GC_PAGE_UNMAPPING
+    *(volatile lispobj**)&self->csp_around_foreign_call = csp;
+    __sync_synchronize();
+    if (!suspend_info.suspend)
+	goto finish;
+#else
+    /* avoid trap */
+    if (suspend_info.suspend)
+	goto full_locking;
+
+    COMPILER_SFENCE;
+
+    *(volatile lispobj**)&self->csp_around_foreign_call =
+	(lispobj*)csp;
+
+    COMPILER_SFENCE;
+
+    store_to_gc_page();
+#endif
+	
+    if (self->state == STATE_PHASE2_BLOCKER &&
+	SymbolTlValue(GC_INHIBIT,self)==T)
+	goto finish;
+
+ full_locking:;
+    {
+	boolean maybe_wake = 0;
+
+	PUSH_ERRNO;
+	pthread_mutex_lock(self->state_lock);
+	self->csp_around_foreign_call = csp;
+	self->pc_around_foreign_call = pc;
+	maybe_wake = gc_adjust_thread_state(self);
+	pthread_mutex_unlock(self->state_lock);
+
+	if (maybe_wake)
+	    gc_wake_wakeable();
+	POP_ERRNO;
+    }
+ finish:;
+    /* Proceed to foreign code, while possibly being in suspended
+       state (!) or phase2-blocker. Foreign code shouldn't touch memory
+       movable by GC; when foreign call is exited, it should wait for
+       thread state change if it's suspended (briefly or fully) 
+    */
+}
+
+void gc_leave_foreign_call()
+{
+   struct thread* self = arch_os_get_current_thread();
+
+   /* Interrupt signal pending */
+   if (self->os_thread->pending_signal_set)
+       goto full_locking;
+
+   /* Check if GC already in progress. */
+   if (*(volatile int *)(&suspend_info.suspend))
+       goto full_locking;
+
+   /* Using ctx field as a flag. GC which is in progress won't notice,
+      but gc_stop_the_world will now enqueue after this thread as
+      gc-blocker. */
+   
+   self->gc_safepoint_context = (void*)-1;
+
+   COMPILER_SFENCE;
+
+   store_to_gc_page();
+
+   COMPILER_SFENCE;
+   
+   if (load_with_dep_on_gc_page(&suspend_info.suspend))
+       goto full_locking;
+
+   COMPILER_SFENCE;
+
+   self->csp_around_foreign_call = NULL;
+
+   COMPILER_SFENCE;
+   
+   self->gc_safepoint_context = NULL;
+   
+   COMPILER_SFENCE;
+
+   return;
+
+ full_locking:
+   {
+       int maybe_wake = 0;
+
+       CONTEXT w32ctx = {.Ebp = (DWORD)(intptr_t)__builtin_frame_address(1)};
+       os_context_t ctx = {.win32_context = &w32ctx,
+			   .sigmask = self->os_thread->blocked_signal_set};
+
+       self->gc_safepoint_context = NULL; /* Temporary protection removed */
+       COMPILER_BARRIER;
+
+       if (self->state == STATE_PHASE2_BLOCKER &&
+	   SymbolTlValue(GC_INHIBIT,self)==T) {
+	   /* if we run foreign call without GCing, and phase 2 is
+	      enqueued after this thread, we are safe */
+	   self->csp_around_foreign_call = NULL;
+	   self->pc_around_foreign_call = NULL;
+	   return;
+       }
+
+       PUSH_ERRNO;
+       pthread_mutex_lock(self->state_lock);
+       gc_accept_thread_state(gc_adjust_thread_state(self));
+       /* Then unpublish context data */
+       self->csp_around_foreign_call = NULL;
+       self->pc_around_foreign_call = NULL;
+       self->gc_safepoint_context = NULL;
+       pthread_mutex_unlock(self->state_lock);
+       while (check_pending_gc()||check_pending_interrupts(&ctx));
+       POP_ERRNO;
+   }
+}
+
+
+#else
+
+void gc_enter_foreign_call(lispobj* csp, lispobj* pc)
+{
+    struct thread* self = arch_os_get_current_thread();
+    boolean maybe_wake = 0;
+
+    /* Shorthand: when GC phase 2 is enqueued on this thread, there's
+       no one to modify (or concurrently examine) its state.
+       Typical example are foreign calls in WITHOUT-GCING body.
+     */
+    if (self->state == STATE_PHASE2_BLOCKER &&
+	SymbolTlValue(GC_INHIBIT,self)==T) {
+	self->csp_around_foreign_call = csp;
+	self->pc_around_foreign_call = pc;
+	goto finish;
+    }
+    
+    pthread_mutex_lock(self->state_lock);
+    self->csp_around_foreign_call = csp;
+    self->pc_around_foreign_call = pc;
+    maybe_wake = gc_adjust_thread_state(self);
+    pthread_mutex_unlock(self->state_lock);
+
+    if (maybe_wake)
+	gc_wake_wakeable();
+    
+finish:;
+    /* Proceed to foreign code, while possibly being in suspended
+       state (!) or phase2-blocker. Foreign code shouldn't touch memory
+       movable by GC; when foreign call is exited, it should wait for
+       thread state change if it's suspended (briefly or fully) 
+    */
+}
+
+void gc_leave_foreign_call()
+{
+    struct thread* self = arch_os_get_current_thread();
+
+    boolean waitp = 0;
+
+    /* shorthand: no locking (and no pending interrupt/gc check)
+       when GC phase 2 is enqueued after this thread. */
+    if (self->state == STATE_PHASE2_BLOCKER &&
+	SymbolTlValue(GC_INHIBIT,self)==T) {
+	self->csp_around_foreign_call = NULL;
+	self->pc_around_foreign_call = NULL;
+	return;
+    }
+    pthread_mutex_lock(self->state_lock);
+    /* when foreing csp is published, we are never waited upon for
+       something that can be satisfied on foreign call exit.
+       That's why there's no gc_wake_wakeable here. */
+    gc_accept_thread_state(0);
+
+    /* Then unpublish context data */
+    self->csp_around_foreign_call = NULL;
+    self->pc_around_foreign_call = NULL;
+
+    /* unlock is a memory barrier (release semantics) */
+    pthread_mutex_unlock(self->state_lock);
+    while (check_pending_gc()||check_pending_interrupts(NULL));
+}
+
+#endif
+
+static pthread_mutex_t auto_gc_mutex = PTHREAD_MUTEX_INITIALIZER;
+static struct thread* auto_gc_thread_id;
+
+/* gc_select_auto_gc_thread() is an experimental performance hack,
+   allowing only one thread with auto-triggered GC_PENDING to continue
+   into Lisp and do GC.
+
+   Thread selection is valid until the end of gc_stop_the_world where
+   it's reset and auto_gc_mutex is unlocked. */
+
+static boolean gc_select_auto_gc_thread()
+{
+    struct thread *th = arch_os_get_current_thread();
+    if (!pthread_mutex_trylock(&auto_gc_mutex)) {
+	auto_gc_thread_id = th;
+	return 1;
+    } else {
+	return 0;
+    }
+}
+
+
+/* Should be called by a thread (possibly) trapped on GPA or
+   receive-pending-interrupt.  */
+void gc_maybe_stop_with_context(os_context_t *ctx, boolean gc_page_access)
+{
+    struct thread* self = arch_os_get_current_thread();
+    int gcwake = 0;
+    boolean maybe_wake = 0;
+    lispobj oldstate;
+    static pthread_mutex_t runtime_gc_mutex = PTHREAD_MUTEX_INITIALIZER;
+    boolean pai = get_pseudo_atomic_interrupted(self);
+    void* oldctx = self->gc_safepoint_context;
+
+    /* we should not be here in pseudo-atomic */
+    gc_assert(!get_pseudo_atomic_atomic(self));
+    /* but could be trapping on pai */
+    if (get_pseudo_atomic_interrupted(self)) {
+	clear_pseudo_atomic_interrupted(self);
+    }
+
+ again:
+    pthread_mutex_lock(self->state_lock);
+    /* context for conservation */
+    if (!self->csp_around_foreign_call)
+	self->gc_safepoint_context = ctx;
+    else
+	self->gc_safepoint_context = NULL;
+    do {
+	/* possibly convert blocker state into suspend state */
+	maybe_wake = gc_adjust_thread_state(self);
+
+	/* maybe wake GC and wait for restart */
+	gc_accept_thread_state(maybe_wake);	
+    } while (SymbolTlValue(STOP_FOR_GC_PENDING,self)==NIL
+	     && self->state != STATE_RUNNING);
+
+    /* no context now */
+    self->gc_safepoint_context = NULL;
+
+    pthread_mutex_unlock(self->state_lock);
+    /* here our own willingness to GC (or interrupt handling) may take
+       over. NB if concurrent GC was in progress, there is already no
+       GC_PENDING. */
+    if (!self->csp_around_foreign_call) {
+	if (SymbolTlValue(GC_PENDING,self)==T && thread_may_gc()) {
+	    if (!gc_select_auto_gc_thread()) {
+		wait_for_thread_state_change(self,STATE_RUNNING);
+		goto again;
+	    }
+	}
+	while (check_pending_gc()||check_pending_interrupts(ctx));
+    }
+
+    if (SymbolTlValue(STOP_FOR_GC_PENDING,self)==NIL
+	&& self->state != STATE_RUNNING) {
+	goto again;
+    }
+    self->gc_safepoint_context = oldctx;
+}
+
+lispobj fn_by_pc(unsigned int pc)
+>>>>>>> 0cf1b0c6e33912f3848ff3b624ffffa460ce910f
 {
   lispobj obj = (lispobj)search_read_only_space((void*)pc);
   if (!obj)
@@ -1158,6 +1721,7 @@ static inline boolean set_thread_csp_access(struct thread* p, boolean writable)
    world and conducting an automatically-triggered GC.
 */
 
+<<<<<<< HEAD
 static inline boolean maybe_become_stw_initiator(boolean interrupt)
 {
     struct thread* self = arch_os_get_current_thread();
@@ -1176,11 +1740,41 @@ static inline boolean maybe_become_stw_initiator(boolean interrupt)
 	    gc_dispatcher.stopped = 0;
 	} else {
 	    odxprint(misc,"!NULL STW (%p) IN GPTRANSITION, NOT REPLACING",gc_dispatcher.th_gpunmapper);
+=======
+static inline boolean
+move_thread_state(struct thread *p,
+		  lispobj state,
+		  thread_predicate pred_nolock,
+		  thread_predicate pred_lock)
+{
+    boolean done = 0;
+    if (pred_nolock && !pred_nolock(p)) {
+	return 0;
+    }
+    pthread_mutex_lock(p->state_lock);
+    if (p->state != STATE_DEAD && (!pred_lock || pred_lock(p))) {
+	p->state = state;
+	/* If thread is in foreign call, we may take it into suspend
+	   state ourselves */
+
+	if (!gc_adjust_thread_state(p)) {
+	    /* not externally adjustable (blocker => suspend) */
+	    done = 1;
+>>>>>>> 0cf1b0c6e33912f3848ff3b624ffffa460ce910f
 	}
 	pthread_mutex_unlock(&gc_dispatcher.mx_gptransition);
 	/* Moved past unlock to make locking interval shorter */
     }
+<<<<<<< HEAD
     return gc_dispatcher.th_gpunmapper == self;
+=======
+    pthread_mutex_unlock(p->state_lock);
+    if (done)
+	pthread_cond_broadcast(p->state_cond);
+    
+    /* If done, thread is in STATE_PHASE1_BLOCKER or STATE_PHASE2_BLOCKER. */
+    return done;
+>>>>>>> 0cf1b0c6e33912f3848ff3b624ffffa460ce910f
 }
 
 
@@ -1448,6 +2042,48 @@ void thread_register_gc_trigger()
     maybe_become_stw_initiator(0);
 }
 
+<<<<<<< HEAD
+=======
+void gc_stop_the_world()
+{
+    struct thread *p, *th = arch_os_get_current_thread();
+    boolean gc_page_signalling = 1;
+    int gc_blockers = 0;
+    
+    pthread_mutex_lock(&suspend_info.world_lock);
+    suspend_info.gc_thread = th;
+    suspend_info.blockers = 0;
+    suspend_flushword(pack_suspend_data(1,SUSPEND_REASON_GC,0));
+    unmap_gc_page();
+    pthread_mutex_lock(&all_threads_lock);
+    for_each_thread(p) {
+	if (p==th) continue;
+	/* If we requested pthread_np_serialize(p->os_thread) here,
+	   the main control flow could go without
+	   __sync_synchronize(). However, current implementation of
+	   pthread_np_serialize (with SuspendThread and ResumeThread)
+	   causes problems on wine. */
+	
+	const char *oldss = dyndebug_safepoints ?
+	    get_thread_state_as_string(p) : "[?]";
+	
+	if (move_thread_state(p,STATE_PHASE1_BLOCKER,
+			      NULL,
+			      thread_needs_gc_signal)) {
+	    odxprint(safepoints,
+		     "GCer %p Phase1-blocker %p CSP %p CTX %p State %s => %s\n",
+		     th, p, p->csp_around_foreign_call, p->gc_safepoint_context,
+		     oldss, get_thread_state_as_string(p));
+	    ++gc_blockers;
+	}
+    }
+    /* We hold all_threads_lock until gc-start-the-world now, except
+       the `window of opportunity' below: terminated threads on which
+       GC is waiting are allowed to unlink and _then_ wake GC. It
+       proved to be useful and doesn't break locking protocol, unlike
+       the idea to run whole GC without all_threads_lock. */
+    pthread_mutex_unlock(&all_threads_lock);
+>>>>>>> 0cf1b0c6e33912f3848ff3b624ffffa460ce910f
 
 
 /* wake_thread(thread) -- ensure an interrupt delivery to
@@ -1459,6 +2095,7 @@ void wake_thread(struct thread * thread)
 
     wake_thread_io(thread);
 
+<<<<<<< HEAD
     if (SymbolTlValue(INTERRUPT_PENDING,thread)==T)
     	return;
 
@@ -1468,6 +2105,54 @@ void wake_thread(struct thread * thread)
     	(SymbolTlValue(STOP_FOR_GC_PENDING,thread)==T))
     	return;
 
+=======
+    /* No thread dies between this point and start-the-world; it is
+       enforced by gc_enter_foreign_call / gc_leave_foreign_call
+       sequence in new_thread_trampoline (if it happens after phase 1,
+       it will wait; if it happens before the `window', GCing thread
+       wait for dying thread). */
+    pthread_mutex_lock(&all_threads_lock);
+    for_each_thread(p) {
+	if (p==th) continue;
+	void * oldctx = p->gc_safepoint_context;
+	const char *oldss = dyndebug_safepoints ?
+	    get_thread_state_as_string(p) : "[?]";
+	
+	if (move_thread_state(p,STATE_PHASE2_BLOCKER,
+			      NULL,
+			      thread_blocks_gcing)) {
+	    odxprint(safepoints,
+		     "GCer %p Phase2-blocker %p CSP %p CTX %p [was %p] "
+		     "INH %s State %s => %s\n",
+		     th, p, p->csp_around_foreign_call, p->gc_safepoint_context,
+		     oldctx, t_nil_str(SymbolValue(GC_INHIBIT,p)),
+		     oldss, get_thread_state_as_string(p));
+	    ++ gc_blockers;
+	}
+    }
+    gc_roll_or_wait(gc_blockers, 2, SUSPEND_REASON_GC, gc_page_signalling);
+    odxprint(safepoints,
+	     "GCer %p stopped the world\n", th);
+    if (auto_gc_thread_id == th) {
+	auto_gc_thread_id = NULL;
+	pthread_mutex_unlock(&auto_gc_mutex);
+    }
+}
+
+void gc_start_the_world()
+{
+    int nthreads = 0, i = 0;
+    struct thread *p, *th = arch_os_get_current_thread();
+
+    odxprint(safepoints,
+	     "GCer %p starting the world\n", th);
+    suspend_flushword(0);
+    for_each_thread(p) {
+	if (move_thread_state(p, STATE_RUNNING,
+			      NULL, thread_live_other))
+	    ++nthreads;
+    }
+>>>>>>> 0cf1b0c6e33912f3848ff3b624ffffa460ce910f
     pthread_mutex_unlock(&all_threads_lock);
 
     if (maybe_become_stw_initiator(1) && !in_race_p()) {
@@ -1480,17 +2165,58 @@ void wake_thread(struct thread * thread)
 
 void thread_in_safety_transition(os_context_t *ctx)
 {
+<<<<<<< HEAD
     thread_edge(ctx);
 }
+=======
+    /* We want threads with pending interrupt signal (and not
+       INTERRUPT_PENDING, STOP_FOR_GC_PENDING, GC_PENDING, ...)  being
+       in a non-consing Lisp loop, to acknowledge the interrupt.
+    */
+    struct thread *p, *th = arch_os_get_current_thread();
+    boolean gc_page_signalling = 0, yielded = 0;
+    int gc_blockers = 0;
+    
+    if (pthread_mutex_trylock(&suspend_info.world_lock)) {
+	if (suspend_info.suspend)
+	    return;
+	/* We are probably waiting on GC which wakes the world */
+	pthread_mutex_lock(&suspend_info.world_lock);
+    }
+>>>>>>> 0cf1b0c6e33912f3848ff3b624ffffa460ce910f
 
 void thread_in_lisp_raised(os_context_t *ctx)
 {
     thread_pitstop(ctx);
 }
 
+<<<<<<< HEAD
 void thread_interrupted(os_context_t *ctx)
 {
     thread_pitstop(ctx);
+=======
+    pthread_mutex_lock(&all_threads_lock);
+    for_each_thread(p) {
+	if (p==th) continue;
+	const char *oldss = dyndebug_safepoints ?
+	    get_thread_state_as_string(p) : "[?]";
+	if (move_thread_state(p,STATE_INTERRUPT_BLOCKER,
+			      thread_needs_interrupt_signal,
+			      thread_needs_interrupt_signal)) {
+	    odxprint(safepoints,
+		     "INTR %p Phase1-blocker %p CSP %p CTX %p State %s => %s\n",
+		     th, p, p->csp_around_foreign_call, p->gc_safepoint_context,
+		     oldss, get_thread_state_as_string(p));
+	    ++gc_blockers;
+	    gc_page_signalling = 1;
+	}
+    }
+    if (gc_page_signalling)
+	unmap_gc_page();
+    gc_roll_or_wait(gc_blockers, 1, SUSPEND_REASON_INTERRUPT, gc_page_signalling);
+    /* we still hold all_threads_lock -- gc_start_the_world expects it */
+    gc_start_the_world();
+>>>>>>> 0cf1b0c6e33912f3848ff3b624ffffa460ce910f
 }
 
 
