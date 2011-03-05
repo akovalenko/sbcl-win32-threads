@@ -3586,6 +3586,8 @@ struct ctx_package {
     os_context_register_t pacont;
 };
 
+pthread_mutex_t sprof_suspend_lock;
+
 os_context_t* win32_suspend_get_context(pthread_t os_thread)
 {
     struct ctx_package *data = NULL;
@@ -3597,7 +3599,7 @@ os_context_t* win32_suspend_get_context(pthread_t os_thread)
      * concurrent stop-the-world may have begun at this point; we use
      * trylock, and back off (returning NULL) when this situation is
      * detected. */
-    if (pthread_mutex_trylock(&suspend_info.world_lock))
+    if (pthread_mutex_trylock(&sprof_suspend_lock))
 	return NULL;
     
     /* That one below should be replaced with unconditional lock, as
@@ -3693,7 +3695,7 @@ os_context_t* win32_suspend_get_context(pthread_t os_thread)
 error_cleanup:
     if (data)
 	free(data);
-    pthread_mutex_unlock(&suspend_info.world_lock);
+    pthread_mutex_unlock(&sprof_suspend_lock);
     return NULL;
 }
 
@@ -3717,7 +3719,7 @@ void win32_resume(void *ctx)
 
 	/* Allow GC stop-the-world and interrupt signalling to take
 	 * place */
-	pthread_mutex_unlock(&suspend_info.world_lock);
+	pthread_mutex_unlock(&sprof_suspend_lock);
     }
 }
 
