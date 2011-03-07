@@ -300,17 +300,14 @@ Lstack:
 	
 #ifndef LISP_FEATURE_SB_AUTO_FPU_SWITCH
 	fwait
-	pushl	%eax
-	pushl	%eax
-	fnstcw	(%esp)
-	popl	%eax
+	subl	$108,%esp
+	fnsave	(%esp)
+	movl	(%esp),%eax
 	andl	$0xfffff2ff,%eax
 	orl	$0x0200,%eax
 	pushl	%eax
 	fldcw	(%esp)
 	popl	%eax
-	popl 	%eax
-	emms
 	FILL_FPU_STACK
 #endif
 	
@@ -384,19 +381,11 @@ LsingleValue:
 	popl	%ebx
 	
 /* Restore the NPX state. */
-	popl	%ebp		# c-sp
 #ifndef LISP_FEATURE_SB_AUTO_FPU_SWITCH
-	fwait
-	pushl	%eax
-	fnstcw	(%esp)
-	popl	%eax
-	andl	$0xf2ff,%eax
-	orl	$0x0300,%eax
-	pushl	%eax
-	fldcw	(%esp)
-	popl	%eax
-	CLEAR_FPU_STACK
+	frstor	(%esp)
+	addl	$108,%esp
 #endif
+	popl	%ebp		# c-sp
 	movl	%edx,%eax	# c-val
 	ret
 	SIZE(GNAME(call_into_lisp))
