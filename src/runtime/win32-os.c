@@ -2063,12 +2063,7 @@ extern boolean internal_errors_enabled;
 #define IS_TRAP_EXCEPTION(exception_record, context)            \
     ((exception_record)->ExceptionCode == EXCEPTION_BREAKPOINT)
 
-#ifdef LISP_FEATURE_X86
 #define TRAP_CODE_WIDTH 1
-#else
-#define TRAP_CODE_WIDTH 0
-#endif
-
 #endif
 extern void exception_handler_wrapper();
 
@@ -2596,7 +2591,9 @@ handle_exception(EXCEPTION_RECORD *exception_record,
 
 	/* Unlike some other operating systems, Win32 leaves EIP
 	 * pointing to the breakpoint instruction. */
-        (*os_context_pc_addr(&ctx)) += TRAP_CODE_WIDTH;
+	
+	if (*(unsigned char*)(*os_context_pc_addr(&ctx))==0xCC)
+	    (*os_context_pc_addr(&ctx)) += TRAP_CODE_WIDTH;
 
 	/* Now EIP points just after the INT3 byte and aims at the
 	 * 'kind' value (eg trap_Cerror). */
