@@ -11,6 +11,12 @@ sbcl_pwd() {
         wine)
             SBCL_PWD="`winepath -w \"$(pwd)\"`"
             ;;
+	msys)
+	    SBCL_PWD=$(pwd -W)
+	    ;;
+	*)
+	    SBCL_PWD=$(pwd)
+	    ;;
     esac
     export SBCL_PWD
 }
