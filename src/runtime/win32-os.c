@@ -1195,7 +1195,12 @@ void fff_foreign_callback( void *v_info_ptr)
 
 void fff_generic_callback(lispobj arg0,lispobj arg1, lispobj arg2)
 {
+#ifdef LISP_FEATURE_X86_64
+    struct thread* th = (pthread_np_notice_thread(),
+			 arch_os_get_current_thread());
+#else
     struct thread* th = arch_os_get_current_thread();
+#endif
     pthread_t companion_fiber;
     if (th) {
 	BEGIN_GC_UNSAFE_CODE;
@@ -3668,7 +3673,7 @@ os_context_t* win32_suspend_get_context(pthread_t os_thread)
 	 * predicates) */
 	*os_context_sp_addr(&data->ctx) = (os_context_register_t)csp;
     } else {
-	os_vm_address_t fp = *os_context_fp_addr(&data->ctx);
+	os_vm_address_t fp = *(void**)os_context_fp_addr(&data->ctx);
 
 	/* Fix low-level pseudo-atomic representation: traverse frame
 	 * pointer chain and fix first misaligned address we meet,

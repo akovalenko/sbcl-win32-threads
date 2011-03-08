@@ -436,22 +436,23 @@
     (let* ((segment (make-segment))
            (rax rax-tn)
            (rcx rcx-tn)
-           (rdi rdi-tn)
-           (rsi rsi-tn)
+           #!-win32 (rdi rdi-tn)
+           #!-win32 (rsi rsi-tn)
            (rdx rdx-tn)
            (rbp rbp-tn)
            (rsp rsp-tn)
+           (r8 r8-tn)
            (xmm0 float0-tn)
            ([rsp] (make-ea :qword :base rsp :disp 0))
            ;; How many arguments have been copied
            (arg-count 0)
            ;; How many arguments have been copied from the stack
-           (stack-argument-count 0)
+           (stack-argument-count  #!-win32 0 #!+win32 4)
            (gprs (mapcar (make-tn-maker 'any-reg) *c-call-register-arg-offsets*))
            (fprs (mapcar (make-tn-maker 'double-reg)
                          ;; Only 8 first XMM registers are used for
                          ;; passing arguments
-                         (subseq *float-regs* 0 8))))
+                         (subseq *float-regs* 0 #!-win32 8 #!+win32 4))))
       (assemble (segment)
         ;; Make room on the stack for arguments.
         (inst sub rsp (* n-word-bytes (length argument-types)))
@@ -474,6 +475,7 @@
             (incf arg-count)
             (cond (integerp
                    (let ((gpr (pop gprs)))
+		     (pop fprs)
                      ;; Argument not in register, copy it from the old
                      ;; stack location to a temporary register.
                      (unless gpr
@@ -486,6 +488,7 @@
                   ((or (alien-single-float-type-p type)
                        (alien-double-float-type-p type))
                    (let ((fpr (pop fprs)))
+		     (pop gprs)
                      (cond (fpr
                             ;; Copy from float register to target location.
                             (inst movq target-tn fpr))
@@ -499,6 +502,8 @@
                   (t
                    (bug "Unknown alien floating point type: ~S" type)))))
 
+	#!-sb-gc-safepoint
+	(progn
         ;; arg0 to FUNCALL3 (function)
         ;;
         ;; Indirect the access to ENTER-ALIEN-CALLBACK through
@@ -506,29 +511,50 @@
         ;; to ensure it'll work even if the GC moves ENTER-ALIEN-CALLBACK.
         ;; Skip any SB-THREAD TLS magic, since we don't expect anyone
         ;; to rebind the variable. -- JES, 2006-01-01
-        (inst mov rdi (+ nil-value (static-symbol-offset
-                                    'sb!alien::*enter-alien-callback*)))
-        (loadw rdi rdi symbol-value-slot other-pointer-lowtag)
+	  (inst mov rdi (+ nil-value (static-symbol-offset
+				      'sb!alien::*enter-alien-callback*)))
+	  (loadw rdi rdi symbol-value-slot other-pointer-lowtag)
         ;; arg0 to ENTER-ALIEN-CALLBACK (trampoline index)
-        (inst mov rsi (fixnumize index))
+	  (inst mov rsi (fixnumize index))
         ;; arg1 to ENTER-ALIEN-CALLBACK (pointer to argument vector)
-        (inst mov rdx rsp)
+	  (inst mov rdx rsp)
         ;; add room on stack for return value
-        (inst sub rsp 8)
+	  (inst sub rsp 8)
         ;; arg2 to ENTER-ALIEN-CALLBACK (pointer to return value)
-        (inst mov rcx rsp)
+	  (inst mov rcx rsp)
 
         ;; Make new frame
-        (inst push rbp)
-        (inst mov  rbp rsp)
+	  (inst push rbp)
+	  (inst mov  rbp rsp)
 
         ;; Call
-        (inst mov  rax (foreign-symbol-address "funcall3"))
-        (inst call rax)
+	  (inst mov  rax (foreign-symbol-address "funcall3"))
+	  (inst call rax)
 
         ;; Back! Restore frame
-        (inst mov rsp rbp)
-        (inst pop rbp)
+	  (inst mov rsp rbp)
+	  (inst pop rbp))
+	#!+sb-gc-safepoint
+	(progn
+        ;; arg0 to ENTER-ALIEN-CALLBACK (trampoline index)
+	  (inst mov #!-win32 rdi #!+win32 rcx (fixnumize index))
+        ;; arg1 to ENTER-ALIEN-CALLBACK (pointer to argument vector)
+	  (inst mov #!-win32 rsi #!+win32 rdx rsp)
+        ;; add room on stack for return value
+	  (inst sub rsp 8)
+        ;; arg2 to ENTER-ALIEN-CALLBACK (pointer to return value)
+	  (inst mov #!-win32 rdx #!+win32 r8 rsp)
+        ;; Make new frame
+	  (inst push rbp)
+	  (inst mov  rbp rsp)
+	  #!+win32 (inst sub rsp #x20)
+	  #!+win32 (inst and rsp #x-20)
+        ;; Call
+	  (inst mov  rax (foreign-symbol-address "fff_generic_callback"))
+	  (inst call rax)
+        ;; Back! Restore frame
+	  (inst mov rsp rbp)
+	  (inst pop rbp))
 
         ;; Result now on top of stack, put it in the right register
         (cond

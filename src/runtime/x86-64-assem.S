@@ -188,6 +188,10 @@ Lstack:
 	push	%r13    # the lisp function returns
 	push	%r14    #
 	push	%r15    #
+	sub	$16,%rsp
+	movups	%xmm6,(%rsp)
+	sub	$16,%rsp
+	movups	%xmm7,(%rsp)
 
 	mov	%rsp,%rbx	# remember current stack
 	push	%rbx		# Save entry stack on (maybe) new stack.
@@ -249,6 +253,10 @@ LsingleValue:
 	pop	%rsp		# c-sp
 
 /* Restore C regs */
+	movups	(%rsp),%xmm7
+	add	$16,%rsp
+	movups	(%rsp),%xmm6
+	add	$16,%rsp
 	pop	%r15
 	pop	%r14
 	pop	%r13
