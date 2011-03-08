@@ -22,6 +22,8 @@
 #include <pthread.h>
 #endif
 
+#include <stdint.h>
+
 #if defined(LISP_FEATURE_SB_THREAD)
 #define thread_self() pthread_self()
 #define thread_kill pthread_kill
