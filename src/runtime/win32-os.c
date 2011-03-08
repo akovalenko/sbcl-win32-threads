@@ -2425,14 +2425,15 @@ handle_exception(EXCEPTION_RECORD *exception_record,
     struct thread* self = arch_os_get_current_thread();
     odxprint(seh,
 	     "SEH: rec %p, frame %p, ctxptr %p, disp %p, rip %p, fault %p\n"
-	     "... thread %p, code %p, rcx %p\n\n",
+	     "... thread %p, code %p, rcx %p, fp-tags %p\n\n",
 	     exception_record, exception_frame,
 	     context, dispatcher_context,
 	     voidreg(context,ip),
 	     fault_address,
 	     self,
 	     (void*)(intptr_t)code,
-	     voidreg(context,cx));
+	     voidreg(context,cx),
+	     context->FloatSave.TagWord);
     
 #ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
     int contextual_fpu_state = self ? self->in_lisp_fpu_mode : 0;
