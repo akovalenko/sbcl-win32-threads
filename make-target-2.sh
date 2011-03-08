@@ -30,13 +30,13 @@ export LANG LC_ALL
 # without trying to tell you about what it's doing. So unless it hangs
 # for much longer than that, don't worry, it's likely to be normal.
 echo //doing warm init - compilation phase
-$SBCL_XRUN ./src/runtime/$SBCL_RUNTIME_EXECUTABLE \
+$SBCL_XRUN ./src/runtime/${SBCL_RUNTIME_EXECUTABLE:-"sbcl"} \
 --core output/cold-sbcl.core \
 --dynamic-space-size 500 \
 --lose-on-corruption \
 --no-sysinit --no-userinit < make-target-2.lisp
 echo //doing warm init - load and dump phase
-$SBCL_XRUN ./src/runtime/$SBCL_RUNTIME_EXECUTABLE \
+$SBCL_XRUN ./src/runtime/${SBCL_RUNTIME_EXECUTABLE:-"sbcl"} \
 --core output/cold-sbcl.core \
 --dynamic-space-size 500 \
 --lose-on-corruption \

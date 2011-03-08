@@ -17,6 +17,7 @@
 #include <winsock2.h>
 
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <sys/types.h>
 #include <string.h>

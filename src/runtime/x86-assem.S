@@ -170,17 +170,16 @@ GNAME(call_into_c):
    Thus gc_enter_foreign_call takes two args: top of stack and return
    PC to preserve. */
 	
-	movl 	%ecx,%esi
 	movl	SBCL_THREAD_BASE_EA,%edi
 	popl	%ebx
 	movl	%esp,THREAD_SAVED_CSP_OFFSET(%edi)
 	movl	%ebx,THREAD_PC_AROUND_FOREIGN_CALL_OFFSET(%edi)
 	/* foreign call, preserving ESI, EDI, and EBX */
-	call	*%esi
+	call	*%ecx
 	
-	xor	%esi,%esi
-	movl	%esi,THREAD_SAVED_CSP_OFFSET(%edi)
-	movl	%esi,THREAD_PC_AROUND_FOREIGN_CALL_OFFSET(%edi)
+	xor	%ecx,%ecx
+	movl	%ecx,THREAD_SAVED_CSP_OFFSET(%edi)
+	movl	%ecx,THREAD_PC_AROUND_FOREIGN_CALL_OFFSET(%edi)
 	FILL_FPU_STACK
 	jmp	*%ebx
 
@@ -232,15 +231,14 @@ GNAME(call_into_c_fp_result):
 /* Setup the NPX for C */
 	CLEAR_FPU_STACK
 #if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
-	movl 	%ecx,%esi
 	movl	SBCL_THREAD_BASE_EA,%edi
 	popl	%ebx
 	movl	%esp,THREAD_SAVED_CSP_OFFSET(%edi)
 	movl	%ebx,THREAD_PC_AROUND_FOREIGN_CALL_OFFSET(%edi)
-	call	*%esi /* foreign call, preserving ESI, EDI, and EBX */
-	xor	%esi,%esi
-	movl	%esi,THREAD_SAVED_CSP_OFFSET(%edi)
-	movl	%esi,THREAD_PC_AROUND_FOREIGN_CALL_OFFSET(%edi)
+	call	*%ecx /* foreign call, preserving ESI, EDI, and EBX */
+	xor	%ecx,%ecx
+	movl	%ecx,THREAD_SAVED_CSP_OFFSET(%edi)
+	movl	%ecx,THREAD_PC_AROUND_FOREIGN_CALL_OFFSET(%edi)
 	fldz;fldz;fldz;fldz;fldz;fldz;fldz; /* 7 elements */
 	fxch	%st(7)			    /* and topmost one */
 #ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
@@ -300,17 +298,14 @@ Lstack:
 	
 #ifndef LISP_FEATURE_SB_AUTO_FPU_SWITCH
 	fwait
-	pushl	%eax
-	pushl	%eax
-	fnstcw	(%esp)
-	popl	%eax
+	subl	$112,%esp
+	fnsave	(%esp)
+	movl	(%esp),%eax
 	andl	$0xfffff2ff,%eax
 	orl	$0x0200,%eax
 	pushl	%eax
 	fldcw	(%esp)
 	popl	%eax
-	popl 	%eax
-	emms
 	FILL_FPU_STACK
 #endif
 	
@@ -347,7 +342,20 @@ Lstack:
 	movl	8(%ebx),%esi	# arg2
 Ldone:	
 	/* Registers eax, ecx, edx, edi, and esi are now live. */
-
+	
+#ifdef LISP_FEATURE_WIN32
+	/* Establish an SEH frame. */
+	/* Save binding stack pointer */
+	subl $4, %esp
+	pushl %eax
+	movl SBCL_THREAD_BASE_EA, %eax
+	movl THREAD_BINDING_STACK_POINTER_OFFSET(%eax), %eax
+	movl %eax, 4(%esp)
+	popl %eax
+	pushl	$GNAME(exception_handler_wrapper)
+	pushl	%fs:0
+	movl	%esp, %fs:0
+#endif
 	/* Alloc new frame. */
 	push	%ebp            # Dummy for return address
 	push	%ebp		# fp in save location S1
@@ -374,6 +382,13 @@ GNAME(call_into_lisp_return_site):
 	mov	%ebx, %esp
 LsingleValue:
 /* A singled value function returns here */
+#ifdef LISP_FEATURE_WIN32
+	/* Remove our SEH frame. */
+	mov	%fs:0,%esp
+	popl	%fs:0
+	add	$8, %esp
+#endif
+
 
 /* Restore the stack, in case there was a stack change. */
 	popl	%esp		# c-sp
@@ -384,19 +399,11 @@ LsingleValue:
 	popl	%ebx
 	
 /* Restore the NPX state. */
-	popl	%ebp		# c-sp
 #ifndef LISP_FEATURE_SB_AUTO_FPU_SWITCH
-	fwait
-	pushl	%eax
-	fnstcw	(%esp)
-	popl	%eax
-	andl	$0xf2ff,%eax
-	orl	$0x0300,%eax
-	pushl	%eax
-	fldcw	(%esp)
-	popl	%eax
-	CLEAR_FPU_STACK
+	frstor	(%esp)
+	addl	$112,%esp
 #endif
+	popl	%ebp		# c-sp
 	movl	%edx,%eax	# c-val
 	ret
 	SIZE(GNAME(call_into_lisp))
@@ -763,7 +770,7 @@ GNAME(exception_handler_wrapper):
 	movl	$1,%eax
 	ret
 1:
-	cld
+	
 	/* Context layout is: */
 	/* 7 dwords before FSA. (0x1c) */
 	/* 8 dwords and 0x50 bytes in the FSA. (0x70/0x8c) */
@@ -1045,6 +1052,7 @@ Lend_base:
 	TYPE(GNAME(uwp_seh_handler_gate))
 	
 GNAME(uwp_seh_handler_gate):
+	cld
 	movl 	4(%esp), %eax
 	testb 	$6, 4(%eax)
 	jnz 	Lunwinding

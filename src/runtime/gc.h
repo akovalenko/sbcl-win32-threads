@@ -17,6 +17,7 @@
 #define _GC_H_
 
 #include "sbcl.h"
+#include <stdint.h>
 
 #ifdef LISP_FEATURE_GENCGC
 #define PAGE_BYTES GENCGC_PAGE_BYTES
