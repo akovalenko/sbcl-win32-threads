@@ -441,7 +441,7 @@
            (rdx rdx-tn)
            (rbp rbp-tn)
            (rsp rsp-tn)
-           (r8 r8-tn)
+           #!+win32 (r8 r8-tn)
            (xmm0 float0-tn)
            ([rsp] (make-ea :qword :base rsp :disp 0))
            ;; How many arguments have been copied
