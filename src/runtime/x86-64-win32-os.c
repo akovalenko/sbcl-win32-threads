@@ -64,9 +64,9 @@ int arch_os_thread_init(struct thread *thread)
         }
 
         cur_stack_start = stack_memory.AllocationBase
-	    /* OS provides its own guard page at the stack start,
-	       and we have ours. Do you really want to see how they interact? */
-	    + os_vm_page_size;
+            /* OS provides its own guard page at the stack start,
+               and we have ours. Do you really want to see how they interact? */
+            + os_vm_page_size;
 
         /* We use top_exception_frame rather than cur_stack_end to
          * elide the last few (boring) stack entries at the bottom of
@@ -91,8 +91,8 @@ int arch_os_thread_init(struct thread *thread)
 #ifdef LISP_FEATURE_SB_THREAD
     pthread_setspecific(specials,thread);
     thread->csp_around_foreign_call =
-	PTR_ALIGN_UP((void*)(((lispobj*)thread) + TLS_SIZE), os_vm_page_size) +
-	((void*)thread - PTR_ALIGN_DOWN((void*)thread,os_vm_page_size));
+        PTR_ALIGN_UP((void*)(((lispobj*)thread) + TLS_SIZE), os_vm_page_size) +
+        ((void*)thread - PTR_ALIGN_DOWN((void*)thread,os_vm_page_size));
 #endif
     return 1;
 }
@@ -116,26 +116,26 @@ os_context_register_t *
 os_context_register_addr(os_context_t *context, int offset)
 {
     static const size_t offsets[16] = {
-	offsetof(CONTEXT,Rax),
-	offsetof(CONTEXT,Rcx),
-	offsetof(CONTEXT,Rdx),
-	offsetof(CONTEXT,Rbx),
-	offsetof(CONTEXT,Rsp),
-	offsetof(CONTEXT,Rbp),
-	offsetof(CONTEXT,Rsi),
-	offsetof(CONTEXT,Rdi),
-	offsetof(CONTEXT,R8),
-	offsetof(CONTEXT,R9),
-	offsetof(CONTEXT,R10),
-	offsetof(CONTEXT,R11),
-	offsetof(CONTEXT,R12),
-	offsetof(CONTEXT,R13),
-	offsetof(CONTEXT,R14),
-	offsetof(CONTEXT,R15),
+        offsetof(CONTEXT,Rax),
+        offsetof(CONTEXT,Rcx),
+        offsetof(CONTEXT,Rdx),
+        offsetof(CONTEXT,Rbx),
+        offsetof(CONTEXT,Rsp),
+        offsetof(CONTEXT,Rbp),
+        offsetof(CONTEXT,Rsi),
+        offsetof(CONTEXT,Rdi),
+        offsetof(CONTEXT,R8),
+        offsetof(CONTEXT,R9),
+        offsetof(CONTEXT,R10),
+        offsetof(CONTEXT,R11),
+        offsetof(CONTEXT,R12),
+        offsetof(CONTEXT,R13),
+        offsetof(CONTEXT,R14),
+        offsetof(CONTEXT,R15),
     };
     return
-	(offset >= 0 && offset < 32) ?
-	((void*)(context->win32_context)) + offsets[offset>>1]	: 0;
+        (offset >= 0 && offset < 32) ?
+        ((void*)(context->win32_context)) + offsets[offset>>1]  : 0;
 }
 
 os_context_register_t *

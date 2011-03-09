@@ -379,8 +379,8 @@
 ;; targets.  Hence the following disaster.
 
 ;; Kovalenko: I had to reimplement it in x86-assem.S anyway, in order
-;; to satisfy DEP restriction on SEH handler location. 
-;; 
+;; to satisfy DEP restriction on SEH handler location.
+;;
 ;; #!+#.(cl:if (cl:member sb-assembling cl:*features*) win32 '(or))
 #|
 (define-assembly-routine

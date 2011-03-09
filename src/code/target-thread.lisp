@@ -1104,12 +1104,12 @@ return DEFAULT if given or else signal JOIN-THREAD-ERROR."
       ;; here and now, ahead of us. The only thing it could do is
       ;; setting *INTERRUPT-PENDING* to T.  Then why not do it
       ;; ourselves?
-      ;; 
+      ;;
       ;; POSIX systems are another story: deferrables, blocked signal
       ;; mask and GC interact on SBCL-for-UNIX in many subtle
       ;; ways. Win32, for now, won't call the signal handler when
       ;; deferrables are unblocked, and GC on Win32 doesn't block
-      ;; deferrables when pending. 
+      ;; deferrables when pending.
       (setf *interrupt-pending* t))
     (when interruption
       (invoke-interruption interruption))))
@@ -1185,45 +1185,45 @@ SB-EXT:QUIT - the usual cleanup forms will be evaluated"
     ;; area...
     (loop
       (with-all-threads-lock
-	(if (thread-alive-p thread)
-	    (let* (#!-sb-gc-safepoint (epoch sb!kernel::*gc-epoch*)
-		   (offset (* sb!vm:n-word-bytes
-			      (sb!vm::symbol-tls-index symbol)))
-		   #!-sb-gc-safepoint
-		   (tl-val (sap-ref-word (%thread-sap thread) offset))
-		   #!+sb-gc-safepoint
-		   (tl-pin (%make-lisp-obj (sap-ref-word (%thread-sap thread) offset)))
-		   #!+sb-gc-safepoint
-		   (tl-val (get-lisp-obj-address tl-pin)))
-	      (with-pinned-objects (#!+sb-gc-safepoint tl-pin)
-		(cond ((zerop offset)
-		       (return (values nil :no-tls-value)))
-		      ((or (eql tl-val sb!vm:no-tls-value-marker-widetag)
-			   (eql tl-val sb!vm:unbound-marker-widetag))
-		       (return (values nil :unbound-in-thread)))
-		      (t
-		       (multiple-value-bind (obj ok) (make-lisp-obj tl-val nil)
-			 ;; The value we constructed may be invalid if a GC has
-			 ;; occurred. That is harmless, though, since OBJ is
-			 ;; either in a register or on stack, and we are
-			 ;; conservative on both on GENCGC -- so a bogus object
-			 ;; is safe here as long as we don't return it. If we
-			 ;; ever port threads to a non-conservative GC we must
-			 ;; pin the TL-VAL address before constructing OBJ, or
-			 ;; make WITH-ALL-THREADS-LOCK imply WITHOUT-GCING.
-			 ;;
-			 ;; The reason we don't just rely on TL-VAL pinning the
-			 ;; object is that the call to MAKE-LISP-OBJ may cause
-			 ;; bignum allocation, at which point TL-VAL might not
-			 ;; be alive anymore -- hence the epoch check.
-			 #!+sb-gc-safepoint (aver (eql (get-lisp-obj-address tl-pin)
-						       tl-val))
-			 (when #!+sb-gc-safepoint t
-			       #!-sb-gc-safepoint (eq epoch sb!kernel::*gc-epoch*)
-			       (if ok
-				   (return (values obj :ok))
-				   (return (values obj :invalid-tls-value)))))))))
-	    (return (values nil :thread-dead))))))
+        (if (thread-alive-p thread)
+            (let* (#!-sb-gc-safepoint (epoch sb!kernel::*gc-epoch*)
+                   (offset (* sb!vm:n-word-bytes
+                              (sb!vm::symbol-tls-index symbol)))
+                   #!-sb-gc-safepoint
+                   (tl-val (sap-ref-word (%thread-sap thread) offset))
+                   #!+sb-gc-safepoint
+                   (tl-pin (%make-lisp-obj (sap-ref-word (%thread-sap thread) offset)))
+                   #!+sb-gc-safepoint
+                   (tl-val (get-lisp-obj-address tl-pin)))
+              (with-pinned-objects (#!+sb-gc-safepoint tl-pin)
+                (cond ((zerop offset)
+                       (return (values nil :no-tls-value)))
+                      ((or (eql tl-val sb!vm:no-tls-value-marker-widetag)
+                           (eql tl-val sb!vm:unbound-marker-widetag))
+                       (return (values nil :unbound-in-thread)))
+                      (t
+                       (multiple-value-bind (obj ok) (make-lisp-obj tl-val nil)
+                         ;; The value we constructed may be invalid if a GC has
+                         ;; occurred. That is harmless, though, since OBJ is
+                         ;; either in a register or on stack, and we are
+                         ;; conservative on both on GENCGC -- so a bogus object
+                         ;; is safe here as long as we don't return it. If we
+                         ;; ever port threads to a non-conservative GC we must
+                         ;; pin the TL-VAL address before constructing OBJ, or
+                         ;; make WITH-ALL-THREADS-LOCK imply WITHOUT-GCING.
+                         ;;
+                         ;; The reason we don't just rely on TL-VAL pinning the
+                         ;; object is that the call to MAKE-LISP-OBJ may cause
+                         ;; bignum allocation, at which point TL-VAL might not
+                         ;; be alive anymore -- hence the epoch check.
+                         #!+sb-gc-safepoint (aver (eql (get-lisp-obj-address tl-pin)
+                                                       tl-val))
+                         (when #!+sb-gc-safepoint t
+                               #!-sb-gc-safepoint (eq epoch sb!kernel::*gc-epoch*)
+                               (if ok
+                                   (return (values obj :ok))
+                                   (return (values obj :invalid-tls-value)))))))))
+            (return (values nil :thread-dead))))))
 
   (defun %set-symbol-value-in-thread (symbol thread value)
     (with-pinned-objects (value)

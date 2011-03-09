@@ -19,14 +19,14 @@
      :important t :policy :fast-safe)
   (if (and (constant-lvar-p symbol) (constant-lvar-p datap))
       (let ((name (lvar-value symbol))
-	    (datap (lvar-value datap)))
-	(declare (ignorable name datap))
-	#!+sb-dynamic-core
-	(if datap
-	    (give-up-ir1-transform)
-	    `(values (sap-int (foreign-symbol-sap symbol datap)) t))
-	#!-sb-dynamic-core
-	`(values (sap-int (foreign-symbol-sap symbol datap)) nil))
+            (datap (lvar-value datap)))
+        (declare (ignorable name datap))
+        #!+sb-dynamic-core
+        (if datap
+            (give-up-ir1-transform)
+            `(values (sap-int (foreign-symbol-sap symbol datap)) t))
+        #!-sb-dynamic-core
+        `(values (sap-int (foreign-symbol-sap symbol datap)) nil))
       (give-up-ir1-transform)))
 
 (deftransform foreign-symbol-sap ((symbol &optional datap)
@@ -38,21 +38,21 @@
       `(foreign-symbol-sap symbol))
   #!+linkage-table
   (if (and (constant-lvar-p symbol)
-	   (constant-lvar-p datap))
+           (constant-lvar-p datap))
       (let ((name (lvar-value symbol))
-	    (datap (lvar-value datap)))
-	(declare (ignorable name datap))
-	#!-sb-dynamic-core
-	(if (or #+sb-xc-host t
-		(not datap)
-		(find-foreign-symbol-in-table name
-					      *static-foreign-symbols*))
-	    `(foreign-symbol-sap symbol)
-	    (give-up-ir1-transform))
-	#!+sb-dynamic-core
-	(if datap
-	    `(foreign-symbol-dataref-sap symbol)
-	    `(foreign-symbol-sap symbol)))
+            (datap (lvar-value datap)))
+        (declare (ignorable name datap))
+        #!-sb-dynamic-core
+        (if (or #+sb-xc-host t
+                (not datap)
+                (find-foreign-symbol-in-table name
+                                              *static-foreign-symbols*))
+            `(foreign-symbol-sap symbol)
+            (give-up-ir1-transform))
+        #!+sb-dynamic-core
+        (if datap
+            `(foreign-symbol-dataref-sap symbol)
+            `(foreign-symbol-sap symbol)))
       (give-up-ir1-transform)))
 
 (defknown (sap< sap<= sap= sap>= sap>)

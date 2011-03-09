@@ -510,10 +510,10 @@ profiling")
 
   (progn
     (declaim (inline win32-suspend-get-context win32-resume)
-	     (optimize (speed 3) (safety 0)))
+             (optimize (speed 3) (safety 0)))
 
     (define-alien-routine win32-suspend-get-context
-	system-area-pointer
+        system-area-pointer
       (os-thread (unsigned #.sb-vm:n-word-bits)))
 
     (define-alien-routine win32-resume void
@@ -521,16 +521,16 @@ profiling")
 
     (defmacro with-thread-context ((sap-variable thread) &body body)
       `(without-gcing
-	 (let ((,sap-variable (win32-suspend-get-context
-			       (sb-thread::thread-os-thread ,thread))))
-	   (unwind-protect ((lambda () ,@body))
-	     (win32-resume ,sap-variable)))))
+         (let ((,sap-variable (win32-suspend-get-context
+                               (sb-thread::thread-os-thread ,thread))))
+           (unwind-protect ((lambda () ,@body))
+             (win32-resume ,sap-variable)))))
     (defmacro with-os-thread-context ((sap-variable os-thread) &body body)
       `(without-gcing
-	 (let ((,sap-variable (win32-suspend-get-context ,os-thread)))
-	   (unless (sap= ,sap-variable (int-sap 0))
-	     (unwind-protect ((lambda () ,@body))
-	       (win32-resume ,sap-variable)))))))
+         (let ((,sap-variable (win32-suspend-get-context ,os-thread)))
+           (unless (sap= ,sap-variable (int-sap 0))
+             (unwind-protect ((lambda () ,@body))
+               (win32-resume ,sap-variable)))))))
 
   ;; Ensure that only one thread at a time will be doing profiling stuff.
   (defvar *profiler-lock* (sb-thread:make-mutex :name "Statistical Profiler"))
@@ -546,28 +546,28 @@ profiling")
   (defun thread-distribution-handler ()
     (declare (optimize sb-c::merge-tail-calls))
     (#-win32 when  #-win32 *sampling* #+win32 let #+win32 ((*sampling* t))
-	     #+sb-thread
-	     (let ((lock *distribution-lock*))
-	       ;; Don't flood the system with more interrupts if the last
-	       ;; set is still being delivered.
-	       (unless (sb-thread:mutex-value lock)
-		 (sb-thread::with-system-mutex (lock)
-		   (dolist (thread (profiled-threads))
-		     ;; This may occasionally fail to deliver the signal, but that
-		     ;; seems better then using kill_thread_safely with it's 1
-		     ;; second backoff.
-		     (let ((os-thread (sb-thread::thread-os-thread thread)))
-		       (when os-thread
-			 #+win32
-			 (with-os-thread-context (scp os-thread)
-			   (sigprof-handler 0 0 scp :self thread))
-			 #-win32
-			 (pthread-kill os-thread sb-unix:sigprof)))))))
-	     #-sb-thread
-	     (unix-kill 0 sb-unix:sigprof)))
+             #+sb-thread
+             (let ((lock *distribution-lock*))
+               ;; Don't flood the system with more interrupts if the last
+               ;; set is still being delivered.
+               (unless (sb-thread:mutex-value lock)
+                 (sb-thread::with-system-mutex (lock)
+                   (dolist (thread (profiled-threads))
+                     ;; This may occasionally fail to deliver the signal, but that
+                     ;; seems better then using kill_thread_safely with it's 1
+                     ;; second backoff.
+                     (let ((os-thread (sb-thread::thread-os-thread thread)))
+                       (when os-thread
+                         #+win32
+                         (with-os-thread-context (scp os-thread)
+                           (sigprof-handler 0 0 scp :self thread))
+                         #-win32
+                         (pthread-kill os-thread sb-unix:sigprof)))))))
+             #-sb-thread
+             (unix-kill 0 sb-unix:sigprof)))
 
   (defun sigprof-handler (signal code scp
-			  #+win32 &key #+win32 (self sb-thread:*current-thread*))
+                          #+win32 &key #+win32 (self sb-thread:*current-thread*))
     (declare (ignore signal code) (optimize speed (space 0))
              (disable-package-locks sb-di::x86-call-context)
              (muffle-conditions compiler-note)
@@ -597,15 +597,15 @@ profiling")
               (with-alien ((scp (* os-context-t) :local scp))
                 (let* ((pc-ptr (sb-vm:context-pc scp))
                        (fp (sb-vm::context-register scp #.sb-vm::ebp-offset))
-		       (sp (sb-vm::context-register scp #.sb-vm::esp-offset)))
+                       (sp (sb-vm::context-register scp #.sb-vm::esp-offset)))
                   ;; foreign code might not have a useful frame
                   ;; pointer in ebp/rbp, so make sure it looks
                   ;; reasonable before walking the stack
                   (unless
-		      #+win32
-		    (> 1024000 (- fp sp) 0)
-		    #-win32
-		    (sb-di::control-stack-pointer-valid-p (sb-sys:int-sap fp))
+                      #+win32
+                    (> 1024000 (- fp sp) 0)
+                    #-win32
+                    (sb-di::control-stack-pointer-valid-p (sb-sys:int-sap fp))
                     (record samples pc-ptr)
                     (return-from sigprof-handler nil))
                   (incf (samples-trace-count samples))

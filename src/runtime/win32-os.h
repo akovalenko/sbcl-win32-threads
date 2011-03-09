@@ -104,10 +104,10 @@ boolean win32_maybe_interrupt_io(void* thread);
 
 #define THREAD_ALIEN_RESERVE (64*N_WORD_BYTES)
 
-#define get_thread_alien_reserve(th)		\
-    ((void *)th->alien_stack_start		\
+#define get_thread_alien_reserve(th)            \
+    ((void *)th->alien_stack_start              \
      + ALIEN_STACK_SIZE - THREAD_ALIEN_RESERVE)
-    
+
 
 extern int dyndebug_lazy_fpu;
 extern int dyndebug_lazy_fpu_careful;
@@ -119,9 +119,9 @@ extern int dyndebug_misc;
 
 void odprintf_(const char * fmt, ...);
 
-#define odxprint(topic,fmt,...)			\
-    do if(dyndebug_##topic)			\
-	   odprintf_(fmt,__VA_ARGS__);		\
+#define odxprint(topic,fmt,...)                 \
+    do if(dyndebug_##topic)                     \
+           odprintf_(fmt,__VA_ARGS__);          \
     while(0)
 
 #define bcopy(src,dest,n) memmove(dest,src,n)
@@ -129,26 +129,26 @@ void odprintf_(const char * fmt, ...);
 #define NT_GetLastError() (*(DWORD*)(0x0D*sizeof(LPVOID)+(char*)NtCurrentTeb()))
 #define NT_SetLastError(code) do {(*(DWORD*)(0x0D*sizeof(LPVOID)+(char*)NtCurrentTeb()))=code;} while(0)
 
-#define PUSH_ERRNO				\
-    {						\
-    DWORD sbcl__lastError = NT_GetLastError();	\
-    int sbcl__lastErrno = errno;		\
-    
-#define POP_ERRNO				\
-    errno = sbcl__lastErrno;			\
-    NT_SetLastError(sbcl__lastError);		\
+#define PUSH_ERRNO                              \
+    {                                           \
+    DWORD sbcl__lastError = NT_GetLastError();  \
+    int sbcl__lastErrno = errno;                \
+
+#define POP_ERRNO                               \
+    errno = sbcl__lastErrno;                    \
+    NT_SetLastError(sbcl__lastError);           \
     }
 
-#define PSEUDO_ATOMIC_SET_HIGHLEVEL					\
-    {									\
-	boolean pap = !!						\
-	    get_pseudo_atomic_atomic(arch_os_get_current_thread());	\
-	if (!pap)							\
-	    set_pseudo_atomic_atomic(arch_os_get_current_thread());	\
+#define PSEUDO_ATOMIC_SET_HIGHLEVEL                                     \
+    {                                                                   \
+        boolean pap = !!                                                \
+            get_pseudo_atomic_atomic(arch_os_get_current_thread());     \
+        if (!pap)                                                       \
+            set_pseudo_atomic_atomic(arch_os_get_current_thread());     \
 
-#define PSEUDO_ATOMIC_FLUSH_LOWLEVEL					\
-    if (!pap)								\
-	clear_pseudo_atomic_atomic(arch_os_get_current_thread());	\
+#define PSEUDO_ATOMIC_FLUSH_LOWLEVEL                                    \
+    if (!pap)                                                           \
+        clear_pseudo_atomic_atomic(arch_os_get_current_thread());       \
     } while(0)
 
 

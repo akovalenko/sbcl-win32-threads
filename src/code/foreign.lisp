@@ -123,10 +123,10 @@ if the symbol isn't found."
   #-sb-xc-host
   (let ((addr (sap-int sap)))
     (declare (ignorable addr)
-	     #!+win32
-	     (disable-package-locks
-	      static-symbols-sorted-by-address
-	      runtime-session))
+             #!+win32
+             (disable-package-locks
+              static-symbols-sorted-by-address
+              runtime-session))
     #!+linkage-table
     (when (<= sb!vm:linkage-table-space-start
               addr
@@ -144,9 +144,9 @@ if the symbol isn't found."
       (loop for (known-addr . name-addr)
               in
               (locally (declare
-			(special
-			 static-symbols-sorted-by-address
-			 runtime-session))
+                        (special
+                         static-symbols-sorted-by-address
+                         runtime-session))
                 (if (and (boundp 'static-symbols-sorted-by-address)
                          (boundp 'runtime-session)
                          (eq runtime-session
@@ -190,12 +190,12 @@ if the symbol isn't found."
     (setf (gethash (car symbol) *static-foreign-symbols*) (cdr symbol)))
   #!+sb-dynamic-core
   (loop for table-address from sb!vm::linkage-table-space-start
-	  by sb!vm::linkage-table-entry-size
-	  and reference in sb!vm::*required-runtime-c-symbols*
-	do (setf (gethash reference *linkage-info*)
-		 (make-linkage-info :datap (cdr reference)
-		      :address table-address)))
-  #!+os-provides-dlopen  
+          by sb!vm::linkage-table-entry-size
+          and reference in sb!vm::*required-runtime-c-symbols*
+        do (setf (gethash reference *linkage-info*)
+                 (make-linkage-info :datap (cdr reference)
+                      :address table-address)))
+  #!+os-provides-dlopen
   (setf *runtime-dlhandle* (dlopen-or-lose))
   #!+os-provides-dlopen
   (setf *shared-objects* nil))

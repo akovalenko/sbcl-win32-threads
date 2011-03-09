@@ -36,7 +36,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "thread.h"             /* dynamic_values_bytes */
-#include "cpputil.h"		/* PTR_ALIGN... */
+#include "cpputil.h"            /* PTR_ALIGN... */
 
 #include "validate.h"
 
@@ -44,13 +44,13 @@ static boolean have_sse2()
 {
     int request = 1;
     int edx;
-    
+
     asm ("cpuid;"
-	 :"=d"(edx)
-	 :"a"(request)
-	 :"%ebx","%ecx");
+         :"=d"(edx)
+         :"a"(request)
+         :"%ebx","%ecx");
     return (edx & 0x04000000)!=0;
-    
+
 }
 
 void (*fast_fill_pointer)(void*addr, size_t len, lispobj pattern);
@@ -59,7 +59,7 @@ void (*fast_fill_pointer)(void*addr, size_t len, lispobj pattern);
 static void fast_fill_sse2(void*addr, size_t len, lispobj pattern)
 {
     extern void fast_wordfill_sse(void*addr, size_t len,
-				  int w1, int w2, int w3, int w4);
+                                  int w1, int w2, int w3, int w4);
     fast_wordfill_sse(addr,len,pattern,pattern,pattern,pattern);
 }
 
@@ -67,15 +67,15 @@ static void fast_fill_base(void*addr, size_t len, lispobj pattern)
 {
     lispobj* ptr = addr;
     while(len--)
-	*(ptr++) = pattern;
+        *(ptr++) = pattern;
 }
 
 static void fast_fill_detect(void*addr, size_t len, lispobj pattern)
 {
     if (have_sse2())
-	fast_fill_pointer = fast_fill_sse2;
+        fast_fill_pointer = fast_fill_sse2;
     else
-	fast_fill_pointer = fast_fill_base;
+        fast_fill_pointer = fast_fill_base;
     fast_fill_pointer(addr,len,pattern);
 }
 
@@ -108,9 +108,9 @@ int arch_os_thread_init(struct thread *thread)
         }
 
         cur_stack_start = stack_memory.AllocationBase
-	    /* OS provides its own guard page at the stack start,
-	       and we have ours. Do you really want to see how they interact? */
-	    + os_vm_page_size;
+            /* OS provides its own guard page at the stack start,
+               and we have ours. Do you really want to see how they interact? */
+            + os_vm_page_size;
 
         /* We use top_exception_frame rather than cur_stack_end to
          * elide the last few (boring) stack entries at the bottom of
@@ -118,9 +118,9 @@ int arch_os_thread_init(struct thread *thread)
          */
         thread->control_stack_start = cur_stack_start;
         thread->control_stack_end = top_exception_frame;
-	thread->csp_around_foreign_call =
-	    PTR_ALIGN_UP((void*)(((lispobj*)thread) + TLS_SIZE), os_vm_page_size) +
-	    ((void*)thread - PTR_ALIGN_DOWN((void*)thread,os_vm_page_size));
+        thread->csp_around_foreign_call =
+            PTR_ALIGN_UP((void*)(((lispobj*)thread) + TLS_SIZE), os_vm_page_size) +
+            ((void*)thread - PTR_ALIGN_DOWN((void*)thread,os_vm_page_size));
 
 #ifndef LISP_FEATURE_SB_THREAD
         /*
@@ -160,18 +160,18 @@ os_context_register_t *
 os_context_register_addr(os_context_t *context, int offset)
 {
     static const size_t offsets[8] = {
-	offsetof(CONTEXT,Eax),
-	offsetof(CONTEXT,Ecx),
-	offsetof(CONTEXT,Edx),
-	offsetof(CONTEXT,Ebx),
-	offsetof(CONTEXT,Esp),
-	offsetof(CONTEXT,Ebp),
-	offsetof(CONTEXT,Esi),
-	offsetof(CONTEXT,Edi),
+        offsetof(CONTEXT,Eax),
+        offsetof(CONTEXT,Ecx),
+        offsetof(CONTEXT,Edx),
+        offsetof(CONTEXT,Ebx),
+        offsetof(CONTEXT,Esp),
+        offsetof(CONTEXT,Ebp),
+        offsetof(CONTEXT,Esi),
+        offsetof(CONTEXT,Edi),
     };
     return
-	(offset >= 0 && offset < 16) ?
-	((void*)(context->win32_context)) + offsets[offset>>1]	: 0;
+        (offset >= 0 && offset < 16) ?
+        ((void*)(context->win32_context)) + offsets[offset>>1]  : 0;
 }
 
 os_context_register_t *

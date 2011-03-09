@@ -240,7 +240,7 @@ search_for_core ()
                 strcpy(dotPointer,".core");
                 lookhere = exe_path;
                 core = copied_existing_filename_or_null(lookhere);
-		return core;
+                return core;
             }
         }
     }
@@ -589,13 +589,13 @@ main(int argc, char *argv[], char *envp[])
      * need to be processed further there, to do locale conversion.
      */
     if (embedded_core_offset == 0)
-	core_string = core;
+        core_string = core;
     else
-	/* If embedded core is used, call
-	   os_get_runtime_executable_path(1) to use an external
-	   representation of runtime path for core_string. */
-	core_string = runtime_path ?
-	    os_get_runtime_executable_path(1) : saved_runtime_path;
+        /* If embedded core is used, call
+           os_get_runtime_executable_path(1) to use an external
+           representation of runtime path for core_string. */
+        core_string = runtime_path ?
+            os_get_runtime_executable_path(1) : saved_runtime_path;
     posix_argv = sbcl_argv;
 
     FSHOW((stderr, "/funcalling initial_function=0x%lx\n",

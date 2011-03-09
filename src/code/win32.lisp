@@ -184,8 +184,8 @@
                (buf (array char #.input-record-size)))
     (when (= 3 (logand 3 handle))
       (return-from handle-listen
-	(alien-funcall (extern-alien "win32_tty_listen" (function boolean handle))
-		       handle)))
+        (alien-funcall (extern-alien "win32_tty_listen" (function boolean handle))
+                       handle)))
     (when (peek-named-pipe handle nil 0 nil (addr avail) nil)
       (return-from handle-listen (plusp avail)))
     (let ((res (comm-input-available handle)))
@@ -476,9 +476,9 @@
      ((,name (etypecase ,description
                (string ,description)
                (cons
-		  (destructuring-bind (s c) ,description
-		    (format nil "~A~A" s
-			    (if c #!-sb-unicode "A" #!+sb-unicode "W" "")))))))
+                  (destructuring-bind (s c) ,description
+                    (format nil "~A~A" s
+                            (if c #!-sb-unicode "A" #!+sb-unicode "W" "")))))))
      ,@body)))
 
 (defmacro make-system-buffer (x)
@@ -571,10 +571,10 @@
         (when (zerop ret)
           (win32-error "GetCurrentDirectory"))
         (if (> ret (1+ max_path))
-	    (with-alien ((apath (* char) (make-system-buffer ret)))
-	      (alien-funcall afunc ret apath)
-	      (cast-and-free apath))
-	    (decode-system-string apath))))))
+            (with-alien ((apath (* char) (make-system-buffer ret)))
+              (alien-funcall afunc ret apath)
+              (cast-and-free apath))
+            (decode-system-string apath))))))
 
 (defun sb!unix:unix-mkdir (name mode)
   (declare (type sb!unix:unix-pathname name)
@@ -921,39 +921,39 @@ UNIX epoch: January 1st 1970."
             (#b100 file-open-always)
             (#b101 file-create-always))))
     (let ((handle
-	   (create-file path
+           (create-file path
                         (logior
                          (if revertable #x10000 0)
-			 (if (plusp (logand sb!unix:o_append flags))
-			     access-file-append-data
-			     0)
-			 (ecase (logand 3 flags)
-			   (0 FILE_GENERIC_READ)
-			   (1 FILE_GENERIC_WRITE)
-			   ((2 3) (logior FILE_GENERIC_READ
-					  FILE_GENERIC_WRITE))))
-			(logior FILE_SHARE_READ
-				FILE_SHARE_WRITE)
-			nil
+                         (if (plusp (logand sb!unix:o_append flags))
+                             access-file-append-data
+                             0)
+                         (ecase (logand 3 flags)
+                           (0 FILE_GENERIC_READ)
+                           (1 FILE_GENERIC_WRITE)
+                           ((2 3) (logior FILE_GENERIC_READ
+                                          FILE_GENERIC_WRITE))))
+                        (logior FILE_SHARE_READ
+                                FILE_SHARE_WRITE)
+                        nil
                         create-disposition
-			(logior
-			 file-attribute-normal
-			 file-flag-overlapped
-			 file-flag-sequential-scan)
-			0)))
+                        (logior
+                         file-attribute-normal
+                         file-flag-overlapped
+                         file-flag-sequential-scan)
+                        0)))
       (if (eql handle invalid-handle)
-	  (values nil
+          (values nil
 
-		  (let ((error-code (get-last-error)))
-		    (case error-code
-		      (2 sb!unix:enoent)
-		      (183 sb!unix:eexist)
-		      (otherwise (- error-code)))))
+                  (let ((error-code (get-last-error)))
+                    (case error-code
+                      (2 sb!unix:enoent)
+                      (183 sb!unix:eexist)
+                      (otherwise (- error-code)))))
           (progn
             (initialize-comm-timeouts handle)
-	    (let ((fd (open-osfhandle handle (logior sb!unix::o_binary flags))))
-	      (if (minusp fd)
-		  (values nil (sb!unix::get-errno))
+            (let ((fd (open-osfhandle handle (logior sb!unix::o_binary flags))))
+              (if (minusp fd)
+                  (values nil (sb!unix::get-errno))
                   (values fd 0))))))))
 
 (define-alien-routine ("closesocket" close-socket) int (handle handle))
@@ -1004,16 +1004,16 @@ UNIX epoch: January 1st 1970."
 (defun unixlike-close (fd)
   (let ((handle (get-osfhandle fd)))
     (flet ((close-protection (enable)
-	     (set-handle-information handle 2 (if enable 2 0))))
+             (set-handle-information handle 2 (if enable 2 0))))
       (if (= handle invalid-handle)
-	  (values nil ebadf)
-	  (progn
-	    (when (and (socket-handle-p handle) (close-protection t))
-	      (shutdown-socket handle 2)
-	      (alien-funcall (extern-alien "_dup2" (function int int int)) 0 fd)
-	      (close-protection nil)
-	      (close-socket handle))
-	    (sb!unix:unix-close fd))))))
+          (values nil ebadf)
+          (progn
+            (when (and (socket-handle-p handle) (close-protection t))
+              (shutdown-socket handle 2)
+              (alien-funcall (extern-alien "_dup2" (function int int int)) 0 fd)
+              (close-protection nil)
+              (close-socket handle))
+            (sb!unix:unix-close fd))))))
 
 (define-alien-routine ("GetExitCodeProcess" get-exit-code-process)
     int
@@ -1040,13 +1040,13 @@ otherwise. Current runtime console support mandates :ucs-2 external
 format for such streams."
   (values-list
    (loop for this-direction in '(:input :output)
-	 and desired-access in `(,access-generic-read ,access-generic-write)
-	 and sharing in `(,file-share-read ,file-share-write)
-	 and name in `("CONIN$" "CONOUT$")
-	 and lowio-flags in `(,sb!unix:o_rdonly ,sb!unix:o_wronly)
-	 collect
+         and desired-access in `(,access-generic-read ,access-generic-write)
+         and sharing in `(,file-share-read ,file-share-write)
+         and name in `("CONIN$" "CONOUT$")
+         and lowio-flags in `(,sb!unix:o_rdonly ,sb!unix:o_wronly)
+         collect
       (when (member direction `(:io ,this-direction))
-	(let ((handle (create-file name desired-access sharing nil
-				   file-open-existing 0 0)))
-	  (unless (eql handle invalid-handle)
-	    (open-osfhandle handle lowio-flags)))))))
+        (let ((handle (create-file name desired-access sharing nil
+                                   file-open-existing 0 0)))
+          (unless (eql handle invalid-handle)
+            (open-osfhandle handle lowio-flags)))))))

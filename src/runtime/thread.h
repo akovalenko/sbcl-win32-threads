@@ -118,10 +118,10 @@ static inline void
 wait_for_thread_state_change(struct thread *thread, lispobj state)
 {
     if (thread->state == state) {
-	pthread_mutex_lock(thread->state_lock);
-	while (thread->state == state)
-	    pthread_cond_wait(thread->state_cond, thread->state_lock);
-	pthread_mutex_unlock(thread->state_lock);
+        pthread_mutex_lock(thread->state_lock);
+        while (thread->state == state)
+            pthread_cond_wait(thread->state_cond, thread->state_lock);
+        pthread_mutex_unlock(thread->state_lock);
     }
 }
 
@@ -358,14 +358,14 @@ void push_gcing_safety(struct gcing_safety *into)
     struct thread* th = arch_os_get_current_thread();
     asm volatile ("");
     if ((into->csp_around_foreign_call =
-	 *th->csp_around_foreign_call)) {
-	*th->csp_around_foreign_call = 0;
-	asm volatile ("");
-	into->pc_around_foreign_call = th->pc_around_foreign_call;
-	th->pc_around_foreign_call = 0;
-	asm volatile ("");
+         *th->csp_around_foreign_call)) {
+        *th->csp_around_foreign_call = 0;
+        asm volatile ("");
+        into->pc_around_foreign_call = th->pc_around_foreign_call;
+        th->pc_around_foreign_call = 0;
+        asm volatile ("");
     } else {
-	into->pc_around_foreign_call = 0;
+        into->pc_around_foreign_call = 0;
     }
 }
 
@@ -374,20 +374,20 @@ void pop_gcing_safety(struct gcing_safety *from)
 {
     struct thread* th = arch_os_get_current_thread();
     if (from->csp_around_foreign_call) {
-	asm volatile ("");
-	*th->csp_around_foreign_call = from->csp_around_foreign_call;
-	asm volatile ("");
-	th->pc_around_foreign_call = from->pc_around_foreign_call;
-	asm volatile ("");
+        asm volatile ("");
+        *th->csp_around_foreign_call = from->csp_around_foreign_call;
+        asm volatile ("");
+        th->pc_around_foreign_call = from->pc_around_foreign_call;
+        asm volatile ("");
     }
 }
 
-#define BEGIN_GC_UNSAFE_CODE			\
-    { struct gcing_safety sbcl__gc_safety;	\
+#define BEGIN_GC_UNSAFE_CODE                    \
+    { struct gcing_safety sbcl__gc_safety;      \
     push_gcing_safety(&sbcl__gc_safety);
 
-#define END_GC_UNSAFE_CODE			\
-    pop_gcing_safety(&sbcl__gc_safety);		\
+#define END_GC_UNSAFE_CODE                      \
+    pop_gcing_safety(&sbcl__gc_safety);         \
     }
 
 #endif

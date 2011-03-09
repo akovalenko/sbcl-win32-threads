@@ -220,9 +220,9 @@ waiting."
                    else
                      do (when to-sec (maybe-update-timeout))
                    #!+(and win32 sb-thread)
-		      (sb!thread:thread-yield)
+                      (sb!thread:thread-yield)
                    #!+(and win32 (not sb-thread))
-		      (sb-win32:microsleep 1)))))))
+                      (sb-win32:microsleep 1)))))))
 
 ;;; Wait for up to timeout seconds for an event to happen. Make sure all
 ;;; pending events are processed before returning.

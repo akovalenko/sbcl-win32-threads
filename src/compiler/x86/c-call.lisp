@@ -270,8 +270,8 @@
   (:vop-var vop)
   (:save-p t)
   (:ignore args eax edx
-	   #!+sb-gc-safepoint esi
-	   #!+sb-gc-safepoint edi)
+           #!+sb-gc-safepoint esi
+           #!+sb-gc-safepoint edi)
   (:generator 0
     ;; FIXME & OAOOM: This is brittle and error-prone to maintain two
     ;; instances of the same logic, on in arch-assem.S, and one in
@@ -279,11 +279,11 @@
     (cond ((or #!+sb-gc-safepoint t
                (policy node (> space speed)))
            (move ecx function)
-	   (let ((wrapper
-		  (if (and results (location= (tn-ref-tn results) fr0-tn))
-		      "call_into_c_fp_result"
-		      "call_into_c")))
-	     (inst call (make-fixup wrapper :foreign))))
+           (let ((wrapper
+                  (if (and results (location= (tn-ref-tn results) fr0-tn))
+                      "call_into_c_fp_result"
+                      "call_into_c")))
+             (inst call (make-fixup wrapper :foreign))))
           (t
            ;; Setup the NPX for C; all the FP registers need to be
            ;; empty; pop them all.

@@ -23,7 +23,7 @@
   (without-gcing
     (%make-lisp-obj
      (alien-funcall (extern-alien "alloc_code_object" (function unsigned-alien-word
-								unsigned unsigned))
+                                                                unsigned unsigned))
                     boxed unboxed)))
   #!-gencgc
   (%primitive allocate-code-object boxed unboxed))

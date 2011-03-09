@@ -1940,11 +1940,11 @@ core and return a descriptor to it."
     "Register a symbol and return its address in proto-linkage-table."
     (let ((key (cons symbol-name datap)))
       (symbol-macrolet ((entry (gethash key *dyncore-table*)))
-	(or entry
-	    (setf entry
-		  (prog1 *dyncore-address*
-		    (push key *dyncore-linkage-keys*)
-		    (incf *dyncore-address* sb!vm::linkage-table-entry-size))))))))
+        (or entry
+            (setf entry
+                  (prog1 *dyncore-address*
+                    (push key *dyncore-linkage-keys*)
+                    (incf *dyncore-address* sb!vm::linkage-table-entry-size))))))))
 
 ;;; *COLD-FOREIGN-SYMBOL-TABLE* becomes *!INITIAL-FOREIGN-SYMBOLS* in
 ;;; the core. When the core is loaded, !LOADER-COLD-INIT uses this to
@@ -1954,15 +1954,15 @@ core and return a descriptor to it."
   (let ((symbols nil)
         (result *nil-descriptor*))
     #!-sb-dynamic-core
-    (progn 
+    (progn
       (maphash (lambda (symbol value)
-		 (push (cons symbol value) symbols))
-	       *cold-foreign-symbol-table*)
+                 (push (cons symbol value) symbols))
+               *cold-foreign-symbol-table*)
       (setq symbols (sort symbols #'string< :key #'car))
       (dolist (symbol symbols)
-	(cold-push (cold-cons (base-string-to-core (car symbol))
-			      (number-to-core (cdr symbol)))
-		   result)))
+        (cold-push (cold-cons (base-string-to-core (car symbol))
+                              (number-to-core (cdr symbol)))
+                   result)))
     (cold-set (cold-intern 'sb!kernel:*!initial-foreign-symbols*) result)
     #!+sb-dynamic-core
     (let ((runtime-linking-list *nil-descriptor*))
@@ -2835,10 +2835,10 @@ core and return a descriptor to it."
                      ;; machinery for new-style SBCL Lisp-to-C naming
                      (record-with-translated-name (priority large)
                        (record (c-name name) priority
-			       (if large
-				   #!+(and win32 x86-64) "LLU"
-				   #!-(and win32 x86-64) "LU"
-				   "")))
+                               (if large
+                                   #!+(and win32 x86-64) "LLU"
+                                   #!-(and win32 x86-64) "LU"
+                                   "")))
                      (maybe-record-with-translated-name (suffixes priority &key large)
                        (when (some (lambda (suffix)
                                      (tailwise-equal name suffix))
@@ -2876,8 +2876,8 @@ core and return a descriptor to it."
       (push (list (c-symbol-name c)
                   9
                   (symbol-value c)
-		  #!+(and win32 x86-64) "LLU"
-		  #!-(and win32 x86-64) "LU"
+                  #!+(and win32 x86-64) "LLU"
+                  #!-(and win32 x86-64) "LU"
                   nil)
             constants))
     (setf constants
@@ -3321,8 +3321,8 @@ initially undefined function references:~2%")
     #!+sb-dynamic-core
     (progn
       (setf (gethash (extern-alien-name "undefined_tramp")
-		     *cold-foreign-symbol-table*)
-	    (dyncore-note-symbol "undefined_tramp" nil))
+                     *cold-foreign-symbol-table*)
+            (dyncore-note-symbol "undefined_tramp" nil))
       (dyncore-note-symbol "undefined_alien_function" nil))
 
     ;; Now that we've successfully read our only input file (by

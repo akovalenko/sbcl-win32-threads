@@ -432,7 +432,7 @@ load_runtime(char *runtime_path, size_t *size_out)
     fseek(input, 0, SEEK_SET);
 
     if (core_offset >= 0 &&
-	size > (size_t)core_offset)
+        size > (size_t)core_offset)
         size = core_offset;
 
     buf = successful_malloc(size);

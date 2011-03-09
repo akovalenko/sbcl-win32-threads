@@ -53,9 +53,9 @@ sequence enqueued."
     (loop with tail = (queue-tail queue)
           do (setf (node-next node) tail)
              (when (eq tail
-		       (setf tail
-			     (sb-ext:compare-and-swap (queue-tail queue)
-						      tail node)))
+                       (setf tail
+                             (sb-ext:compare-and-swap (queue-tail queue)
+                                                      tail node)))
                (setf (node-prev tail) node)
                (return value)))))
 

@@ -36,12 +36,12 @@
 #endif
 
 #ifndef PUSH_ERRNO
-#define PUSH_ERRNO				\
-    {						\
-    int sbcl__lastErrno = errno;		\
+#define PUSH_ERRNO                              \
+    {                                           \
+    int sbcl__lastErrno = errno;                \
 
-#define POP_ERRNO				\
-    errno = sbcl__lastErrno;			\
+#define POP_ERRNO                               \
+    errno = sbcl__lastErrno;                    \
     }
 #endif
 
@@ -71,7 +71,7 @@ static inline void fast_aligned_fill_words(void*addr, size_t len, lispobj patter
 {
     lispobj* ptr = addr;
     while(len--)
-	*(ptr++) = pattern;
+        *(ptr++) = pattern;
 }
 #endif
 

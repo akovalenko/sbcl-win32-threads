@@ -335,10 +335,10 @@ void pthread_np_lose(int trace_depth, const char* fmt, ...);
 struct _pthread_mutex_info DEAD_MUTEX;
 
 static inline void pthread_np_assert_live_mutex(pthread_mutex_t* ptr,
-						const char *action)
+                                                const char *action)
 {
     if (*ptr == &DEAD_MUTEX) {
-	pthread_np_lose(5,"Trying to %s dead mutex %p\n",action,ptr);
+        pthread_np_lose(5,"Trying to %s dead mutex %p\n",action,ptr);
     }
 }
 
@@ -389,10 +389,10 @@ static inline int pthread_mutex_lock_np_inline(pthread_mutex_t *mutex)
 {
     pthread_np_assert_live_mutex(mutex,"lock");
     if ((*mutex) == PTHREAD_MUTEX_INITIALIZER) {
-	return pthread_mutex_lock(mutex);
+        return pthread_mutex_lock(mutex);
     } else {
-	EnterCriticalSection(&(*mutex)->cs);
-	return 0;
+        EnterCriticalSection(&(*mutex)->cs);
+        return 0;
     }
 }
 
@@ -406,6 +406,6 @@ static inline int pthread_mutex_unlock_np_inline(pthread_mutex_t *mutex)
 #define pthread_mutex_lock pthread_mutex_lock_np_inline
 #define pthread_mutex_unlock pthread_mutex_unlock_np_inline
 
-#endif	/* !PTHREAD_DEBUG_OUTPUT */
-#endif	/* !PTHREAD_INTERNALS */
-#endif	/* WIN32_PTHREAD_INCLUDED */
+#endif  /* !PTHREAD_DEBUG_OUTPUT */
+#endif  /* !PTHREAD_INTERNALS */
+#endif  /* WIN32_PTHREAD_INCLUDED */

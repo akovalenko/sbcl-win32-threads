@@ -34,10 +34,10 @@
 ;;; -- JES, 2007-01-06
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (setf *backend-page-bytes*
-	(cond
-	  #!+win32 (t 32768)
-	  #!+linux (t 32768)
-	  (t 4096))))
+        (cond
+          #!+win32 (t 32768)
+          #!+linux (t 32768)
+          (t 4096))))
 
 ;;; comment from CMU CL:
 ;;;

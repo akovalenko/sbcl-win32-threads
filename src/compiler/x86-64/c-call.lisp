@@ -32,7 +32,7 @@
 
 (defun int-arg (state prim-type reg-sc stack-sc)
   (let ((reg-args (max (arg-state-register-args state)
-		       #!+win32 (arg-state-xmm-args state))))
+                       #!+win32 (arg-state-xmm-args state))))
     (cond ((< reg-args max-int-args)
            (setf (arg-state-register-args state) (1+ reg-args))
            (my-make-wired-tn prim-type reg-sc
@@ -53,7 +53,7 @@
 
 (defun float-arg (state prim-type reg-sc stack-sc)
   (let ((xmm-args (max (arg-state-xmm-args state)
-		        #!+win32 (arg-state-register-args state))))
+                        #!+win32 (arg-state-register-args state))))
     (cond ((< xmm-args max-xmm-args)
            (setf (arg-state-xmm-args state) (1+ xmm-args))
            (my-make-wired-tn prim-type reg-sc
@@ -274,13 +274,13 @@
   #!+sb-gc-safepoint
   (:temporary (:sc unsigned-reg :offset r15-offset) r15)
   (:ignore results
-	   ;; #!+sb-gc-safepoint rbx
-	   #!+(and sb-gc-safepoint win32) rdi
-	   #!+(and sb-gc-safepoint win32) rsi
-	   #!+win32 args
-	   #!+win32 rax
-	   #!+sb-gc-safepoint r15
-	   #!+sb-gc-safepoint r13)
+           ;; #!+sb-gc-safepoint rbx
+           #!+(and sb-gc-safepoint win32) rdi
+           #!+(and sb-gc-safepoint win32) rsi
+           #!+win32 args
+           #!+win32 rax
+           #!+sb-gc-safepoint r15
+           #!+sb-gc-safepoint r13)
   (:vop-var vop)
   (:save-p t)
   (:generator 0
@@ -293,8 +293,8 @@
       ;; Current PC - don't rely on function to keep it in a form that
       ;; GC understands
       (let ((label (gen-label)))
-	(inst lea r14 (make-fixup nil :code-object label))
-	(emit-label label)))
+        (inst lea r14 (make-fixup nil :code-object label))
+        (emit-label label)))
     #!-win32
     (move-immediate rax
                     (loop for tn-ref = args then (tn-ref-across tn-ref)
@@ -424,7 +424,7 @@
 
 #-sb-xc-host
 (defun alien-callback-assembler-wrapper (index result-type argument-types
-					 &optional call-type-info)
+                                         &optional call-type-info)
   (declare (ignorable call-type-info))
   (labels ((make-tn-maker (sc-name)
              (lambda (offset)
@@ -475,7 +475,7 @@
             (incf arg-count)
             (cond (integerp
                    (let ((gpr (pop gprs)))
-		     (pop fprs)
+                     (pop fprs)
                      ;; Argument not in register, copy it from the old
                      ;; stack location to a temporary register.
                      (unless gpr
@@ -488,7 +488,7 @@
                   ((or (alien-single-float-type-p type)
                        (alien-double-float-type-p type))
                    (let ((fpr (pop fprs)))
-		     (pop gprs)
+                     (pop gprs)
                      (cond (fpr
                             ;; Copy from float register to target location.
                             (inst movq target-tn fpr))
@@ -502,8 +502,8 @@
                   (t
                    (bug "Unknown alien floating point type: ~S" type)))))
 
-	#!-sb-gc-safepoint
-	(progn
+        #!-sb-gc-safepoint
+        (progn
         ;; arg0 to FUNCALL3 (function)
         ;;
         ;; Indirect the access to ENTER-ALIEN-CALLBACK through
@@ -511,50 +511,50 @@
         ;; to ensure it'll work even if the GC moves ENTER-ALIEN-CALLBACK.
         ;; Skip any SB-THREAD TLS magic, since we don't expect anyone
         ;; to rebind the variable. -- JES, 2006-01-01
-	  (inst mov rdi (+ nil-value (static-symbol-offset
-				      'sb!alien::*enter-alien-callback*)))
-	  (loadw rdi rdi symbol-value-slot other-pointer-lowtag)
+          (inst mov rdi (+ nil-value (static-symbol-offset
+                                      'sb!alien::*enter-alien-callback*)))
+          (loadw rdi rdi symbol-value-slot other-pointer-lowtag)
         ;; arg0 to ENTER-ALIEN-CALLBACK (trampoline index)
-	  (inst mov rsi (fixnumize index))
+          (inst mov rsi (fixnumize index))
         ;; arg1 to ENTER-ALIEN-CALLBACK (pointer to argument vector)
-	  (inst mov rdx rsp)
+          (inst mov rdx rsp)
         ;; add room on stack for return value
-	  (inst sub rsp 8)
+          (inst sub rsp 8)
         ;; arg2 to ENTER-ALIEN-CALLBACK (pointer to return value)
-	  (inst mov rcx rsp)
+          (inst mov rcx rsp)
 
         ;; Make new frame
-	  (inst push rbp)
-	  (inst mov  rbp rsp)
+          (inst push rbp)
+          (inst mov  rbp rsp)
 
         ;; Call
-	  (inst mov  rax (foreign-symbol-address "funcall3"))
-	  (inst call rax)
+          (inst mov  rax (foreign-symbol-address "funcall3"))
+          (inst call rax)
 
         ;; Back! Restore frame
-	  (inst mov rsp rbp)
-	  (inst pop rbp))
-	#!+sb-gc-safepoint
-	(progn
+          (inst mov rsp rbp)
+          (inst pop rbp))
+        #!+sb-gc-safepoint
+        (progn
         ;; arg0 to ENTER-ALIEN-CALLBACK (trampoline index)
-	  (inst mov #!-win32 rdi #!+win32 rcx (fixnumize index))
+          (inst mov #!-win32 rdi #!+win32 rcx (fixnumize index))
         ;; arg1 to ENTER-ALIEN-CALLBACK (pointer to argument vector)
-	  (inst mov #!-win32 rsi #!+win32 rdx rsp)
+          (inst mov #!-win32 rsi #!+win32 rdx rsp)
         ;; add room on stack for return value
-	  (inst sub rsp 8)
+          (inst sub rsp 8)
         ;; arg2 to ENTER-ALIEN-CALLBACK (pointer to return value)
-	  (inst mov #!-win32 rdx #!+win32 r8 rsp)
+          (inst mov #!-win32 rdx #!+win32 r8 rsp)
         ;; Make new frame
-	  (inst push rbp)
-	  (inst mov  rbp rsp)
-	  #!+win32 (inst sub rsp #x20)
-	  #!+win32 (inst and rsp #x-20)
+          (inst push rbp)
+          (inst mov  rbp rsp)
+          #!+win32 (inst sub rsp #x20)
+          #!+win32 (inst and rsp #x-20)
         ;; Call
-	  (inst mov  rax (foreign-symbol-address "fff_generic_callback"))
-	  (inst call rax)
+          (inst mov  rax (foreign-symbol-address "fff_generic_callback"))
+          (inst call rax)
         ;; Back! Restore frame
-	  (inst mov rsp rbp)
-	  (inst pop rbp))
+          (inst mov rsp rbp)
+          (inst pop rbp))
 
         ;; Result now on top of stack, put it in the right register
         (cond

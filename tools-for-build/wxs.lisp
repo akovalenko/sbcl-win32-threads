@@ -199,7 +199,7 @@
                   "Manufacturer" "http://www.sbcl.org"
                   "InstallerVersion" 200
                   "Compressed" "yes"
-		  #+x86-64 "Platform" #+x86-64 "x64"
+                  #+x86-64 "Platform" #+x86-64 "x64"
                   "InstallScope" "perMachine"))
       ("Media" ("Id" 1
                 "Cabinet" "sbcl.cab"
@@ -218,7 +218,7 @@
                     "Name" "SourceDir")
        ("Directory" ("Id" "ProgramMenuFolder")
         ("Component" ("Id" "SBCL_Shortcut"
-		      "Guid" ,(make-guid))
+                      "Guid" ,(make-guid))
          ("Shortcut" ("Id" "sbcl.lnk"
                       "Name" ,(application-name)
                       "Target" "[INSTALLDIR]sbcl.exe"
@@ -237,8 +237,8 @@
                        "Name" ,(lisp-implementation-version))
           ("Directory" ("Id" "INSTALLDIR")
            ("Component" ("Id" "SBCL_SetHOME"
-			 "Guid" ,(make-guid)
-			 "DiskId" 1)
+                         "Guid" ,(make-guid)
+                         "DiskId" 1)
             ("Environment" ("Id" "Env_SBCL_HOME"
                             "System" "yes"
                             "Action" "set"
@@ -247,8 +247,8 @@
                             "Value" "[INSTALLDIR]")))
 
            ("Component" ("Id" "SBCL_SetPATH"
-			 "Guid" ,(make-guid)
-			 "DiskId" 1)
+                         "Guid" ,(make-guid)
+                         "DiskId" 1)
             ("Environment" ("Id" "Env_PATH"
                             "System" "yes"
                             "Action" "set"
@@ -258,9 +258,9 @@
            ("Component" ("Id" "SBCL_Base"
                          "Guid" ,(make-guid)
                          "DiskId" 1)
-			;; SBCL :win32 will find core in the executable's directory,
-			;; even without SBCL_HOME. Let's not clobber user environment
-			;; more than necessary.
+                        ;; SBCL :win32 will find core in the executable's directory,
+                        ;; even without SBCL_HOME. Let's not clobber user environment
+                        ;; more than necessary.
             ;; If we want to associate files with SBCL, this
             ;; is how it's done -- but doing this by default
             ;; and without asking the user for permission Is
@@ -274,17 +274,17 @@
                      "Source" "sbcl.core")))
            ,@(collect-contrib-components))))))
       ("Feature" ("Id" "Minimal"
-		  "Title" "SBCL Executable"
+                  "Title" "SBCL Executable"
                   "ConfigurableDirectory" "INSTALLDIR"
                   "Level" 1)
        ("ComponentRef" ("Id" "SBCL_Base"))
        ("ComponentRef" ("Id" "SBCL_Shortcut"))
        ("Feature" ("Id" "Contrib" "Level" 1 "Title" "Contributed Modules")
-		  ,@(ref-all-components))
+                  ,@(ref-all-components))
        ("Feature" ("Id" "SetPath" "Level" 1 "Title" "Set Environment Variable: PATH")
-		  ("ComponentRef" ("Id" "SBCL_SetPATH")))
+                  ("ComponentRef" ("Id" "SBCL_SetPATH")))
        ("Feature" ("Id" "SetHome" "Level" 3 "Title" "Set Environment Variable: SBCL_HOME")
-		  ("ComponentRef" ("Id" "SBCL_SetHOME"))))
+                  ("ComponentRef" ("Id" "SBCL_SetHOME"))))
       ("WixVariable" ("Id" "WixUILicenseRtf"
                       "Value" "License.rtf"))
       ("Property" ("Id" "WIXUI_INSTALLDIR" "Value" "INSTALLDIR"))

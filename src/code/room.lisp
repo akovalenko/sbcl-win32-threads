@@ -212,7 +212,7 @@
 (progn
   (define-alien-type (struct page)
       (struct page
-	      (start (signed #.sb!vm:n-word-bits))
+              (start (signed #.sb!vm:n-word-bits))
               ;; On platforms with small enough GC pages, this field
               ;; will be a short. On platforms with larger ones, it'll
               ;; be an int.

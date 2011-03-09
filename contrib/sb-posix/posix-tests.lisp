@@ -174,16 +174,16 @@
       (typep
        (sb-posix:syscall-errno c)
        '(member
-	 #+darwin
-	 #.sb-posix:eisdir
-	 #+win32
-	 #.sb-posix::eacces
-	 #+win32
-	 #.sb-posix::enotempty
-	 #+sunos
-	 #.sb-posix::einval
-	 #-(or darwin win32 sunos)
-	 #.sb-posix::ebusy)))) t)
+         #+darwin
+         #.sb-posix:eisdir
+         #+win32
+         #.sb-posix::eacces
+         #+win32
+         #.sb-posix::enotempty
+         #+sunos
+         #.sb-posix::einval
+         #-(or darwin win32 sunos)
+         #.sb-posix::ebusy)))) t)
 
 (deftest rmdir.error.4
   (let* ((dir (ensure-directories-exist

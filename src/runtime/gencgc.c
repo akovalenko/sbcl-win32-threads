@@ -589,7 +589,7 @@ zero_dirty_pages(page_index_t start, page_index_t end) {
     for (i = start; i <= end; i++) {
         if (page_table[i].need_to_zero == 1) {
             zero_pages_with_mmap(start, end);
-	    os_validate_recommit(page_address(start),npage_bytes(end-start+1));
+            os_validate_recommit(page_address(start),npage_bytes(end-start+1));
             break;
         }
     }
@@ -811,7 +811,7 @@ gc_alloc_new_region(sword_t nbytes, int page_type_flag, struct alloc_region *all
     }
 
     zero_dirty_pages(first_page, last_page);
-    
+
     /* we can do this after releasing free_pages_lock */
     if (gencgc_zero_check) {
         long *p;
@@ -1167,7 +1167,7 @@ gc_alloc_large(sword_t nbytes, int page_type_flag, struct alloc_region *alloc_re
     /* Precommit (w32) */
 #ifdef LISP_FEATURE_WIN32
     os_validate_recommit(page_address(first_page),
-			 npage_bytes(1+last_page-first_page));
+                         npage_bytes(1+last_page-first_page));
 #endif
 
     zero_dirty_pages(first_page, last_page);
@@ -3991,14 +3991,14 @@ garbage_collect_generation(generation_index_t generation, int raise)
 #if defined(LISP_FEATURE_X86) || defined(LISP_FEATURE_X86_64)
 #if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
     if (!conservative_stack) {
-	arch_os_get_current_thread()->pc_around_foreign_call = 0;
+        arch_os_get_current_thread()->pc_around_foreign_call = 0;
     }
 #endif
     /* And if we're saving a core, there's no point in being conservative. */
     if (conservative_stack) {
         for_each_thread(th) {
-	    if (th->state == STATE_DEAD)
-		continue;
+            if (th->state == STATE_DEAD)
+                continue;
             void **ptr;
             void **esp=(void **)-1;
 #ifdef LISP_FEATURE_SB_THREAD
@@ -4006,32 +4006,32 @@ garbage_collect_generation(generation_index_t generation, int raise)
             if(th==arch_os_get_current_thread()) {
                 /* Somebody is going to burn in hell for this, but casting
                  * it in two steps shuts gcc up about strict aliasing. */
-		#ifndef LISP_FEATURE_SB_GC_SAFEPOINT
+                #ifndef LISP_FEATURE_SB_GC_SAFEPOINT
                 esp = (void **)((void *)&raise);
-		#else
-		/* Conservative collect_garbage is always invoked with
-		   foreign C call on top; we don't promise to preserve
-		   any registers in vop call-out for :sb-gc-safepoint
-		   builds, so preserved csp is enough. */
+                #else
+                /* Conservative collect_garbage is always invoked with
+                   foreign C call on top; we don't promise to preserve
+                   any registers in vop call-out for :sb-gc-safepoint
+                   builds, so preserved csp is enough. */
 
-		esp = os_get_csp(th);
-		/* ...Together with return address, that is the only
-		   value from the entire context that we need (and
-		   it's saved by foreign call wrapper). That's because
-		   it is removed from control stack into a register by
-		   the foreign call wrapper itself. */
-		preserve_pointer(th->pc_around_foreign_call);
-		#endif
+                esp = os_get_csp(th);
+                /* ...Together with return address, that is the only
+                   value from the entire context that we need (and
+                   it's saved by foreign call wrapper). That's because
+                   it is removed from control stack into a register by
+                   the foreign call wrapper itself. */
+                preserve_pointer(th->pc_around_foreign_call);
+                #endif
             } else {
 #if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
 
-		esp = os_get_csp(th);
-		/* ...Together with return address, that is the only
-		   value from the entire context that we need (and
-		   it's saved by foreign call wrapper). That's because
-		   it is removed from control stack into a register by
-		   the foreign call wrapper itself. */
-		preserve_pointer(th->pc_around_foreign_call);
+                esp = os_get_csp(th);
+                /* ...Together with return address, that is the only
+                   value from the entire context that we need (and
+                   it's saved by foreign call wrapper). That's because
+                   it is removed from control stack into a register by
+                   the foreign call wrapper itself. */
+                preserve_pointer(th->pc_around_foreign_call);
 #else
                 void **esp1;
                 free=fixnum_value(SymbolValue(FREE_INTERRUPT_CONTEXT_INDEX,th));
@@ -4049,7 +4049,7 @@ garbage_collect_generation(generation_index_t generation, int raise)
 #else
             esp = (void **)((void *)&raise);
 #endif
-	    gc_assert(esp);
+            gc_assert(esp);
             for (ptr = ((void **)th->control_stack_end)-1; ptr >= esp;  ptr--) {
                 preserve_pointer(*ptr);
             }
@@ -4750,11 +4750,11 @@ general_alloc_internal(sword_t nbytes, int page_type_flag, struct alloc_region *
             SetSymbolValue(GC_PENDING,T,thread);
             if (SymbolValue(GC_INHIBIT,thread) == NIL) {
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
-		thread_register_gc_trigger();
+                thread_register_gc_trigger();
 #else
                 set_pseudo_atomic_interrupted(thread);
 #endif
-		
+
 #ifdef LISP_FEATURE_PPC
                 /* PPC calls alloc() from a trap or from pa_alloc(),
                  * look up the most context if it's from a trap. */

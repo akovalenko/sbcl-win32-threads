@@ -35,29 +35,29 @@ struct freelist {
     unsigned int count;
 };
 
-#define FREELIST_INITIALIZER(create_fn)			\
-    {							\
-	event_create, PTHREAD_MUTEX_INITIALIZER,	\
-	    NULL, NULL, 0				\
-	    }    					\
+#define FREELIST_INITIALIZER(create_fn)                 \
+    {                                                   \
+        event_create, PTHREAD_MUTEX_INITIALIZER,        \
+            NULL, NULL, 0                               \
+            }                                           \
 
 
 static void* freelist_get(struct freelist *fl)
 {
     void* result = NULL;
     if (fl->full) {
-	pthread_mutex_lock(&fl->lock);
-	if (fl->full) {
-	    struct freelist_cell *cell = fl->full;
-	    fl->full = cell->next;
-	    result = cell->data;
-	    cell->next = fl->empty;
-	    fl->empty = cell;
-	} 
-	pthread_mutex_unlock(&fl->lock);
+        pthread_mutex_lock(&fl->lock);
+        if (fl->full) {
+            struct freelist_cell *cell = fl->full;
+            fl->full = cell->next;
+            result = cell->data;
+            cell->next = fl->empty;
+            fl->empty = cell;
+        }
+        pthread_mutex_unlock(&fl->lock);
     }
     if (!result) {
-	result = fl->create_fn();
+        result = fl->create_fn();
     }
     return result;
 }
@@ -66,25 +66,25 @@ static void freelist_return(struct freelist *fl, void*data)
 {
     struct freelist_cell* cell = NULL;
     if (fl->empty) {
-	pthread_mutex_lock(&fl->lock);
-	if (fl->empty) {
-	    cell = fl->empty;
-	    fl->empty = cell->next;
-	    goto add_locked;
-	}
-	pthread_mutex_unlock(&fl->lock);
+        pthread_mutex_lock(&fl->lock);
+        if (fl->empty) {
+            cell = fl->empty;
+            fl->empty = cell->next;
+            goto add_locked;
+        }
+        pthread_mutex_unlock(&fl->lock);
     }
     if (!cell) {
-	int i,n=32;
-	cell = malloc(sizeof(*cell)*n);
-	for (i=0; i<(n-1); ++i)
-	    cell[i].next = &cell[i+1];
+        int i,n=32;
+        cell = malloc(sizeof(*cell)*n);
+        for (i=0; i<(n-1); ++i)
+            cell[i].next = &cell[i+1];
         cell[i].next = NULL;
     }
 
     pthread_mutex_lock(&fl->lock);
     ++fl->count;
- add_locked:    
+ add_locked:
     cell->data = data;
     cell->next = fl->full;
     fl->full = cell;
@@ -191,9 +191,9 @@ void pthread_np_serialize(pthread_t thread)
     CONTEXT winctx;
     winctx.ContextFlags = CONTEXT_INTEGER;
     if (!thread->created_as_fiber) {
-	SuspendThread(thread->handle);
-	GetThreadContext(thread->handle,&winctx);
-	ResumeThread(thread->handle);
+        SuspendThread(thread->handle);
+        GetThreadContext(thread->handle,&winctx);
+        ResumeThread(thread->handle);
     }
 }
 
@@ -598,10 +598,10 @@ int pthread_mutexattr_settype(pthread_mutexattr_t* attr,int mutex_type)
 int pthread_mutex_destroy(pthread_mutex_t *mutex)
 {
     if (*mutex != PTHREAD_MUTEX_INITIALIZER) {
-	pthread_np_assert_live_mutex(mutex,"destroy");
-	DeleteCriticalSection(&(*mutex)->cs);
-	free(*mutex);
-	*mutex = &DEAD_MUTEX;
+        pthread_np_assert_live_mutex(mutex,"destroy");
+        DeleteCriticalSection(&(*mutex)->cs);
+        free(*mutex);
+        *mutex = &DEAD_MUTEX;
     }
     return 0;
 }
@@ -640,8 +640,8 @@ void pthread_np_remove_pending_signal(pthread_t thread, int signum)
 sigset_t pthread_np_other_thread_sigpending(pthread_t thread)
 {
     return
-	InterlockedCompareExchange((volatile LONG*)&thread->pending_signal_set,
-				   0, 0);
+        InterlockedCompareExchange((volatile LONG*)&thread->pending_signal_set,
+                                   0, 0);
 }
 
 /* Mutex implementation uses CRITICAL_SECTIONs. Somethings to keep in
@@ -815,7 +815,7 @@ static void fe_return_event(HANDLE handle)
 {
     freelist_return(&event_freelist, (void*)handle);
 }
-    
+
 static void cv_event_destroy(void* event)
 {
   CloseHandle((HANDLE)event);
@@ -894,7 +894,7 @@ int pthread_cond_destroy(pthread_cond_t *cv)
 int pthread_cond_broadcast(pthread_cond_t *cv)
 {
   int count = 0;
-  
+
   HANDLE postponed[128];
   int npostponed = 0,i;
 
@@ -911,10 +911,10 @@ int pthread_cond_broadcast(pthread_cond_t *cv)
     w->info = WAKEUP_HAPPENED;
     postponed[npostponed++] = waitevent;
     if (/* w->info == WAKEUP_WAITING_TIMEOUT || */ npostponed ==
-	sizeof(postponed)/sizeof(postponed[0])) {
-	for (i=0; i<npostponed; ++i)
-	    SetEvent(postponed[i]);
-	npostponed = 0;
+        sizeof(postponed)/sizeof(postponed[0])) {
+        for (i=0; i<npostponed; ++i)
+            SetEvent(postponed[i]);
+        npostponed = 0;
     }
     ++count;
   }
@@ -954,8 +954,8 @@ int cv_wakeup_add(struct pthread_cond_t* cv, struct thread_wakeup* w)
   pthread_mutex_lock(&cv->wakeup_lock);
   if (w->uaddr) {
       if (w->uval != *w->uaddr) {
-	  pthread_mutex_unlock(&cv->wakeup_lock);
-	  return 1;
+          pthread_mutex_unlock(&cv->wakeup_lock);
+          return 1;
       }
       pthread_self()->futex_wakeup = w;
   }
@@ -989,7 +989,7 @@ int cv_wakeup_remove(struct pthread_cond_t* cv, struct thread_wakeup* w)
   pthread_mutex_lock(&cv->wakeup_lock);
   {
     if (w->info == WAKEUP_HAPPENED || w->info == WAKEUP_BY_INTERRUPT)
-	goto unlock;
+        goto unlock;
     if (cv->first_wakeup == w) {
       cv->first_wakeup = w->next;
       if (cv->last_wakeup == w)
@@ -1032,9 +1032,9 @@ int pthread_cond_wait(pthread_cond_t * cv, pthread_mutex_t * cs)
   pthread_mutex_unlock(cs);
   do {
       if (cv->alertable) {
-	  while (WaitForSingleObjectEx(w.event, INFINITE, TRUE) == WAIT_IO_COMPLETION);
+          while (WaitForSingleObjectEx(w.event, INFINITE, TRUE) == WAIT_IO_COMPLETION);
       } else {
-	  WaitForSingleObject(w.event, INFINITE);
+          WaitForSingleObject(w.event, INFINITE);
       }
   } while (w.info == WAKEUP_WAITING_NOTIMEOUT);
   pthread_self()->waiting_cond = NULL;
@@ -1046,7 +1046,7 @@ int pthread_cond_wait(pthread_cond_t * cv, pthread_mutex_t * cs)
 }
 
 int pthread_cond_timedwait(pthread_cond_t * cv, pthread_mutex_t * cs,
-			   const struct timespec * abstime)
+                           const struct timespec * abstime)
 {
   DWORD rv;
   struct thread_wakeup w;
@@ -1072,12 +1072,12 @@ int pthread_cond_timedwait(pthread_cond_t * cv, pthread_mutex_t * cs,
     if (msec < 0)
       msec = 0;
     do {
-	if (cv->alertable) {
-	    while ((rv = WaitForSingleObjectEx(w.event, msec, TRUE))
-		   == WAIT_IO_COMPLETION);
-	} else {
-	    rv = WaitForSingleObject(w.event, msec);
-	}
+        if (cv->alertable) {
+            while ((rv = WaitForSingleObjectEx(w.event, msec, TRUE))
+                   == WAIT_IO_COMPLETION);
+        } else {
+            rv = WaitForSingleObject(w.event, msec);
+        }
     } while (rv == WAIT_OBJECT_0 && w.info == WAKEUP_WAITING_TIMEOUT);
   }
   self->waiting_cond = NULL;
@@ -1086,7 +1086,7 @@ int pthread_cond_timedwait(pthread_cond_t * cv, pthread_mutex_t * cs,
     if (!cv_wakeup_remove(cv, &w)) {
       /* Someone removed our wakeup record: though we got a timeout,
          event was (will be) signalled before we are here.
-	 Consume this wakeup. */
+         Consume this wakeup. */
       WaitForSingleObject(w.event, INFINITE);
     }
   }
@@ -1371,7 +1371,7 @@ int sigpending(sigset_t *set)
 {
   int i;
   *set = InterlockedCompareExchange((volatile LONG*)&pthread_self()->pending_signal_set,
-				    0, 0);
+                                    0, 0);
   return 0;
 }
 
@@ -1398,7 +1398,7 @@ futex_wait(volatile int *lock_word, int oldval, long sec, unsigned long usec)
   w.uaddr = lock_word;
   w.uval = oldval;
   w.info = info;
-  
+
   if (cv_wakeup_add(&futex_pseudo_cond,&w)) {
       return FUTEX_EWOULDBLOCK;
   }
@@ -1413,11 +1413,11 @@ futex_wait(volatile int *lock_word, int oldval, long sec, unsigned long usec)
   switch(wfso) {
   case WAIT_TIMEOUT:
       if (!cv_wakeup_remove(&futex_pseudo_cond,&w)) {
-	  /* timeout, but someone other removed wakeup. */
-	  result = maybeINTR;
-	  WaitForSingleObject(w.event,INFINITE);
+          /* timeout, but someone other removed wakeup. */
+          result = maybeINTR;
+          WaitForSingleObject(w.event,INFINITE);
       } else {
-	  result = FUTEX_ETIMEDOUT;
+          result = FUTEX_ETIMEDOUT;
       }
       break;
   case WAIT_OBJECT_0:
@@ -1439,37 +1439,37 @@ futex_wake(volatile int *lock_word, int n)
     struct thread_wakeup *w, *prev;
     HANDLE postponed[128];
     int npostponed = 0,i;
-    
+
     if (n==0) return 0;
-    
+
     pthread_mutex_lock(&cv->wakeup_lock);
     for (w = cv->first_wakeup, prev = NULL; w && n;) {
-	if (w->uaddr == lock_word) {
-	    HANDLE event = w->event;
-	    int oldinfo = w->info;
-	    w->info = WAKEUP_HAPPENED;
-	    if (cv->last_wakeup == w)
-		cv->last_wakeup = prev;
-	    w = w->next;
-	    if (!prev) {
-		cv->first_wakeup = w;
-	    } else {
-		prev->next = w;
-	    }
-	    n--;
-	    postponed[npostponed++] = event;
-	    if (npostponed == sizeof(postponed)/sizeof(postponed[0])) {
-		for (i=0; i<npostponed; ++i)
-		    SetEvent(postponed[i]);
-		npostponed = 0;
-	    }
-	} else {
-	    prev=w, w=w->next;
-	}
+        if (w->uaddr == lock_word) {
+            HANDLE event = w->event;
+            int oldinfo = w->info;
+            w->info = WAKEUP_HAPPENED;
+            if (cv->last_wakeup == w)
+                cv->last_wakeup = prev;
+            w = w->next;
+            if (!prev) {
+                cv->first_wakeup = w;
+            } else {
+                prev->next = w;
+            }
+            n--;
+            postponed[npostponed++] = event;
+            if (npostponed == sizeof(postponed)/sizeof(postponed[0])) {
+                for (i=0; i<npostponed; ++i)
+                    SetEvent(postponed[i]);
+                npostponed = 0;
+            }
+        } else {
+            prev=w, w=w->next;
+        }
     }
     pthread_mutex_unlock(&cv->wakeup_lock);
     for (i=0; i<npostponed; ++i)
-	SetEvent(postponed[i]);
+        SetEvent(postponed[i]);
     return 0;
 }
 
@@ -1477,25 +1477,25 @@ futex_wake(volatile int *lock_word, int n)
 static void futex_interrupt(pthread_t thread)
 {
     if (thread->futex_wakeup) {
-	pthread_cond_t *cv = &futex_pseudo_cond;
-	struct thread_wakeup *w;
-	HANDLE event;
-	pthread_mutex_lock(&cv->wakeup_lock);
-	if ((w = thread->futex_wakeup)) {
-	    /* we are taking wakeup_lock recursively - ok with
-	       CRITICAL_SECTIONs */
-	    if (cv_wakeup_remove(&futex_pseudo_cond,w)) {
-		event = w->event;
-		w->info = WAKEUP_BY_INTERRUPT;
-		thread->futex_wakeup = NULL;
-	    } else {
-		w = NULL;
-	    }
-	}
-	if (w) {
-	    SetEvent(event);
-	}
-	pthread_mutex_unlock(&cv->wakeup_lock);
+        pthread_cond_t *cv = &futex_pseudo_cond;
+        struct thread_wakeup *w;
+        HANDLE event;
+        pthread_mutex_lock(&cv->wakeup_lock);
+        if ((w = thread->futex_wakeup)) {
+            /* we are taking wakeup_lock recursively - ok with
+               CRITICAL_SECTIONs */
+            if (cv_wakeup_remove(&futex_pseudo_cond,w)) {
+                event = w->event;
+                w->info = WAKEUP_BY_INTERRUPT;
+                thread->futex_wakeup = NULL;
+            } else {
+                w = NULL;
+            }
+        }
+        if (w) {
+            SetEvent(event);
+        }
+        pthread_mutex_unlock(&cv->wakeup_lock);
     }
 }
 
@@ -1509,16 +1509,16 @@ void pthread_np_lose(int trace_depth, const char* fmt, ...)
     va_start(header,fmt);
     vfprintf(stderr,fmt,header);
     for (lastseh = *(void**)NtCurrentTeb();
-	 lastseh && (lastseh!=(void*)0xFFFFFFFF);
-	 lastseh = *lastseh);
+         lastseh && (lastseh!=(void*)0xFFFFFFFF);
+         lastseh = *lastseh);
 
     fprintf(stderr, "Backtrace: %s (pthread %p)\n", header, pthread_self());
     for (frame = __builtin_frame_address(0); frame; frame=*(void**)frame)
-	{
-	    if ((n++)>trace_depth)
-		return;
-	    fprintf(stderr, "[#%02d]: ebp = 0x%p, ret = 0x%p\n",n,
-		    frame, ((void**)frame)[1]);
-	}
+        {
+            if ((n++)>trace_depth)
+                return;
+            fprintf(stderr, "[#%02d]: ebp = 0x%p, ret = 0x%p\n",n,
+                    frame, ((void**)frame)[1]);
+        }
     ExitProcess(0);
 }

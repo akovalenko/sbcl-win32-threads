@@ -82,8 +82,8 @@
   ;; units are (normally) 64K. There are at least three reasonable
   ;; choices: switch to malloc(), increase the size, arrange for some
   ;; kind of sharing a single VA block among buffers. Throwing away
-  ;; 15/16 of the buffer seems extremely unwise; applies to 7/8 too. 
-  
+  ;; 15/16 of the buffer seems extremely unwise; applies to 7/8 too.
+
   #!+win32 (* 64 1024)
   #!+sb-doc
   "Default number of bytes per buffer.")
@@ -304,12 +304,12 @@
                                ;; thread might have moved head...
                                (setf (buffer-head obuf) (+ count head))
                                (queue-or-wait))
-			       #!-win32
+                               #!-win32
                               ((eql errno sb!unix:ewouldblock)
                                ;; Blocking, queue or wair.
                                (queue-or-wait))
-			       ;; if interrupted on win32, just try again
-			      #!+win32 ((eql errno sb!unix:eintr))
+                               ;; if interrupted on win32, just try again
+                              #!+win32 ((eql errno sb!unix:eintr))
                               (t
                                (simple-stream-perror "Couldn't write to ~s"
                                                      stream errno)))))))))))))
@@ -2539,59 +2539,59 @@
       (setf *available-buffers* nil)))
   (with-output-to-string (*error-output*)
     (let ((ttyname #.(coerce "/dev/tty" 'simple-base-string))
-	  (stdstream-vars '(*stdin* *stdout* *stderr* *tty*)))
+          (stdstream-vars '(*stdin* *stdout* *stderr* *tty*)))
       #!+win32 (declare (ignorable ttyname))
       (loop for fd in '(0 1 2 nil)
-	    and auto-close-p in '(nil nil nil t)
-	    and stream-var in stdstream-vars
-	    and direction in '(:input :output :output :io)
-	    and name in '("standard input"
-			  "standard output"
-			  "standard error"
-			  "the terminal")
-	    do
-	 (let ((outputp (not (eq direction :input)))
-	       (inputp (not (eq direction :output))))
-	   (unless fd
-	     #!+win32
-	     (multiple-value-bind (keyboard screen)
-		 (sb!win32::make-console-fds)
-	       (setf (symbol-value stream-var)
-		     (make-two-way-stream
-		      (if keyboard
-			  (make-fd-stream keyboard :name name :input t
-					  :element-type :default :buffering :line
-					  :auto-close auto-close-p
-					  :external-format :ucs-2)
-			  *stdin*)
-		      (if screen
-			  (make-fd-stream screen :name name :output t
-					  :element-type :default :buffering :line
-					  :auto-close auto-close-p
-					  :external-format :ucs-2)
-			  *stdout*)))
-	       (return))
-	     #!-win32
-	     (setf fd (sb!unix:unix-open ttyname sb!unix:o_rdwr 0)))
-	   (setf (symbol-value stream-var)
-		 (if fd
-		     (make-fd-stream fd
-				     :name name
-				     :input inputp
-				     :output outputp
-				     :buffering :line
-				     :element-type :default
-				     #!-win32 :serve-events #!-win32 inputp
-				     :auto-close auto-close-p
-				     :external-format
-				     (or
-				      #!+win32
-				      (let ((handle (sb!win32:get-osfhandle fd)))
-					(when (and (/= handle -1)
-						   (logbitp 0 handle)
-						   (logbitp 1 handle)) :ucs-2))
-				      (stdstream-external-format outputp)))
-		     (make-two-way-stream *stdin* *stdout*))))))
+            and auto-close-p in '(nil nil nil t)
+            and stream-var in stdstream-vars
+            and direction in '(:input :output :output :io)
+            and name in '("standard input"
+                          "standard output"
+                          "standard error"
+                          "the terminal")
+            do
+         (let ((outputp (not (eq direction :input)))
+               (inputp (not (eq direction :output))))
+           (unless fd
+             #!+win32
+             (multiple-value-bind (keyboard screen)
+                 (sb!win32::make-console-fds)
+               (setf (symbol-value stream-var)
+                     (make-two-way-stream
+                      (if keyboard
+                          (make-fd-stream keyboard :name name :input t
+                                          :element-type :default :buffering :line
+                                          :auto-close auto-close-p
+                                          :external-format :ucs-2)
+                          *stdin*)
+                      (if screen
+                          (make-fd-stream screen :name name :output t
+                                          :element-type :default :buffering :line
+                                          :auto-close auto-close-p
+                                          :external-format :ucs-2)
+                          *stdout*)))
+               (return))
+             #!-win32
+             (setf fd (sb!unix:unix-open ttyname sb!unix:o_rdwr 0)))
+           (setf (symbol-value stream-var)
+                 (if fd
+                     (make-fd-stream fd
+                                     :name name
+                                     :input inputp
+                                     :output outputp
+                                     :buffering :line
+                                     :element-type :default
+                                     #!-win32 :serve-events #!-win32 inputp
+                                     :auto-close auto-close-p
+                                     :external-format
+                                     (or
+                                      #!+win32
+                                      (let ((handle (sb!win32:get-osfhandle fd)))
+                                        (when (and (/= handle -1)
+                                                   (logbitp 0 handle)
+                                                   (logbitp 1 handle)) :ucs-2))
+                                      (stdstream-external-format outputp)))
+                     (make-two-way-stream *stdin* *stdout*))))))
     (princ (get-output-stream-string *error-output*) *stderr*))
   (values))
 

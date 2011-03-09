@@ -100,20 +100,20 @@
       (setf condition-name 'sb!kernel::undefined-alien-variable-error))
     (if condition-name
         (typecase condition-name
-	  (string
-	     (error "~S at ~S info ~S eip ~S"
-		    condition-name
-		    (slot record 'exception-address)
-		    (sap-ref-sap
+          (string
+             (error "~S at ~S info ~S eip ~S"
+                    condition-name
+                    (slot record 'exception-address)
+                    (sap-ref-sap
                       (alien-sap (addr (slot record 'exception-information)))
                       (alien-size system-area-pointer :bytes))
-		    (sap-ref-sap
-		     (alien-funcall (extern-alien "os_context_pc_addr"
-						  (function system-area-pointer
-							    system-area-pointer))
-				    context-sap) 0)))
-	  (t
-	     (error condition-name)))
+                    (sap-ref-sap
+                     (alien-funcall (extern-alien "os_context_pc_addr"
+                                                  (function system-area-pointer
+                                                            system-area-pointer))
+                                    context-sap) 0)))
+          (t
+             (error condition-name)))
         (error "An exception occurred in context ~S: ~S. (Exception code: ~S)"
                context-sap exception-record-sap code))))
 
@@ -205,21 +205,21 @@
       ;; provided there is no WITH-INTERRUPTS.
       (let ((sb!unix::*unblock-deferrables-on-enabling-interrupts-p* t))
         (with-interrupt-bindings
-	  (let ((sb!debug:*stack-top-hint*
-		 (nth-value 1 (sb!kernel:find-interrupted-name-and-frame))))	  
-	    (allow-with-interrupts
-	      (nlx-protect
-	       (funcall function)
-	       ;; We've been running with deferrables
-	       ;; blocked in Lisp called by a C signal
-	       ;; handler. If we return normally the sigmask
-	       ;; in the interrupted context is restored.
-	       ;; However, if we do an nlx the operating
-	       ;; system will not restore it for us.
-	       (when sb!unix::*unblock-deferrables-on-enabling-interrupts-p*
-		 ;; This means that storms of interrupts
-		 ;; doing an nlx can still run out of stack.
-		 (unblock-deferrable-signals)))))))))
+          (let ((sb!debug:*stack-top-hint*
+                 (nth-value 1 (sb!kernel:find-interrupted-name-and-frame))))
+            (allow-with-interrupts
+              (nlx-protect
+               (funcall function)
+               ;; We've been running with deferrables
+               ;; blocked in Lisp called by a C signal
+               ;; handler. If we return normally the sigmask
+               ;; in the interrupted context is restored.
+               ;; However, if we do an nlx the operating
+               ;; system will not restore it for us.
+               (when sb!unix::*unblock-deferrables-on-enabling-interrupts-p*
+                 ;; This means that storms of interrupts
+                 ;; doing an nlx can still run out of stack.
+                 (unblock-deferrable-signals)))))))))
 
   (defmacro in-interruption ((&key) &body body)
     #!+sb-doc

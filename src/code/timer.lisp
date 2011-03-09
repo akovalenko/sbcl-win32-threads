@@ -341,7 +341,7 @@ triggers."
                              *waitable-timer-handle*)
                          doing (run-expired-timers)))
                  :name "System timer watchdog thread"
-		 :ephemeral t)))))
+                 :ephemeral t)))))
 
   (defun win32-itimer-deinit ()
     (with-scheduler-lock ()
