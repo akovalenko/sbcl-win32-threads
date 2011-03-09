@@ -3589,7 +3589,7 @@ struct ctx_package {
     os_context_register_t pacont;
 };
 
-pthread_mutex_t sprof_suspend_lock;
+pthread_mutex_t sprof_suspend_lock = PTHREAD_MUTEX_INITIALIZER;
 
 os_context_t* win32_suspend_get_context(pthread_t os_thread)
 {
@@ -3637,6 +3637,7 @@ os_context_t* win32_suspend_get_context(pthread_t os_thread)
 
     data = calloc(sizeof(*data),1); /* allocate with zero-fill */
     data->ctx.win32_context = &data->win32_context;
+
     pthread_np_get_thread_context(os_thread,&data->win32_context);
 
     /* Getting context of inactive fiber now fails. As any inactive
@@ -3648,7 +3649,11 @@ os_context_t* win32_suspend_get_context(pthread_t os_thread)
      * We regard zero PC as an indicator of invalid context. Zero ESP
      * would be just as good. */
     if (!*os_context_pc_addr(&data->ctx)) {
+#ifdef LISP_FEATURE_X86
 	struct thread* sap = os_thread->specifics[save_lisp_tls_key];
+#else
+	struct thread* sap = os_thread->specifics[specials];
+#endif
 	/* If pthread_t happens to be reused for non-lisp fiber, lisp
 	 * TSD pointer is empty. We have to back off and cleanup... */
 	if (!sap) {
@@ -3660,7 +3665,7 @@ os_context_t* win32_suspend_get_context(pthread_t os_thread)
 	/* csp_around_foreign_call == stack pointer before CALL insn.
 	 * When CALL happens, this address contains return PC.
 	 * A word below contains outer frame pointer. */
-	void **csp = (void**)sap->csp_around_foreign_call;
+	void **csp = *(void***)sap->csp_around_foreign_call;
 	void **topfp = *(csp-1);
 	void *toppc = *csp;
 	*os_context_pc_addr(&data->ctx) = (os_context_register_t)toppc;
