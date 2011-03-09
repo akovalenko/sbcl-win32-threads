@@ -17,10 +17,6 @@ set -e
 # provided with absolutely no warranty. See the COPYING and CREDITS
 # files for more information.
 
-base="$(realpath "$(dirname "$0")")"
-cd "$base"
-base=`pwd`
-
 echo //determining build host and target properties
 . ./guess-environment.sh
 
@@ -165,9 +161,9 @@ case "$sbcl_os" in
         # of course it doesn't provide dlopen, but there is
         # roughly-equivalent magic nevertheless.
         printf ' :os-provides-dlopen' >> $ltf
-        if [ $sbcl_arch = "x86" ]; then
-	    printf ' :sb-auto-fpu-switch' >> $ltf
-	fi
+        # if [ $sbcl_arch = "x86" ]; then
+	#    printf ' :sb-auto-fpu-switch' >> $ltf
+	# fi
 	printf ' :sb-gc-safepoint' >> $ltf
 	printf ' :sb-dynamic-core' >> $ltf
         link_or_copy Config.$sbcl_arch-win32 Config
@@ -179,7 +175,6 @@ case "$sbcl_os" in
         exit 1
         ;;
 esac
-cd "$base"
 
 # FIXME: Things like :c-stack-grows-..., etc, should be
 # *derived-target-features* or equivalent, so that there was a nicer
