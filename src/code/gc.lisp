@@ -347,13 +347,13 @@ collection is initiated. This can be set with SETF."
             (alloc-unboxed-start-page page-index-t)
             (alloc-large-start-page page-index-t)
             (alloc-large-unboxed-start-page page-index-t)
-            (bytes-allocated unsigned-long)
-            (gc-trigger unsigned-long)
-            (bytes-consed-between-gcs unsigned-long)
+            (bytes-allocated unsigned-alien-word)
+            (gc-trigger unsigned-alien-word)
+            (bytes-consed-between-gcs unsigned-alien-word)
             (number-of-gcs int)
             (number-of-gcs-before-promotion int)
-            (cum-sum-bytes-allocated unsigned-long)
-            (minimum-age-before-gc unsigned-long)
+            (cum-sum-bytes-allocated unsigned-alien-word)
+            (minimum-age-before-gc unsigned-alien-word)
             ;; `struct lutex *' or `void *', depending.
             (lutexes (* char))))
 

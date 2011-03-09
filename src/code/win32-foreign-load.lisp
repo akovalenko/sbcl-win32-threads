@@ -11,7 +11,7 @@
 
 (in-package "SB!ALIEN")
 
-(define-alien-type hinstance long)
+(define-alien-type hinstance signed-alien-word)
 
 (define-alien-routine ("LoadLibraryA" loadlibrary) hinstance
   (file c-string))
