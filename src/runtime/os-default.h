@@ -18,7 +18,7 @@
 #endif
 
 #ifndef HAVE_os_validate_recommit
-#define os_validate_recommit os_validate
+#define os_validate_recommit(addr,len) do{}while(0)
 #endif
 
 #ifndef HAVE_os_allocate_lazily

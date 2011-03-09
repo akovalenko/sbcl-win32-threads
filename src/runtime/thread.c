@@ -134,7 +134,10 @@ unlink_thread(struct thread *th)
 
 static int run_lisp_function(lispobj function)
 {
-#if defined(LISP_FEATURE_X86)
+#if defined(LISP_FEATURE_X86) ||			\
+    (defined(LISP_FEATURE_X86_64)			\
+     && !defined(LISP_FEATURE_WIN32))
+    
     static int first_time = 1;
     if (first_time) {
 	lispobj *args = NULL;
