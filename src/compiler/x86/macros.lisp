@@ -292,9 +292,10 @@
 	       (inst xor free-pointer alloc-tn tls-prefix)
 	       (inst xor alloc-tn free-pointer tls-prefix))
 	     #!+win32
-	     (inst mov swap-tn free-pointer tls-prefix)
-	     (inst mov free-pointer alloc-tn tls-prefix)
-	     (inst mov alloc-tn swap-tn))
+	     (progn
+	       (inst mov swap-tn free-pointer tls-prefix)
+	       (inst mov free-pointer alloc-tn tls-prefix)
+	       (inst mov alloc-tn swap-tn)))
 	    (t
 	     ;; It's easier if SIZE is still available.
 	     (inst mov free-pointer alloc-tn tls-prefix)
