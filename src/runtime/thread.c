@@ -364,12 +364,12 @@ new_thread_trampoline(struct thread *th)
     int i,j;
 #if defined(LISP_FEATURE_WIN32)
     struct lisp_exception_frame exception_frame;
+    wos_install_interrupt_handlers(&exception_frame);
 #endif
 #if defined(LISP_FEATURE_SB_AUTO_FPU_SWITCH)
     x87_fldcw(th->saved_c_fpu_mode);
 #endif
     FSHOW((stderr,"/creating thread %lu\n", thread_self()));
-    wos_install_interrupt_handlers(&exception_frame);
 #ifndef LISP_FEATURE_WIN32
     check_deferrables_blocked_or_lose(0);
     check_gc_signals_unblocked_or_lose(0);

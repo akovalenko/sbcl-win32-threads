@@ -62,6 +62,10 @@
 #define AMD64_SYSV_ABI
 #endif
 
+#ifndef odxprint
+#define odxprint(tag,...) do {} while(0)
+#endif
+
 #ifndef fast_aligned_fill_words
 static inline void fast_aligned_fill_words(void*addr, size_t len, lispobj pattern)
 {
