@@ -926,6 +926,7 @@ os_thread_t create_thread(lispobj initial_function) {
     struct thread *th, *thread = arch_os_get_current_thread();
     os_thread_t kid_tid = 0;
 
+#ifdef LISP_FEATURE_SB_GC_SAFEPOINT
 #ifdef LISP_FEATURE_WIN32
     if (!pthread_self()->fiber_factory) {
 #else
@@ -962,7 +963,7 @@ os_thread_t create_thread(lispobj initial_function) {
        floatless. */
     
     establish_c_fpu_world();
-    
+#endif	/* LISP_FEATURE_SB_GC_SAFEPOINT */
     /* Must defend against async unwinds. */
     if (SymbolValue(INTERRUPTS_ENABLED, thread) != NIL)
         lose("create_thread is not safe when interrupts are enabled.\n");

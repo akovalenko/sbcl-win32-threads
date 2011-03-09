@@ -22,7 +22,7 @@
 #endif
 
 #ifndef HAVE_os_allocate_lazily
-#define os_allocate_lazily os_validate
+#define os_allocate_lazily(len) os_validate(NULL,len)
 #endif
 
 #ifndef HAVE_os_number_of_processors
