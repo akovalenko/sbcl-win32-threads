@@ -142,8 +142,10 @@ static int run_lisp_function(lispobj function)
     if (first_time) {
 	lispobj *args = NULL;
 	first_time = 0;
+	#if defined(LISP_FEATURE_WIN32)
 	arch_os_get_current_thread()->control_stack_end =
 	    __builtin_frame_address(0);
+	#endif
 	return call_into_lisp_first_time(function,args,0);
     }
 #endif
