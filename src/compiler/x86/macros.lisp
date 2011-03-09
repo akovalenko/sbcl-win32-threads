@@ -254,7 +254,10 @@
                   #!-sb-thread (make-fixup "boxed_region" :foreign 4)
                   :scale 1)))          ; thread->alloc_region.end_addr
     
-    (multiple-value-bind (scratch-tn swap-tn) (values-list scratch-tns)
+    (multiple-value-bind
+	  #!+(and sb-thread win32) (scratch-tn swap-tn)
+      #!+(and sb-thread win32) (values-list scratch-tns)
+      #!-(and sb-thread win32) () #!-(and sb-thread win32) ()
       (unless (and (tn-p size) (location= alloc-tn size))
 	(inst mov alloc-tn size))
       #!+(and sb-thread win32)
@@ -297,8 +300,10 @@
 	     (inst mov free-pointer alloc-tn tls-prefix)
 	     (inst sub alloc-tn size)))
       (emit-label done)
-      (inst pop swap-tn)
-      (inst pop scratch-tn))
+      #!+(and sb-thread win32)
+      (progn 
+	(inst pop swap-tn)
+	(inst pop scratch-tn)))
     (values)))
 
 
