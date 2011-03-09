@@ -51,6 +51,7 @@ then
 else
     installroot=${SBCL_ENV_INSTALL_ROOT:-"/usr/local"}
     runtime=sbcl
+    lncp="ln -s"
 fi
 
 if [ -z "$sbcl_os" ] ; then
