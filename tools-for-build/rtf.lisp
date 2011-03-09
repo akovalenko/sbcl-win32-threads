@@ -40,7 +40,7 @@
                 \\deffn0~
                 {\\fonttbl\\f0\\fswiss Helvetica;}~
                 \\fs20~
-                ~{~A\\par\\par~%~}}"    ; each par used to end with
+                ~{~A\\par\\par~}}"      ; each par used to end with
                                         ; ~%, but resulting Rtf looks
                                         ; strange (WinXP, WiX 3.0.x,
                                         ; ?)
