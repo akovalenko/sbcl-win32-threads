@@ -44,6 +44,7 @@ if [ "$sbcl_os" = "darwin" ] && [ "$sbcl_arch" = "x86-64" ]; then
     fi
 fi
 
+original_dir=`pwd`
 cd ./src/runtime/
 rm -f Config target-arch-os.h target-arch.h target-os.h target-lispregs.h
 # KLUDGE: these two logically belong in the previous section
@@ -175,7 +176,7 @@ case "$sbcl_os" in
         exit 1
         ;;
 esac
-
+cd "$original_dir"
 # FIXME: Things like :c-stack-grows-..., etc, should be
 # *derived-target-features* or equivalent, so that there was a nicer
 # way to specify them then sprinkling them in this file. They should
