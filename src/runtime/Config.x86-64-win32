@@ -13,6 +13,7 @@ ASSEM_SRC = x86-64-assem.S
 ARCH_SRC = x86-64-arch.c
 
 OS_SRC = win32-os.c x86-64-win32-os.c os-common.c pthreads_win32.c
+OS_OBJS = sbcl-win.res.o
 
 # The "--Wl,--export-dynamic" flags are here to help people
 # experimenting with callbacks from C to SBCL, by allowing linkage to
@@ -49,6 +50,10 @@ CPP = cpp
 CC = gcc
 LD = ld
 NM = nm
+RC = windres
+
+%.res.o:	%.rc
+	$(RC) -o "$@" "$<"
 
 mangled-stuff.exe: gen1a-undefs
 	$(CC) -nostdlib -Wl,-r -Wl,-whole-archive \
