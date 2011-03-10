@@ -2,8 +2,8 @@
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0"
 	xmlns:asmv3="urn:schemas-microsoft-com:asm.v3">
     <assemblyIdentity
-	    version="1.0.x"
-	    processorArchitecture="x64"
+	    version="1.0.46.0"
+	    processorArchitecture="AMD64"
 	    name="CommonLisp.Sbcl.runtime"
 	    type="win32"
 	/>
