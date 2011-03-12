@@ -2422,7 +2422,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
     EXCEPTION_DISPOSITION disposition = ExceptionContinueExecution;
     void* fault_address = (void*)exception_record->ExceptionInformation[1];
     struct thread* self = arch_os_get_current_thread();
-    os_context_t ctx, *oldctx;
+    os_context_t ctx, *oldctx = NULL;
     if (self) {
         oldctx = self ? self->gc_safepoint_context : 0;
         self->gc_safepoint_context = &ctx;
