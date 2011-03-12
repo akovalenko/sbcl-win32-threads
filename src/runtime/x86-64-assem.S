@@ -426,26 +426,6 @@ GNAME(do_pending_interrupt):
 	ret
 	SIZE(GNAME(do_pending_interrupt))
 
-	.globl	GNAME(funcall_wrapper)
-	TYPE(GNAME(funcall_wrapper))
-GNAME(funcall_wrapper):
-	cld
-	push	%rbp
-	mov	8(%rcx),%rax
-	push	248(%rax)	# rip
-	push	160(%rax)	# rbp
-	mov	%rsp,%rbp	# rbp <= rsp
-	sub	$32,%rsp	# make shadow space
-	and	$-32,%rsp	# align
-	call	GNAME(veh)
-	mov	%rbp,%rsp
-	pop	%rbp
-	pop	%rbp
-	pop	%rbp
-	ret
-	SIZE(GNAME(veh_wrapper))
-	
-	
 	.globl	GNAME(post_signal_tramp)
 	TYPE(GNAME(post_signal_tramp))
 	.align	align_16byte,0x90
