@@ -36,7 +36,8 @@ GC_SRC = gencgc.c
 
 CFLAGS =  -g -W -Wall \
        -Wno-unused-variable -Wno-unused-function -Wno-unused-parameter \
-       -O5 -m64 -DWINVER=0x0501 -fno-omit-frame-pointer \
+       -fomit-frame-pointer \
+       -O5 -m64 -DWINVER=0x0501 \
        -D__W32API_USE_DLLIMPORT__
 
 # Don't use -fomit-frame-pointer; if C code calls back into Lisp, it

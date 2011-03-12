@@ -2421,13 +2421,17 @@ handle_exception(EXCEPTION_RECORD *exception_record,
     DWORD code = exception_record->ExceptionCode;
     EXCEPTION_DISPOSITION disposition = ExceptionContinueExecution;
     void* fault_address = (void*)exception_record->ExceptionInformation[1];
-    os_context_t ctx, *oldctx;
     struct thread* self = arch_os_get_current_thread();
+    os_context_t ctx, *oldctx;
+    if (self) {
+        oldctx = self ? self->gc_safepoint_context : 0;
+        self->gc_safepoint_context = &ctx;
+    }
     odxprint(seh,
-             "SEH: rec %p, frame %p, ctxptr %p, disp %p, rip %p, fault %p\n"
+             "SEH: rec %p, ctxptr %p, rip %p, fault %p\n"
              "... thread %p, code %p, rcx %p, fp-tags %p\n\n",
-             exception_record, exception_frame,
-             context, dispatcher_context,
+             exception_record,
+             context,
              voidreg(context,ip),
              fault_address,
              self,
@@ -2820,37 +2824,36 @@ complain:
 
     /* Common return point. */
 finish:
+    if (self) {
+        self->gc_safepoint_context = oldctx;
 #if defined(LISP_FEATURE_SB_AUTO_FPU_SWITCH)
-    if (self)
         self->in_lisp_fpu_mode = contextual_fpu_state;
 #endif
+    }
     errno = lastErrno;
     SetLastError(lastError);
     return disposition;
 }
 
+uword_t carry_frame_pointer(uword_t default_value)
+{
+    struct thread* self = arch_os_get_current_thread();
+    return (self->gc_safepoint_context)?
+        *os_context_fp_addr(self->gc_safepoint_context) : default_value;
+}
+
 #ifdef LISP_FEATURE_X86_64
+
 LONG veh(EXCEPTION_POINTERS *ep)
 {
-
-    volatile uword_t slots[4]={ep->ContextRecord->Rbp,
-                               ep->ContextRecord->Rbp};
     EXCEPTION_DISPOSITION disp;
     PUSH_ERRNO;
 
     if (!pthread_self())
         return EXCEPTION_CONTINUE_SEARCH;
     POP_ERRNO;
-    ep->ContextRecord->Rbp = (uword_t)&slots[2];
 
-
-    /* uword_t oldfp = *(uword_t*)__builtin_frame_address(0); */
-    /* *(uword_t*)__builtin_frame_address(0) = ep->ContextRecord->Rbp; */
-    disp = handle_exception(ep->ExceptionRecord,NULL,ep->ContextRecord,NULL);
-
-    ep->ContextRecord->Rbp = slots[0];
-
-    /* *(uword_t*)__builtin_frame_address(0) = oldfp; */
+    disp = handle_exception(ep->ExceptionRecord,0,ep->ContextRecord,0);
 
     switch (disp)
     {

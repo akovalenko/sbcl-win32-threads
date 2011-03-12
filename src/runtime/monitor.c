@@ -139,7 +139,7 @@ dump_cmd(char **ptr)
 
     while (count-- > 0) {
 #ifndef LISP_FEATURE_ALPHA
-        printf("0x%08lX: ", (unsigned long) addr);
+        printf("0x%p: ", (os_vm_address_t) addr);
 #else
         printf("0x%08X: ", (u32) addr);
 #endif
@@ -191,13 +191,13 @@ regs_cmd(char **ptr)
 {
     struct thread *thread=arch_os_get_current_thread();
 
-    printf("CSP\t=\t0x%08lx   ", (unsigned long)access_control_stack_pointer(thread));
+    printf("CSP\t=\t0x%p   ", access_control_stack_pointer(thread));
 #if !defined(LISP_FEATURE_X86) && !defined(LISP_FEATURE_X86_64)
-    printf("CFP\t=\t0x%08lx   ", (unsigned long)access_control_frame_pointer(thread));
+    printf("CFP\t=\t0x%p   ", access_control_frame_pointer(thread));
 #endif
 
 #ifdef reg_BSP
-    printf("BSP\t=\t0x%08lx\n", (unsigned long)get_binding_stack_pointer(thread));
+    printf("BSP\t=\t0x%p\n", get_binding_stack_pointer(thread));
 #else
     /* printf("BSP\t=\t0x%08lx\n",
            (unsigned long)SymbolValue(BINDING_STACK_POINTER)); */
@@ -207,8 +207,8 @@ regs_cmd(char **ptr)
 #ifdef LISP_FEATURE_GENCGC
     /* printf("DYNAMIC\t=\t0x%08lx\n", DYNAMIC_SPACE_START); */
 #else
-    printf("STATIC\t=\t0x%08lx   ",
-           (unsigned long)SymbolValue(STATIC_SPACE_FREE_POINTER, thread));
+    printf("STATIC\t=\t0x%p   ",
+           SymbolValue(STATIC_SPACE_FREE_POINTER, thread));
     printf("RDONLY\t=\t0x%08lx   ",
            (unsigned long)SymbolValue(READ_ONLY_SPACE_FREE_POINTER, thread));
     printf("DYNAMIC\t=\t0x%08lx\n", (unsigned long)current_dynamic_space);
@@ -241,7 +241,7 @@ search_cmd(char **ptr)
             return;
         }
         if (more_p(ptr)) {
-            addr = (lispobj *)native_pointer((long)parse_addr(ptr));
+            addr = (lispobj *)native_pointer((uword_t)parse_addr(ptr));
             if (more_p(ptr)) {
                 count = parse_number(ptr);
             }
@@ -267,15 +267,15 @@ search_cmd(char **ptr)
     start = end = addr;
     lastcount = count;
 
-    printf("searching for 0x%x at 0x%08lX\n", val, (unsigned long)end);
+    printf("searching for 0x%x at 0x%p\n", val, (void*)(uword_t)end);
 
     while (search_for_type(val, &end, &count)) {
-        printf("found 0x%x at 0x%08lX:\n", val, (unsigned long)end);
+        printf("found 0x%x at 0x%p:\n", val, (void*)(uword_t)end);
         obj = *end;
         addr = end;
         end += 2;
         if (widetag_of(obj) == SIMPLE_FUN_HEADER_WIDETAG) {
-            print((long)addr | FUN_POINTER_LOWTAG);
+            print((uword_t)addr | FUN_POINTER_LOWTAG);
         } else if (other_immediate_lowtag_p(obj)) {
             print((lispobj)addr | OTHER_POINTER_LOWTAG);
         } else {
@@ -420,16 +420,16 @@ catchers_cmd(char **ptr)
         while (catch != NULL) {
             printf("0x%08lX:\n\tuwp: 0x%08lX\n\tfp: 0x%08lX\n\t"
                    "code: 0x%08lX\n\tentry: 0x%08lX\n\ttag: ",
-                   (unsigned long)catch,
-                   (unsigned long)(catch->current_uwp),
-                   (unsigned long)(catch->current_cont),
+                   (uword_t)catch,
+                   (uword_t)(catch->current_uwp),
+                   (uword_t)(catch->current_cont),
 #if defined(LISP_FEATURE_X86) || defined(LISP_FEATURE_X86_64)
-                   (unsigned long)component_ptr_from_pc((void*)catch->entry_pc)
+                   (uword_t)component_ptr_from_pc((void*)catch->entry_pc)
                        + OTHER_POINTER_LOWTAG,
 #else
-                   (unsigned long)(catch->current_code),
+                   (uword_t)(catch->current_code),
 #endif
-                   (unsigned long)(catch->entry_pc));
+                   (uword_t)(catch->entry_pc));
             brief_print((lispobj)catch->tag);
             catch = catch->previous_catch;
         }

@@ -179,8 +179,11 @@ GNAME(call_into_lisp_first_time):
 	
 	.align	align_16byte,0x90
 GNAME(call_into_lisp):
+	mov	%rbp,%rax
 	push	%rbp		# Save old frame pointer.
 	mov	%rsp,%rbp	# Establish new frame.
+	push	%r15
+	mov	%rax,%r15
 Lstack:
 	/* FIXME x86 saves FPU state here */
 	push	%rbx  	# these regs are callee-saved according to C
@@ -188,10 +191,6 @@ Lstack:
 	push	%r13    # the lisp function returns
 	push	%r14    #
 	push	%r15    #
-	sub	$16,%rsp
-	movups	%xmm6,(%rsp)
-	sub	$16,%rsp
-	movups	%xmm7,(%rsp)
 
 	mov	%rsp,%rbx	# remember current stack
 	push	%rbx		# Save entry stack on (maybe) new stack.
@@ -200,6 +199,13 @@ Lstack:
 	push	%rsi	#
 	push	%rdx	#
 #ifdef LISP_FEATURE_SB_THREAD
+#ifdef LISP_FEATURE_SB_GC_SAFEPOINT
+	mov	(%rbp),%rcx
+	sub	$32,%rsp
+	call	GNAME(carry_frame_pointer)
+	add	$32,%rsp
+	mov	%rax,(%rbp)
+#endif
 #ifdef LISP_FEATURE_GCC_TLS
 	movq	%fs:0, %rax
 	movq	GNAME(current_thread)@TPOFF(%rax), %r12
@@ -253,10 +259,6 @@ LsingleValue:
 	pop	%rsp		# c-sp
 
 /* Restore C regs */
-	movups	(%rsp),%xmm7
-	add	$16,%rsp
-	movups	(%rsp),%xmm6
-	add	$16,%rsp
 	pop	%r15
 	pop	%r14
 	pop	%r13
@@ -266,7 +268,9 @@ LsingleValue:
 /* FIXME Restore the NPX state. */
 
 	mov	%rdx,%rax	# c-val
-	leave
+	mov	%r15,%rbp	# orig rbp
+	pop	%r15		# orig r15
+	add	$8,%rsp		# no need for saved (overridden) rbp
 	ret
 	SIZE(GNAME(call_into_lisp))
 
@@ -422,6 +426,26 @@ GNAME(do_pending_interrupt):
 	ret
 	SIZE(GNAME(do_pending_interrupt))
 
+	.globl	GNAME(funcall_wrapper)
+	TYPE(GNAME(funcall_wrapper))
+GNAME(funcall_wrapper):
+	cld
+	push	%rbp
+	mov	8(%rcx),%rax
+	push	248(%rax)	# rip
+	push	160(%rax)	# rbp
+	mov	%rsp,%rbp	# rbp <= rsp
+	sub	$32,%rsp	# make shadow space
+	and	$-32,%rsp	# align
+	call	GNAME(veh)
+	mov	%rbp,%rsp
+	pop	%rbp
+	pop	%rbp
+	pop	%rbp
+	ret
+	SIZE(GNAME(veh_wrapper))
+	
+	
 	.globl	GNAME(post_signal_tramp)
 	TYPE(GNAME(post_signal_tramp))
 	.align	align_16byte,0x90

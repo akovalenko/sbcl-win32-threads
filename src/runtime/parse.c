@@ -196,11 +196,11 @@ char *token;
 }
 #endif
 
-long parse_number(ptr)
+uword_t parse_number(ptr)
 char **ptr;
 {
     char *token = parse_token(ptr);
-    long result;
+    uword_t result;
 
     if (token == NULL) {
         printf("expected a number\n");
@@ -233,7 +233,7 @@ char **ptr;
         result &= ~7;
     }
     else {
-        long value;
+        uword_t value;
         if (!string_to_long(token, &value)) {
             printf("invalid number: ``%s''\n", token);
             throw_to_monitor();

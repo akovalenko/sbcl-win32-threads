@@ -73,7 +73,7 @@ int arch_os_thread_init(struct thread *thread)
          * the backtrace.
          */
         thread->control_stack_start = cur_stack_start;
-        thread->control_stack_end = __builtin_frame_address(0);
+        thread->control_stack_end = cur_stack_end;
 
 #ifndef LISP_FEATURE_SB_THREAD
         /*
