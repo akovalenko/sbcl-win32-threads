@@ -2835,10 +2835,11 @@ finish:
     return disposition;
 }
 
-uword_t carry_frame_pointer(uword_t default_value)
+os_context_register_t carry_frame_pointer(os_context_register_t default_value)
 {
     struct thread* self = arch_os_get_current_thread();
-    return (self->gc_safepoint_context)?
+    return
+	(self->gc_safepoint_context) ?
         *os_context_fp_addr(self->gc_safepoint_context) : default_value;
 }
 
