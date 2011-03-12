@@ -292,8 +292,12 @@ GNAME(call_into_lisp_first_time):
 	
 	.align	align_16byte,0x90
 GNAME(call_into_lisp):
+	movl	%ebp,%eax
 	pushl	%ebp		# Save old frame pointer.
 	movl	%esp,%ebp	# Establish new frame.
+	pushl	%eax		# Save a copy.
+	call	GNAME(carry_frame_pointer)
+	movl	%eax,(%ebp)
 Lstack:
 	
 #ifndef LISP_FEATURE_SB_AUTO_FPU_SWITCH
@@ -405,6 +409,7 @@ LsingleValue:
 #endif
 	popl	%ebp		# c-sp
 	movl	%edx,%eax	# c-val
+	addl	$4,%esp
 	ret
 	SIZE(GNAME(call_into_lisp))
 
