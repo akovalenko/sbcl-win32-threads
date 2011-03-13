@@ -296,8 +296,10 @@ GNAME(call_into_lisp):
 	pushl	%ebp		# Save old frame pointer.
 	movl	%esp,%ebp	# Establish new frame.
 	pushl	%eax		# Save a copy.
+	pushl	%eax		# Save an arg.
 	call	GNAME(carry_frame_pointer)
 	movl	%eax,(%ebp)
+	popl	%eax
 Lstack:
 	
 #ifndef LISP_FEATURE_SB_AUTO_FPU_SWITCH

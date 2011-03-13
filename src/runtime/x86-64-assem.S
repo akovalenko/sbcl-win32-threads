@@ -182,9 +182,9 @@ GNAME(call_into_lisp):
 	mov	%rbp,%rax
 	push	%rbp		# Save old frame pointer.
 	mov	%rsp,%rbp	# Establish new frame.
+Lstack:
 	push	%r15
 	mov	%rax,%r15
-Lstack:
 	/* FIXME x86 saves FPU state here */
 	push	%rbx  	# these regs are callee-saved according to C
 	push	%r12	# so must be preserved and restored when 
