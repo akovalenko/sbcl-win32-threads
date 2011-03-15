@@ -541,10 +541,10 @@
          ;; KLUDGE: not string-trim, because #\Return character is
          ;; unavailable while cross-compiling.
          (subseq message 0
-                 (or (position-if-not
-                      (lambda (character)
-                        (member (char-code character) '(10 13 32)))
-                      message :from-end t) 0)))))
+                 (1+ (or (position-if-not
+                          (lambda (character)
+                            (member (char-code character) '(10 13 32)))
+                          message :from-end t) 0))))))
 
 (defmacro win32-error (func-name &optional err)
   `(let ((err-code ,(or err `(get-last-error))))
