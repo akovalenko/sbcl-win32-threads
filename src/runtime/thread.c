@@ -540,6 +540,11 @@ new_thread_trampoline(struct thread *th)
     for (i=FIRST_TLS_INDEX; i<last_initially_bound_dynamic_value_index; ++i)
         dynamic_values[i] = reset_dynamic_values[i];
 
+    /* On safepoint builds, we reenter call_into_lisp in two
+       situations: (1) in exception handler and (2) in resurrected
+       thread. The latter case is the only one that might cause
+       problems with stale frame pointers. */
+    th->gc_safepoint_context = NULL;
     goto resurrect;
 
 
