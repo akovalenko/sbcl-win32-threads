@@ -84,7 +84,7 @@
 ;;; removing it from the pipe.  BUFFER, BYTES-READ, BYTES-AVAIL, and
 ;;; BYTES-LEFT-THIS-MESSAGE may be NULL if no data is to be read.
 ;;; Return TRUE on success, FALSE on failure.
-(define-alien-routine ("PeekNamedPipe" peek-named-pipe) lispbool
+(define-alien-routine ("PeekNamedPipe" peek-named-pipe) bool
   (pipe handle)
   (buffer (* t))
   (buffer-size dword)
@@ -101,7 +101,7 @@
 ;;; Read data from the console input buffer without removing it,
 ;;; without blocking.  Buffer should be large enough for LENGTH *
 ;;; INPUT-RECORD-SIZE bytes.
-(define-alien-routine ("PeekConsoleInputA" peek-console-input) lispbool
+(define-alien-routine ("PeekConsoleInputA" peek-console-input) bool
   (handle handle)
   (buffer (* t))
   (length dword)
@@ -186,7 +186,7 @@
       (return-from handle-listen
         (alien-funcall (extern-alien "win32_tty_listen" (function boolean handle))
                        handle)))
-    (when (peek-named-pipe handle nil 0 nil (addr avail) nil)
+    (unless (zerop (peek-named-pipe handle nil 0 nil (addr avail) nil))
       (return-from handle-listen (plusp avail)))
     (let ((res (comm-input-available handle)))
       (unless (zerop res)
