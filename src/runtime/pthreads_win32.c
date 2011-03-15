@@ -1381,7 +1381,7 @@ int sigpending(sigset_t *set)
 #define FUTEX_ETIMEDOUT 1
 
 int
-futex_wait(volatile int *lock_word, int oldval, long sec, unsigned long usec)
+futex_wait(volatile intptr_t *lock_word, intptr_t oldval, long sec, unsigned long usec)
 {
   struct thread_wakeup w;
   pthread_t self = pthread_self();
@@ -1432,7 +1432,7 @@ futex_wait(volatile int *lock_word, int oldval, long sec, unsigned long usec)
 }
 
 int
-futex_wake(volatile int *lock_word, int n)
+futex_wake(volatile intptr_t *lock_word, int n)
 {
     pthread_cond_t *cv = &futex_pseudo_cond;
     int result = 0;

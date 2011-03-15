@@ -12,6 +12,7 @@ typedef int sigset_t;
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <stdint.h>
 
 /* 0 - Misc */
 
@@ -138,7 +139,7 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex);
 typedef struct thread_wakeup {
   HANDLE event;
   struct thread_wakeup *next;
-  volatile int *uaddr;
+  volatile intptr_t *uaddr;
   int uval;
   int info;
 } thread_wakeup;
@@ -327,8 +328,8 @@ int sigismember(const sigset_t *set, int signum);
 typedef int sig_atomic_t;
 
 /* Futexes */
-int futex_wait(volatile int *lock_word, int oldval, long sec, unsigned long usec);
-int futex_wake(volatile int *lock_word, int n);
+int futex_wait(volatile intptr_t *lock_word, intptr_t oldval, long sec, unsigned long usec);
+int futex_wake(volatile intptr_t *lock_word, int n);
 
 /* Debugging */
 void pthread_np_lose(int trace_depth, const char* fmt, ...);
