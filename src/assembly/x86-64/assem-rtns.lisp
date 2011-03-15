@@ -280,12 +280,6 @@
   ;; If a match, return to context in arg block.
   (inst jmp :e DO-EXIT)
 
-  #!+sb-gc-safepoint
-  (progn
-    ;; Remove stale frame pointer
-    (inst xor rdx-tn rdx-tn)
-    (loadw rdx-tn thread-base-tn thread-gc-safepoint-context-slot))
-
   ;; Not a match - return to *CURRENT-UNWIND-PROTECT-BLOCK* context.
   ;; Important! Must save (and return) the arg 'block' for later use!!
   (move rdx-tn block)
