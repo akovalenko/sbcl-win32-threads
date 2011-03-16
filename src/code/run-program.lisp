@@ -757,6 +757,11 @@ Users Manual for details about the PROCESS structure."#-win32"
                                       (values stdout output-stream)
                                       (get-descriptor-for ,@args))))
                            ,@body))
+                      (get-lowio-fd (hi-level-fd unix-access)
+                        #-fds-are-windows-handles
+                        hi-level-fd
+                        #+fds-are-windows-handles
+                        `(sb-win32::real-open-osfhandle ,hi-level-fd ,unix-access))
                       (with-open-pty (((pty-name pty-stream) (pty cookie))
                                       &body body)
                         #+win32 `(declare (ignore ,pty ,cookie))
@@ -805,9 +810,9 @@ Users Manual for details about the PROCESS structure."#-win32"
                                      (apply
                                       #'make-process
                                       :pid child
-                                      :input (sb-win32::real-open-osfhandle input-stream sb-unix::o_rdonly)
-                                      :output (sb-win32::real-open-osfhandle output-stream sb-unix::o_wronly)
-                                      :error (sb-win32::real-open-osfhandle error-stream sb-unix::o_wronly)
+                                      :input (get-lowio-fd input-stream sb-unix::o_rdonly)
+                                      :output (get-lowio-fd output-stream sb-unix::o_wronly)
+                                      :error (get-lowio-fd  error-stream sb-unix::o_wronly)
                                       :status-hook status-hook
                                       :cookie cookie
                                       #-win32 (list :pty pty-stream
