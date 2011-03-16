@@ -1889,6 +1889,9 @@ int win32_open_for_mmap(const char* fileName)
         }
     } while (handle == INVALID_HANDLE_VALUE && retries--);
     AVER(handle && (handle!=INVALID_HANDLE_VALUE));
+    /* Beware: runtime initialization in C still uses lowio even when
+     * fds are handles, so _open_osfhandle below should be
+     * retained (until runtime is fixed too). */
     return _open_osfhandle((intptr_t)handle,O_BINARY);
 }
 
@@ -1919,6 +1922,7 @@ os_map(int fd, int offset, os_vm_address_t addr, os_vm_size_t len)
     {
         if (IS_ALIGNED(offset,os_vm_mmap_unit_size)) {
             len = ALIGN_UP(len,os_vm_mmap_unit_size);
+            /* Beware as well (see comment on _open_osfhandle above). */
             HANDLE mapping =
                 CreateFileMapping((HANDLE)_get_osfhandle(fd),NULL,
                                   PAGE_EXECUTE_WRITECOPY, 0, offset+len,
