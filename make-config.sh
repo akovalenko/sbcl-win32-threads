@@ -166,6 +166,8 @@ case "$sbcl_os" in
 	#    printf ' :sb-auto-fpu-switch' >> $ltf
 	# fi
 	printf ' :sb-gc-safepoint' >> $ltf
+	# let's try
+	printf ' :fds-are-windows-handles' >> $ltf
 	printf ' :sb-dynamic-core' >> $ltf
         link_or_copy Config.$sbcl_arch-win32 Config
         link_or_copy $sbcl_arch-win32-os.h target-arch-os.h
