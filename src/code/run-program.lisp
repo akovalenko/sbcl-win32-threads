@@ -801,9 +801,9 @@ Users Manual for details about the PROCESS structure."#-win32"
                            (with-environment-vec (environment-vec environment)
                              (setq child (without-gcing
                                            (spawn progname args-vec
-                                                  (get-lowio-fd stdin)
-                                                  (get-lowio-fd stdout)
-                                                  (get-lowio-fd stderr)
+                                                  (get-lowio-fd stdin sb-unix::o_rdonly)
+                                                  (get-lowio-fd stdout sb-unix::o_wronly)
+                                                  (get-lowio-fd stderr sb-unix::o_wronly)
                                                   (if search 1 0)
                                                   environment-vec pty-name
                                                   (if wait 1 0))))
