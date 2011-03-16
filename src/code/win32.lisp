@@ -59,8 +59,11 @@
 
 ;;; Get the operating system handle for a C file descriptor.  Returns
 ;;; INVALID-HANDLE on failure.
+#!-fds-are-windows-handles
 (define-alien-routine ("_get_osfhandle" get-osfhandle) handle
   (fd int))
+#!+fds-are-windows-handles
+(defmacro get-osfhandle (fd) ,fd)
 
 ;;; Read data from a file handle into a buffer.  This may be used
 ;;; synchronously or with "overlapped" (asynchronous) I/O.
@@ -1050,3 +1053,14 @@ format for such streams."
                                    file-open-existing 0 0)))
           (unless (eql handle invalid-handle)
             (open-osfhandle handle lowio-flags)))))))
+
+(defconstant +std-input-handle+ -10)
+(defconstant +std-output-handle+ -11)
+(defconstant +std-error-handle+ -12)
+
+(defun get-std-handles ()
+  (loop for identity in `(,+std-input-handle+ ,+std-output-handle+ ,+std-error-handle+)
+        for handle = (alien-funcall
+                      (extern-alien "GetStdHandle" (function handle dword))
+                           (logand (1- (ash 1 (alien-size dword))) identity))
+        collect (and (/= handle invalid-handle) handle)))

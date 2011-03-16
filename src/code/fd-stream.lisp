@@ -167,7 +167,9 @@
   ;; the type of element being transfered
   (element-type 'base-char)
   ;; the Unix file descriptor
-  (fd -1 :type fixnum)
+  (fd -1 :type
+   #!-fds-are-windows-handles fixnum
+   #!+fds-are-windows-handles sb-vm:signed-word)
   ;; controls when the output buffer is flushed
   (buffering :full :type (member :full :line :none))
   ;; controls whether the input buffer must be cleared before output
@@ -2541,7 +2543,11 @@
     (let ((ttyname #.(coerce "/dev/tty" 'simple-base-string))
           (stdstream-vars '(*stdin* *stdout* *stderr* *tty*)))
       #!+win32 (declare (ignorable ttyname))
-      (loop for fd in '(0 1 2 nil)
+      (loop for fd in
+            #!-fds-are-windows-handles
+            '(0 1 2 nil)
+            #!+fds-are-windows-handles
+             (append (sb-win32::get-std-handles) '(nil))
             and auto-close-p in '(nil nil nil t)
             and stream-var in stdstream-vars
             and direction in '(:input :output :output :io)

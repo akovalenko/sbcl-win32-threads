@@ -1859,6 +1859,13 @@ static int os_supports_executable_mapping = 0;
 
 static char* non_external_self_name = "//////<SBCL executable>";
 
+#ifdef LISP_FEATURE_FDS_ARE_WINDOWS_HANDLES
+#define _open_osfhandle(handle,mode) (handle)
+#define _get_osfhandle(fd) (fd)
+#endif
+
+
+
 int win32_open_for_mmap(const char* fileName)
 {
     HANDLE handle;
