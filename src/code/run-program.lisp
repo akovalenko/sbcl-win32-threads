@@ -985,14 +985,14 @@ Users Manual for details about the PROCESS structure."#-win32"
                         #+win32 "~@<couldn't open \"nul\" device: ~2I~_~A~:>"
                         (strerror errno)))
                (push fd *close-in-parent*)
-               #!+fds-are-windows-handles
+               #+fds-are-windows-handles
                (setf (sb-win32::inheritable-handle-p fd) t)
                (values fd nil)))
             ((eq object :stream)
              (multiple-value-bind (read-fd write-fd) (sb-unix:unix-pipe)
                (unless read-fd
                  (error "couldn't create pipe: ~A" (strerror write-fd)))
-               #!+fds-are-windows-handles
+               #+fds-are-windows-handles
                (setf (sb-win32::inheritable-handle-p read-fd)
                      (eq direction :input)
                      (sb-win32::inheritable-handle-p write-fd)
