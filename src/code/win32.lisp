@@ -773,11 +773,26 @@ UNIX epoch: January 1st 1970."
       (cast-and-free aname))))
 
 ;; 64-bit file positioning
+#!-fds-are-windows-handles
 (define-alien-routine ("_lseeki64" lseeki64)
     (signed 64)
   (fd int)
   (position (signed 64))
   (whence int))
+
+(define-alien-routine ("SetFilePointerEx" set-file-pointer-ex) lispbool
+  (handle handle)
+  (offset long-long)
+  (new-position long-long :out)
+  (whence dword))
+
+#!+fds-are-windows-handles
+(defun lseeki64 (handle offset whence)
+  (multiple-value-bind (moved to-place)
+      (set-file-pointer-ex handle offset whence)
+    (if moved
+        (values to-place 0)
+        (values nil (- (get-last-error))))))
 
 ;;; File mapping support routines
 
