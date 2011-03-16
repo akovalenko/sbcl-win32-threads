@@ -35,7 +35,6 @@
 #include <errno.h>
 #include <limits.h>
 #include <fcntl.h>
-#include <assert.h>
 
 #ifndef LISP_FEATURE_WIN32
 #include <pwd.h>
