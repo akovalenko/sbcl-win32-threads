@@ -169,7 +169,7 @@
   ;; the Unix file descriptor
   (fd -1 :type
    #!-fds-are-windows-handles fixnum
-   #!+fds-are-windows-handles sb-vm:signed-word)
+   #!+fds-are-windows-handles sb!vm:signed-word)
   ;; controls when the output buffer is flushed
   (buffering :full :type (member :full :line :none))
   ;; controls whether the input buffer must be cleared before output
