@@ -1156,6 +1156,11 @@ format for such streams."
 (defun windows-pipe ()
   (create-pipe nil 256))
 
+(defun windows-isatty (handle)
+  (if (eql sb!win32::file-type-char
+           (sb!win32:get-file-type handle))
+      1 0))
+
 (defun inheritable-handle-p (handle)
   (multiple-value-bind (got flags)
       (get-handle-information handle)

@@ -314,9 +314,7 @@ corresponds to NAME, or NIL if there is none."
   #!-fds-are-windows-handles
   (int-syscall ("[_]isatty" int) fd)
   #!+fds-are-windows-handles
-  (if (eql sb!win32::file-type-char
-           (sb!win32:get-file-type fd))
-      1 0))
+  (sb!win32::windows-isatty fd))
 
 (defun unix-lseek (fd offset whence)
   "Unix-lseek accepts a file descriptor and moves the file pointer by
