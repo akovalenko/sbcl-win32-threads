@@ -801,7 +801,9 @@ Users Manual for details about the PROCESS structure."#-win32"
                            (with-environment-vec (environment-vec environment)
                              (setq child (without-gcing
                                            (spawn progname args-vec
-                                                  stdin stdout stderr
+                                                  (get-lowio-fd stdin)
+                                                  (get-lowio-fd stdout)
+                                                  (get-lowio-fd stderr)
                                                   (if search 1 0)
                                                   environment-vec pty-name
                                                   (if wait 1 0))))
@@ -810,9 +812,9 @@ Users Manual for details about the PROCESS structure."#-win32"
                                      (apply
                                       #'make-process
                                       :pid child
-                                      :input (get-lowio-fd input-stream sb-unix::o_rdonly)
-                                      :output (get-lowio-fd output-stream sb-unix::o_wronly)
-                                      :error (get-lowio-fd  error-stream sb-unix::o_wronly)
+                                      :input input-stream
+                                      :output output-stream
+                                      :error error-stream
                                       :status-hook status-hook
                                       :cookie cookie
                                       #-win32 (list :pty pty-stream
