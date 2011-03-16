@@ -47,10 +47,10 @@
           ioctl setsockopt getsockopt))
 
 (defun accept (fd &rest options)
-  (let ((handle (apply #'win32-accept (fd->handle fd) options)))
+  (let ((handle (apply #'win32-accept (maybe-fd->handle fd) options)))
     (if (= handle -1)
         -1
-        (handle->fd handle 0))))
+        (handle->maybe-fd handle 0))))
 
 (defun make-wsa-version (major minor)
   (dpb minor (byte 8 8) major))
