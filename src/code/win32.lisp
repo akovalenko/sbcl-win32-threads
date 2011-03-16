@@ -63,7 +63,7 @@
 (define-alien-routine ("_get_osfhandle" get-osfhandle) handle
   (fd int))
 #!+fds-are-windows-handles
-(defmacro get-osfhandle (fd) ,fd)
+(defmacro get-osfhandle (fd) fd)
 
 ;;; Read data from a file handle into a buffer.  This may be used
 ;;; synchronously or with "overlapped" (asynchronous) I/O.
@@ -1005,6 +1005,11 @@ UNIX epoch: January 1st 1970."
 ;;; and then we close a handle ourserves.
 
 (defun unixlike-close (fd)
+  #!+fds-are-windows-handles
+  (if (or (zerop (close-socket fd))
+          (close-handle fd))
+      t (values nil ebadf))
+  #!-fds-are-windows-handles
   (let ((handle (get-osfhandle fd)))
     (flet ((close-protection (enable)
              (set-handle-information handle 2 (if enable 2 0))))
