@@ -891,6 +891,10 @@ UNIX epoch: January 1st 1970."
     dword
   (handle handle))
 
+#!+fds-are-windows-handles
+(defmacro open-osfhandle (handle flags)
+  (declare (ignore flags)) handle)
+#!-fds-are-windows-handles
 (define-alien-routine ("_open_osfhandle" open-osfhandle)
     int
   (handle handle)
