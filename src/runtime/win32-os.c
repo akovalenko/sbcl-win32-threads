@@ -3386,7 +3386,7 @@ int win32_unix_write(int fd, void * buf, int count)
     BOOL ok;
 
     odprintf("write(%d, 0x%p, %d)", fd, buf, count);
-    handle =(HANDLE)_get_osfhandle(fd);
+    handle =(HANDLE)maybe_get_osfhandle(fd);
     if (console_handle_p(handle))
         return win32_write_unicode_console(handle,buf,count);
 
@@ -3460,7 +3460,7 @@ int win32_unix_read(int fd, void * buf, int count)
     BOOL seekable;
 
     odprintf("read(%d, 0x%p, %d)", fd, buf, count);
-    handle = (HANDLE)_get_osfhandle(fd);
+    handle = (HANDLE)maybe_get_osfhandle(fd);
 
     if (console_handle_p(handle)) {
         /* 1. Console is a singleton.
