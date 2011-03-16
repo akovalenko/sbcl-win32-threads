@@ -150,6 +150,18 @@ corresponds to NAME, or NIL if there is none."
 (/show0 "unix.lisp 304")
 
 
+
+
+;;; Unix routines are currently in process of being reimplemented over
+;;; kernel32 API, instead of the old (simple, but less effective) way
+;;; of building on MSVCRT. Many functions defined in this file are
+;;; turned into aliases for some sb!win32: stuff; inlining them is
+;;; beneficial in this case.
+
+#!+win32
+(declaim (inline unix-open unix-close))
+
+
 ;;;; fcntl.h
 ;;;;
 ;;;; POSIX Standard: 6.5 File Control Operations        <fcntl.h>
@@ -161,10 +173,13 @@ corresponds to NAME, or NIL if there is none."
 ;;; If the O_CREAT flag is specified, then the file is created with a
 ;;; permission of argument MODE if the file doesn't exist. An integer
 ;;; file descriptor is returned by UNIX-OPEN.
+
 (defun unix-open (path flags mode)
   (declare (type unix-pathname path)
            (type fixnum flags)
            (type unix-file-mode mode))
+  #!+win32 (sb!win32:unixlike-open path flags mode)
+  #!-win32
   (with-restarted-syscall (value errno)
     (int-syscall ("[_]open" c-string int int)
                  path
@@ -177,8 +192,10 @@ corresponds to NAME, or NIL if there is none."
 ;;; associated with it.
 (/show0 "unix.lisp 391")
 (defun unix-close (fd)
-  (declare (type unix-fd fd))
-  (void-syscall ("[_]close" int) fd))
+  #!+win32 (sb!win32:unixlike-close fd)
+  #!-win32 (declare (type unix-fd fd))
+  #!-win32 (void-syscall ("[_]close" int) fd))
+
 
 ;;;; stdlib.h
 
@@ -201,7 +218,8 @@ corresponds to NAME, or NIL if there is none."
                                mode)))
         (if (minusp fd)
             (values nil (get-errno))
-            (values fd (octets-to-string template-buffer)))))))
+            (values (sb!win32::duplicate-and-unwrap-fd fd)
+                    (octets-to-string template-buffer)))))))
 
 ;;;; timebits.h
 
@@ -293,7 +311,12 @@ corresponds to NAME, or NIL if there is none."
 ;;; Is a stream interactive?
 (defun unix-isatty (fd)
   (declare (type unix-fd fd))
-  (int-syscall ("[_]isatty" int) fd))
+  #!-fds-are-windows-handles
+  (int-syscall ("[_]isatty" int) fd)
+  #!+fds-are-windows-handles
+  (if (eql sb!win32::file-type-char
+           (sb!win32:get-file-type fd))
+      1 0))
 
 (defun unix-lseek (fd offset whence)
   "Unix-lseek accepts a file descriptor and moves the file pointer by
@@ -364,13 +387,16 @@ corresponds to NAME, or NIL if there is none."
 
 ;;; Opening the pipe seems to be the only place where o_noinherit can
 ;;; be set.
-#!+win32
+#!+(and win32 (not fds-are-windows-handles))
 (defun msvcrt-raw-pipe (fds size mode)
   (syscall ("_pipe" (* int) int int)
            (values (deref fds 0) (deref fds 1))
            (cast fds (* int)) size mode))
 #!+win32
 (defun unix-pipe ()
+  #!+fds-are-windows-handles
+  (sb!win32::windows-pipe)
+  #!-fds-are-windows-handles
   (with-alien ((fds (array int 2)))
     (msvcrt-raw-pipe fds 256 o_binary)))
 

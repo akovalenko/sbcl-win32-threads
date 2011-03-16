@@ -65,6 +65,12 @@
 #!+fds-are-windows-handles
 (defmacro get-osfhandle (fd) fd)
 
+(define-alien-routine ("_get_osfhandle" real-get-osfhandle) handle
+  (fd int))
+
+(define-alien-routine ("_close" real-crt-close) int
+  (fd int))
+
 ;;; Read data from a file handle into a buffer.  This may be used
 ;;; synchronously or with "overlapped" (asynchronous) I/O.
 (define-alien-routine ("ReadFile" read-file) lispbool
@@ -991,10 +997,17 @@ UNIX epoch: January 1st 1970."
   (inheritp lispbool)
   (options dword))
 
+(defconstant +handle-flag-inherit+ 1)
+(defconstant +handle-flag-protect-from-close+ 2)
+
 (define-alien-routine ("SetHandleInformation" set-handle-information) lispbool
   (handle handle)
   (mask dword)
   (flags dword))
+
+(define-alien-routine ("GetHandleInformation" get-handle-information) lispbool
+  (handle handle)
+  (flags dword :out))
 
 (define-alien-routine getsockopt int
   (handle handle)
@@ -1087,4 +1100,37 @@ format for such streams."
         for handle = (alien-funcall
                       (extern-alien "GetStdHandle" (function handle dword))
                            (logand (1- (ash 1 (alien-size dword))) identity))
-        collect (and (/= handle invalid-handle) handle)))
+        collect (and (/= handle invalid-handle) (not (zerop handle)) handle)))
+
+(define-alien-routine ("CreatePipe" create-pipe) lispbool
+  (read-pipe handle :out)
+  (write-pipe handle :out)
+  (security-attributes (* t))
+  (buffer-size dword))
+
+(defconstant +duplicate-same-access+ 2)
+
+(defun duplicate-and-unwrap-fd (fd &key inheritp)
+  (let ((me (get-current-process)))
+    (multiple-value-bind (duplicated handle)
+        (duplicate-handle me (real-get-osfhandle fd)
+                          me 0 inheritp +duplicate-same-access+)
+      (if duplicated
+          (prog1 handle (real-crt-close fd))
+          (win32-error 'duplicate-and-unwrap-fd)))))
+
+(defun windows-pipe ()
+  (create-pipe nil 256))
+
+(defun inheritable-handle-p (handle)
+  (multiple-value-bind (got flags)
+      (get-handle-information handle)
+    (if got (plusp (logand flags +handle-flag-inherit+))
+        (win32-error 'inheritable-handle-p))))
+
+(defun (setf inheritable-handle-p) (allow handle)
+  (if (set-handle-information handle
+                              +handle-flag-inherit+
+                              (if allow +handle-flag-inherit+ 0))
+      allow
+      (win32-error '(setf inheritable-handle-p))))

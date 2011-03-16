@@ -942,7 +942,7 @@ Users Manual for details about the PROCESS structure."#-win32"
                            &rest keys
                            &key direction (external-format :default) wait
                            &allow-other-keys)
-  (declare (ignore wait)) ;This is explained below.
+  (declare (ignore wait))               ;This is explained below.
   ;; Our use of a temporary file dates back to very old CMUCLs, and
   ;; was probably only ever intended for use with STRING-STREAMs,
   ;; which are ordinarily smallish.  However, as we've got
@@ -959,99 +959,108 @@ Users Manual for details about the PROCESS structure."#-win32"
                (sb-unix:unix-close fd)
                (error "failed to unlink ~A" name/errno))
              fd)))
-    (cond ((eq object t)
-           ;; No new descriptor is needed.
-           (values -1 nil))
-          ((eq object nil)
-           ;; Use /dev/null.
-           (multiple-value-bind
-                 (fd errno)
-               (sb-unix:unix-open #-win32 #.(coerce "/dev/null" 'base-string)
-                                  #+win32 #.(coerce "nul" 'base-string)
-                                  (case direction
-                                    (:input sb-unix:o_rdonly)
-                                    (:output sb-unix:o_wronly)
-                                    (t sb-unix:o_rdwr))
-                                  #o666)
-             (unless fd
-               (error #-win32 "~@<couldn't open \"/dev/null\": ~2I~_~A~:>"
-                      #+win32 "~@<couldn't open \"nul\" device: ~2I~_~A~:>"
-                      (strerror errno)))
-             (push fd *close-in-parent*)
-             (values fd nil)))
-          ((eq object :stream)
-           (multiple-value-bind (read-fd write-fd) (sb-unix:unix-pipe)
-             (unless read-fd
-               (error "couldn't create pipe: ~A" (strerror write-fd)))
-             (case direction
-               (:input
-                (push read-fd *close-in-parent*)
-                (push write-fd *close-on-error*)
-                (let ((stream (sb-sys:make-fd-stream write-fd :output t
-                                                     :element-type :default
-                                                     :external-format
-                                                     external-format)))
-                  (values read-fd stream)))
-               (:output
-                (push read-fd *close-on-error*)
-                (push write-fd *close-in-parent*)
-                (let ((stream (sb-sys:make-fd-stream read-fd :input t
-                                                     :element-type :default
-                                                     :external-format
-                                                     external-format)))
-                  (values write-fd stream)))
-               (t
-                (sb-unix:unix-close read-fd)
-                (sb-unix:unix-close write-fd)
-                (error "Direction must be either :INPUT or :OUTPUT, not ~S."
-                       direction)))))
-          ((or (pathnamep object) (stringp object))
-           ;; GET-DESCRIPTOR-FOR uses &allow-other-keys, so rather
-           ;; than munge the &rest list for OPEN, just disable keyword
-           ;; validation there.
-           (with-open-stream (file (apply #'open object :allow-other-keys t
-                                          keys))
+    (let ((dev-null #.(coerce #-win32 "/dev/null"
+                              #+win32 "nul"
+                              'base-string)))
+      (cond ((eq object t)
+             ;; No new descriptor is needed.
+             (values -1 nil))
+            ((eq object nil)
+             ;; Use /dev/null.
              (multiple-value-bind
                    (fd errno)
-                 (sb-unix:unix-dup (sb-sys:fd-stream-fd file))
-               (cond (fd
-                      (push fd *close-in-parent*)
-                      (values fd nil))
-                     (t
-                      (error "couldn't duplicate file descriptor: ~A"
-                             (strerror errno)))))))
-          ((streamp object)
-           (ecase direction
-             (:input
-              (block nil
-                ;; If we can get an fd for the stream, let the child
-                ;; process use the fd for its descriptor.  Otherwise,
-                ;; we copy data from the stream into a temp file, and
-                ;; give the temp file's descriptor to the
-                ;; child.
-                (multiple-value-bind (fd stream format)
-                    (get-stream-fd-and-external-format object :input)
-                  (declare (ignore format))
-                  (when fd
-                    (return (values fd stream))))
-                ;; FIXME: if we can't get the file descriptor, since
-                ;; the stream might be interactive or otherwise
-                ;; block-y, we can't know whether we can copy the
-                ;; stream's data to a temp file, so if RUN-PROGRAM was
-                ;; called with :WAIT NIL, we should probably error.
-                ;; However, STRING-STREAMs aren't fd-streams, but
-                ;; they're not prone to blocking; any user-defined
-                ;; streams that "read" from some in-memory data will
-                ;; probably be similar to STRING-STREAMs.  So maybe we
-                ;; should add a STREAM-INTERACTIVE-P generic function
-                ;; for problems like this?  Anyway, the machinery is
-                ;; here, if you feel like filling in the details.
-                #|
-                (when (and (null wait) #<some undetermined criterion>)
-                  (error "~@<don't know how to get an fd for ~A, and so ~
+                 (sb-unix:unix-open dev-null
+                                    (case direction
+                                      (:input sb-unix:o_rdonly)
+                                      (:output sb-unix:o_wronly)
+                                      (t sb-unix:o_rdwr))
+                                    #o666)
+               (unless fd
+                 (error #-win32 "~@<couldn't open \"/dev/null\": ~2I~_~A~:>"
+                        #+win32 "~@<couldn't open \"nul\" device: ~2I~_~A~:>"
+                        (strerror errno)))
+               (push fd *close-in-parent*)
+               #!+fds-are-windows-handles
+               (setf (sb-win32::inheritable-handle-p fd) t)
+               (values fd nil)))
+            ((eq object :stream)
+             (multiple-value-bind (read-fd write-fd) (sb-unix:unix-pipe)
+               (unless read-fd
+                 (error "couldn't create pipe: ~A" (strerror write-fd)))
+               #!+fds-are-windows-handles
+               (setf (sb-win32::inheritable-handle-p read-fd)
+                     (eq direction :input)
+                     (sb-win32::inheritable-handle-p write-fd)
+                     (eq direction :output))
+               (case direction
+                 (:input
+                    (push read-fd *close-in-parent*)
+                    (push write-fd *close-on-error*)
+                    (let ((stream (sb-sys:make-fd-stream write-fd :output t
+                                                         :element-type :default
+                                                         :external-format
+                                                         external-format)))
+                      (values read-fd stream)))
+                 (:output
+                    (push read-fd *close-on-error*)
+                    (push write-fd *close-in-parent*)
+                    (let ((stream (sb-sys:make-fd-stream read-fd :input t
+                                                         :element-type :default
+                                                         :external-format
+                                                         external-format)))
+                      (values write-fd stream)))
+                 (t
+                    (sb-unix:unix-close read-fd)
+                    (sb-unix:unix-close write-fd)
+                    (error "Direction must be either :INPUT or :OUTPUT, not ~S."
+                           direction)))))
+            ((or (pathnamep object) (stringp object))
+             ;; GET-DESCRIPTOR-FOR uses &allow-other-keys, so rather
+             ;; than munge the &rest list for OPEN, just disable keyword
+             ;; validation there.
+             (with-open-stream (file (apply #'open object :allow-other-keys t
+                                            keys))
+               (multiple-value-bind
+                     (fd errno)
+                   (sb-unix:unix-dup (sb-sys:fd-stream-fd file))
+                 (cond (fd
+                        (push fd *close-in-parent*)
+                        (values fd nil))
+                       (t
+                        (error "couldn't duplicate file descriptor: ~A"
+                               (strerror errno)))))))
+            ((streamp object)
+             (ecase direction
+               (:input
+                  (block nil
+                    ;; If we can get an fd for the stream, let the child
+                    ;; process use the fd for its descriptor.  Otherwise,
+                    ;; we copy data from the stream into a temp file, and
+                    ;; give the temp file's descriptor to the
+                    ;; child.
+                    (multiple-value-bind (fd stream format)
+                        (get-stream-fd-and-external-format object :input)
+                      (declare (ignore format))
+                      (when fd
+                        (return (values fd stream))))
+                    ;; FIXME: if we can't get the file descriptor, since
+                    ;; the stream might be interactive or otherwise
+                    ;; block-y, we can't know whether we can copy the
+                    ;; stream's data to a temp file, so if RUN-PROGRAM was
+                    ;; called with :WAIT NIL, we should probably error.
+                    ;; However, STRING-STREAMs aren't fd-streams, but
+                    ;; they're not prone to blocking; any user-defined
+                    ;; streams that "read" from some in-memory data will
+                    ;; probably be similar to STRING-STREAMs.  So maybe we
+                    ;; should add a STREAM-INTERACTIVE-P generic function
+                    ;; for problems like this?  Anyway, the machinery is
+                    ;; here, if you feel like filling in the details.
+                    #|
+                    (when (and (null wait) #<some undetermined criterion>)
+                    (error "~@<don't know how to get an fd for ~A, and so ~
                              can't ensure that copying its data to the ~
                              child process won't hang~:>" object))
-                |#
+                    |#
                 (let ((fd (make-temp-fd))
                       (newline (string #\Newline)))
                   (loop
@@ -1092,4 +1101,4 @@ Users Manual for details about the PROCESS structure."#-win32"
                   (push write-fd *close-in-parent*)
                   (return (values write-fd nil)))))))
           (t
-           (error "invalid option to RUN-PROGRAM: ~S" object)))))
+           (error "invalid option to RUN-PROGRAM: ~S" object))))))

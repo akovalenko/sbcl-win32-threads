@@ -3751,6 +3751,21 @@ void win32_resume(void *ctx)
     }
 }
 
+HANDLE win32_dup_and_unwrap_fd(int fd, boolean inheritable)
+{
+    HANDLE outer;
+    if (fd<0 || (!DuplicateHandle(GetCurrentProcess(),
+                                  _get_osfhandle(fd),
+                                  GetCurrentProcess(),
+                                  &outer,
+                                  0u,
+                                  inheritable,
+                                  DUPLICATE_SAME_ACCESS)))
+        return INVALID_HANDLE_VALUE;
+    _close(fd);
+    return outer;
+}
+
 /* EOF */
 
 /* Local Variables: */
