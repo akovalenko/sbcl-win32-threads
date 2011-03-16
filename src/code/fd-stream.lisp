@@ -2547,7 +2547,7 @@
             #!-fds-are-windows-handles
             '(0 1 2 nil)
             #!+fds-are-windows-handles
-             (append (sb-win32::get-std-handles) '(nil))
+             (append (sb!win32::get-std-handles) '(nil))
             and auto-close-p in '(nil nil nil t)
             and stream-var in stdstream-vars
             and direction in '(:input :output :output :io)
