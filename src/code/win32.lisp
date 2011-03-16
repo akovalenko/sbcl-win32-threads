@@ -57,6 +57,35 @@
 
 ;;;; File Handles
 
+;;; Historically, SBCL on Windows used CRT (lowio) file descriptors,
+;;; unlike other Lisps. They really help to minimize required effort
+;;; for porting Unix-specific software, at least to the level that it
+;;; mostly works most of the time.
+;;;
+;;; Alastair Bridgewater recommended to switch away from CRT
+;;; descriptors, and Anton Kovalenko thinks it's the time to heed his
+;;; advice. I see that SBCL for Windows needs much more effort in the
+;;; area of OS IO abstractions and the like; using or leaving lowio
+;;; FDs doesn't change the big picture so much.
+;;;
+;;; Lowio layer, in exchange for `semi-automatic almost-portability',
+;;; brings some significant problems, which a grown-up cross-platform
+;;; CL implementation shouldn't have. Therefore, as its benefits
+;;; become negligible, it's a good reason to throw it away.
+;;;
+;;; Today, 2011-03-16, I (akovalenko) begin to move away from CRT
+;;; lowio, eventually planning to provide a neat abstraction layer
+;;; over POSIX and kernel32 as if they were equals. Thank Alastair
+;;; Bridgewater for his advice. Pray for me, any good Christian, so
+;;; I'm able to beautify SBCL and not make it ugly.
+
+;;; :FDS-ARE-WINDOWS-HANDLES is a temporary flag in *features* that
+;;; makes SBCL to go without lowio most of the time. For compatibilty
+;;; with third-party software (because almost every author `knows'
+;;; that SBCL uses lowio), I had to make (sb-win32:get-osfhandle),
+;;; (sb-win32:open-osfhandle) into the stubs that take handle and
+;;; return it back.
+
 ;;; Get the operating system handle for a C file descriptor.  Returns
 ;;; INVALID-HANDLE on failure.
 #!-fds-are-windows-handles
@@ -920,6 +949,11 @@ UNIX epoch: January 1st 1970."
   (declare (ignore flags)) handle)
 #!-fds-are-windows-handles
 (define-alien-routine ("_open_osfhandle" open-osfhandle)
+    int
+  (handle handle)
+  (flags int))
+
+(define-alien-routine ("_open_osfhandle" real-open-osfhandle)
     int
   (handle handle)
   (flags int))

@@ -805,9 +805,9 @@ Users Manual for details about the PROCESS structure."#-win32"
                                      (apply
                                       #'make-process
                                       :pid child
-                                      :input input-stream
-                                      :output output-stream
-                                      :error error-stream
+                                      :input (sb-win32::real-open-osfhandle input-stream sb-unix::o_rdonly)
+                                      :output (sb-win32::real-open-osfhandle output-stream sb-unix::o_wronly)
+                                      :error (sb-win32::real-open-osfhandle error-stream sb-unix::o_wronly)
                                       :status-hook status-hook
                                       :cookie cookie
                                       #-win32 (list :pty pty-stream
