@@ -15,12 +15,12 @@
 ;;;; package where we will redefine all of the above
 ;;;; functions, converting between HANDLES and fds
 
-(defmacro handle->maybe-fd (handle flags)
+(defmacro handle->fd (handle flags)
   #+fds-are-windows-handles (declare (ignorable flags))
   #+fds-are-windows-handles handle
-  #-fds-are-windows-handles `(handle->fd ,handle ,flags))
+  #-fds-are-windows-handles `(handle->real-fd ,handle ,flags))
 
-(defmacro maybe-fd->handle (fd)
+(defmacro fd->handle (fd)
   #+sbcl
   `(sb-win32:get-osfhandle ,fd)
   #-sbcl
@@ -28,7 +28,7 @@
 
 (defun socket (af type proto)
   (let* ((handle (wsa-socket af type proto nil 0 1))
-         (fd (handle->maybe-fd handle 0)))
+         (fd (handle->fd handle 0)))
     fd))
 
 (defmacro define-socket-fd-arg-routines (names)
@@ -40,17 +40,17 @@
                                    (format nil "~A-~A" '#:win32 routine))
              collect
              `(defun ,routine (fd &rest options)
-                (apply #',win32-routine (maybe-fd->handle fd) options)))))
+                (apply #',win32-routine (fd->handle fd) options)))))
 
 (define-socket-fd-arg-routines
     (bind getsockname listen recv recvfrom send sendto close connect getpeername
           ioctl setsockopt getsockopt))
 
 (defun accept (fd &rest options)
-  (let ((handle (apply #'win32-accept (maybe-fd->handle fd) options)))
+  (let ((handle (apply #'win32-accept (fd->handle fd) options)))
     (if (= handle -1)
         -1
-        (handle->maybe-fd handle 0))))
+        (handle->fd handle 0))))
 
 (defun make-wsa-version (major minor)
   (dpb minor (byte 8 8) major))
