@@ -15,16 +15,16 @@
 ;;;; package where we will redefine all of the above
 ;;;; functions, converting between HANDLES and fds
 
-(defmacro handle->fd (handle flags)
-  #+fds-are-windows-handles (declare (ignorable flags))
-  #+fds-are-windows-handles handle
-  #-fds-are-windows-handles `(handle->real-fd ,handle ,flags))
+(declaim (inline handle->fd fd->handle))
 
-(defmacro fd->handle (fd)
-  #+sbcl
-  `(sb-win32:get-osfhandle ,fd)
-  #-sbcl
-  (fd->handle fd))
+(defun handle->fd (handle flags)
+  (declare (ignorable flags))
+  #+fds-are-windows-handles handle
+  #-fds-are-windows-handles (handle->real-fd handle flags))
+
+(defun fd->handle (fd)
+  #+fds-are-windows-handles fd
+  #-fds-are-windows-handles (real-fd->handle fd))
 
 (defun socket (af type proto)
   (let* ((handle (wsa-socket af type proto nil 0 1))
