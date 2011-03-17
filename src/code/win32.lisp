@@ -92,7 +92,9 @@
 (define-alien-routine ("_get_osfhandle" get-osfhandle) handle
   (fd int))
 #!+fds-are-windows-handles
-(defmacro get-osfhandle (fd) fd)
+(declaim (inline get-osfhandle))
+#!+fds-are-windows-handles
+(defun get-osfhandle (fd) fd)
 
 (define-alien-routine ("_get_osfhandle" real-get-osfhandle) handle
   (fd int))
@@ -945,8 +947,11 @@ UNIX epoch: January 1st 1970."
   (handle handle))
 
 #!+fds-are-windows-handles
-(defmacro open-osfhandle (handle flags)
+(declaim (inline open-osfhandle))
+#!+fds-are-windows-handles
+(defun open-osfhandle (handle flags)
   (declare (ignore flags)) handle)
+
 #!-fds-are-windows-handles
 (define-alien-routine ("_open_osfhandle" open-osfhandle)
     int
