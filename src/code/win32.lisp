@@ -1159,7 +1159,10 @@ format for such streams."
           (win32-error 'duplicate-and-unwrap-fd)))))
 
 (defun windows-pipe ()
-  (create-pipe nil 256))
+  (multiple-value-bind (created read-handle write-handle)
+      (create-pipe nil 256)
+    (if created (values read-handle write-handle)
+        (win32-error 'create-pipe))))
 
 (defun windows-isatty (handle)
   (if (eql sb!win32::file-type-char
