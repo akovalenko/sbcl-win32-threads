@@ -140,7 +140,7 @@ typedef struct thread_wakeup {
   HANDLE event;
   struct thread_wakeup *next;
   volatile intptr_t *uaddr;
-  int uval;
+  intptr_t uval;
   int info;
 } thread_wakeup;
 
