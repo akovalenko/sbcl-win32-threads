@@ -242,9 +242,9 @@ created and old ones may exit at any time."
   (progn
     (declaim (inline futex-wait %futex-wait futex-wake))
 
-    (define-alien-routine ("futex_wait" %futex-wait)
-"        int" (word unsigned) (old-value unsigned)
-        (to-sec long) (to-usec unsigned-long))
+    (define-alien-routine ("futex_wait" %futex-wait) int
+      (word unsigned) (old-value unsigned)
+      (to-sec long) (to-usec unsigned-long))
 
     (defun futex-wait (word old to-sec to-usec)
       (with-interrupts
