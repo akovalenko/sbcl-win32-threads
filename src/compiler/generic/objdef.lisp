@@ -50,7 +50,7 @@
 (define-primitive-object (bignum :lowtag other-pointer-lowtag
                                  :widetag bignum-widetag
                                  :alloc-trans sb!bignum::%allocate-bignum)
-  (digits :rest-p t :c-type #!-alpha "long" #!+alpha "u32"))
+  (digits :rest-p t :c-type #!-alpha "sword_t" #!+alpha "u32"))
 
 (define-primitive-object (ratio :type ratio
                                 :lowtag other-pointer-lowtag
@@ -142,7 +142,7 @@
   ;; VECTOR -- see SHRINK-VECTOR.
   (length :ref-trans sb!c::vector-length
           :type index)
-  (data :rest-p t :c-type #!-alpha "unsigned long" #!+alpha "u32"))
+  (data :rest-p t :c-type #!-alpha "uword_t" #!+alpha "u32"))
 
 (define-primitive-object (code :type code-component
                                :lowtag other-pointer-lowtag
