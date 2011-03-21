@@ -243,7 +243,7 @@ created and old ones may exit at any time."
     (declaim (inline futex-wait %futex-wait futex-wake))
 
     (define-alien-routine ("futex_wait" %futex-wait)
-        int (word unsigned-alien-word) (old-value unsigned-alien-word)
+"        int" (word unsigned) (old-value unsigned)
         (to-sec long) (to-usec unsigned-long))
 
     (defun futex-wait (word old to-sec to-usec)
@@ -251,7 +251,7 @@ created and old ones may exit at any time."
         (%futex-wait word old to-sec to-usec)))
 
     (define-alien-routine "futex_wake"
-        int (word unsigned-alien-word) (n unsigned-long))))
+        int (word unsigned) (n unsigned-long))))
 
 ;;; used by debug-int.lisp to access interrupt contexts
 #!-(or sb-fluid sb-thread) (declaim (inline sb!vm::current-thread-offset-sap))

@@ -38,9 +38,6 @@
 (define-alien-type unsigned-long (unsigned 32))
 (define-alien-type unsigned-long-long (unsigned 64))
 
-(define-alien-type signed-alien-word (integer #.sb!vm::n-machine-word-bits))
-(define-alien-type unsigned-alien-word (unsigned #.sb!vm::n-machine-word-bits))
-
 (define-alien-type float single-float)
 (define-alien-type double double-float)
 

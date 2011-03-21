@@ -162,12 +162,12 @@
   (sb!alien:define-alien-routine ("unblock_deferrable_signals"
                                   %unblock-deferrable-signals)
       sb!alien:void
-    (where sb!alien:unsigned-alien-word)
-    (old sb!alien:unsigned-alien-word))
+    (where sb!alien:unsigned)
+    (old sb!alien:unsigned))
   (sb!alien:define-alien-routine ("unblock_gc_signals" %unblock-gc-signals)
       sb!alien:void
-    (where sb!alien:unsigned-alien-word)
-    (old sb!alien:unsigned-alien-word))
+    (where sb!alien:unsigned)
+    (old sb!alien:unsigned))
 
   (defun block-deferrable-signals ()
     (%block-deferrable-signals 0 0))
@@ -181,11 +181,11 @@
   (declaim (inline %block-deferrables-and-return-mask %apply-sigmask))
   (sb!alien:define-alien-routine ("block_deferrables_and_return_mask"
                                   %block-deferrables-and-return-mask)
-      sb!alien:unsigned-alien-word)
+      sb!alien:unsigned)
   (sb!alien:define-alien-routine ("apply_sigmask"
                                   %apply-sigmask)
       sb!alien:void
-    (mask sb!alien:unsigned-alien-word))
+    (mask sb!alien:unsigned))
 
   (defmacro without-interrupts/with-deferrables-blocked (&body body)
     (let ((mask-var (gensym)))

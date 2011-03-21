@@ -2891,14 +2891,14 @@ register."
 ;;; which GC is disabled, so that Lisp doesn't move objects around
 ;;; that C is pointing to.
 (sb!alien:define-alien-routine "breakpoint_install" sb!alien:unsigned-int
-  (code-obj sb!alien:unsigned-alien-word)
+  (code-obj sb!alien:unsigned)
   (pc-offset sb!alien:int))
 
 ;;; This removes the break instruction and replaces the original
 ;;; instruction. You must call this in a context in which GC is disabled
 ;;; so Lisp doesn't move objects around that C is pointing to.
 (sb!alien:define-alien-routine "breakpoint_remove" sb!alien:void
-  (code-obj sb!alien:unsigned-alien-word)
+  (code-obj sb!alien:unsigned)
   (pc-offset sb!alien:int)
   (old-inst sb!alien:unsigned-int))
 

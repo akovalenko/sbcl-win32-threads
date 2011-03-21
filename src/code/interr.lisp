@@ -496,7 +496,7 @@
   (error 'undefined-alien-function-error))
 
 #!-win32
-(define-alien-variable current-memory-fault-address unsigned-alien-word)
+(define-alien-variable current-memory-fault-address unsigned)
 
 #!-win32
 (defun memory-fault-error ()

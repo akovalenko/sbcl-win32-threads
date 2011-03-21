@@ -26,7 +26,7 @@
   (load-1-foreign))
 
 (progn
-  (define-alien-variable undefined-alien-address unsigned-alien-word)
+  (define-alien-variable undefined-alien-address unsigned)
   (defvar *runtime-dlhandle*))
 
 (defvar *shared-objects*)
