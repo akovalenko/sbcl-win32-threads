@@ -1119,7 +1119,7 @@ otherwise. Current runtime console support mandates :ucs-2 external
 format for such streams."
   (values-list
    (loop for this-direction in '(:input :output)
-         and desired-access in `(,access-generic-read ,access-generic-write)
+         and desired-access = (logior access-generic-read access-generic-write)
          and sharing in `(,file-share-read ,file-share-write)
          and name in `("CONIN$" "CONOUT$")
          and lowio-flags in `(,sb!unix:o_rdonly ,sb!unix:o_wronly)
