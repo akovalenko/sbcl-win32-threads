@@ -86,10 +86,10 @@ NWORDS(unsigned long x, unsigned long n_bits)
 #ifdef LISP_FEATURE_GENCGC
 #include "gencgc-alloc-region.h"
 void *
-gc_alloc_with_region(long nbytes,int page_type_flag, struct alloc_region *my_region,
+gc_alloc_with_region(sword_t nbytes,int page_type_flag, struct alloc_region *my_region,
                      int quick_p);
 static inline void *
-gc_general_alloc(long nbytes, int page_type_flag, int quick_p)
+gc_general_alloc(sword_t nbytes, int page_type_flag, int quick_p)
 {
     struct alloc_region *my_region;
     if (UNBOXED_PAGE_FLAG == page_type_flag) {
@@ -102,7 +102,7 @@ gc_general_alloc(long nbytes, int page_type_flag, int quick_p)
     return gc_alloc_with_region(nbytes, page_type_flag, my_region, quick_p);
 }
 #else
-extern void *gc_general_alloc(long nbytes,int page_type_flag,int quick_p);
+extern void *gc_general_alloc(word_t nbytes,int page_type_flag,int quick_p);
 #endif
 
 extern long (*scavtab[256])(lispobj *where, lispobj object);
@@ -118,11 +118,11 @@ extern void scav_weak_hash_tables(void);
 extern void scan_weak_hash_tables(void);
 extern void scan_weak_pointers(void);
 
-lispobj  copy_large_unboxed_object(lispobj object, long nwords);
-lispobj  copy_unboxed_object(lispobj object, long nwords);
-lispobj  copy_large_object(lispobj object, long nwords);
-lispobj  copy_object(lispobj object, long nwords);
-lispobj  copy_code_object(lispobj object, long nwords);
+lispobj  copy_large_unboxed_object(lispobj object, sword_t nwords);
+lispobj  copy_unboxed_object(lispobj object, sword_t nwords);
+lispobj  copy_large_object(lispobj object, sword_t nwords);
+lispobj  copy_object(lispobj object, sword_t nwords);
+lispobj  copy_code_object(lispobj object, sword_t nwords);
 
 lispobj *search_read_only_space(void *pointer);
 lispobj *search_static_space(void *pointer);

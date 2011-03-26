@@ -15,55 +15,42 @@
 ;;;; package where we will redefine all of the above
 ;;;; functions, converting between HANDLES and fds
 
+(declaim (inline handle->fd fd->handle))
+
+(defun handle->fd (handle flags)
+  (declare (ignorable flags))
+  #+fds-are-windows-handles handle
+  #-fds-are-windows-handles (handle->real-fd handle flags))
+
+(defun fd->handle (fd)
+  #+fds-are-windows-handles fd
+  #-fds-are-windows-handles (real-fd->handle fd))
+
 (defun socket (af type proto)
-  (let* ((handle (wsa-socket af type proto nil 0 0))
+  (let* ((handle (wsa-socket af type proto nil 0 1))
          (fd (handle->fd handle 0)))
     fd))
 
-(defun bind (fd &rest options)
-  (let ((handle (fd->handle fd)))
-    (apply #'win32-bind handle options)))
+(defmacro define-socket-fd-arg-routines (names)
+  `(progn
+     #+fds-are-windows-handles
+     (declaim (inline ,@names))
+     ,@(loop for routine in names
+             for win32-routine = (intern
+                                   (format nil "~A-~A" '#:win32 routine))
+             collect
+             `(defun ,routine (fd &rest options)
+                (apply #',win32-routine (fd->handle fd) options)))))
 
-(defun getsockname (fd &rest options)
-  (apply #'win32-getsockname (fd->handle fd) options))
-
-(defun listen (fd &rest options)
-  (apply #'win32-listen (fd->handle fd) options))
+(define-socket-fd-arg-routines
+    (bind getsockname listen recv recvfrom send sendto close connect getpeername
+          ioctl setsockopt getsockopt))
 
 (defun accept (fd &rest options)
-  (handle->fd
-   (apply #'win32-accept (fd->handle fd) options)
-   0))
-
-(defun recv (fd &rest options)
-  (apply #'win32-recv (fd->handle fd) options))
-
-(defun recvfrom (fd &rest options)
-  (apply #'win32-recvfrom (fd->handle fd) options))
-
-(defun send (fd &rest options)
-  (apply #'win32-send (fd->handle fd) options))
-
-(defun sendto (fd &rest options)
-  (apply #'win32-sendto (fd->handle fd) options))
-
-(defun close (fd &rest options)
-  (apply #'win32-close (fd->handle fd) options))
-
-(defun connect (fd &rest options)
-  (apply #'win32-connect (fd->handle fd) options))
-
-(defun getpeername (fd &rest options)
-  (apply #'win32-getpeername (fd->handle fd) options))
-
-(defun ioctl (fd &rest options)
-  (apply #'win32-ioctl (fd->handle fd) options))
-
-(defun setsockopt (fd &rest options)
-  (apply #'win32-setsockopt (fd->handle fd) options))
-
-(defun getsockopt (fd &rest options)
-  (apply #'win32-getsockopt (fd->handle fd) options))
+  (let ((handle (apply #'win32-accept (fd->handle fd) options)))
+    (if (= handle -1)
+        -1
+        (handle->fd handle 0))))
 
 (defun make-wsa-version (major minor)
   (dpb minor (byte 8 8) major))
@@ -93,5 +80,4 @@
 (defun sockaddr-un-path (addr) ())
 (defun free-sockaddr-un (addr) ())
 (defun allocate-sockaddr-un () ())
-
 

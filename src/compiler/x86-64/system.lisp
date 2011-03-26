@@ -260,6 +260,11 @@
   (:generator 1
     (inst break pending-interrupt-trap)))
 
+#!+sb-gc-safepoint
+(define-vop (insert-gc-safepoint)
+  (:generator 0
+    (inst test al-tn (make-ea :byte :disp sb!vm::gc-safepoint-page-addr))))
+
 #!+sb-thread
 (defknown current-thread-offset-sap ((unsigned-byte 64))
   system-area-pointer (flushable))

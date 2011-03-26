@@ -17,7 +17,7 @@
 #include "gc-internal.h"
 
 #ifdef LISP_FEATURE_GENCGC
-extern lispobj *general_alloc(long bytes, int page_type_flag);
+extern lispobj *general_alloc(sword_t bytes, int page_type_flag);
 #endif
 
 extern lispobj alloc_cons(lispobj car, lispobj cdr);

@@ -42,7 +42,7 @@ struct page {
     /* This is the offset from the start of the page to the start of
      * the alloc_region which contains/contained it.
      */
-    unsigned long region_start_offset;
+    uword_t region_start_offset;
 
     /* the number of bytes of this page that are used. This may be less
      * than the actual bytes used for pages within the current

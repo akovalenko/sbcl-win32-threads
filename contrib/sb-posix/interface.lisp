@@ -425,6 +425,54 @@ not supported."
 
 (define-call "msync" int minusp
   (addr sb-sys:system-area-pointer) (length unsigned) (flags int)))
+#+win32
+(progn
+  (defconstant PROT-READ #x02)
+  (defconstant PROT-WRITE #x04)
+  (defconstant PROT-EXEC #x10)
+  (defconstant PROT-NONE 0)
+  (defconstant MAP-SHARED 0)
+  (defconstant MAP-PRIVATE 1)
+
+  (defconstant MS-ASYNC nil)
+  (defconstant MS-SYNC nil)
+  (export
+   (defun mmap (addr length prot flags fd offset)
+     (declare (ignore addr))
+     (sb-sys:without-interrupts
+       (let* ((osfhandle (sb-win32:get-osfhandle fd))
+              (mapping (sb-win32:create-file-mapping osfhandle nil prot
+                                                     (ldb (byte 32 32) length)
+                                                     (ldb (byte 32 0) length)
+                                                     nil))
+              (addr (sb-win32:map-view-of-file (if (zerop mapping)
+                                                   (sb-win32::win32-error
+                                                    "CreateFileMapping")
+                                                   mapping)
+                                               (logior (if (logbitp 1 prot) #x0004 0)
+                                                       (if (logbitp 2 prot) #x0002 0)
+                                                       (if (logbitp 3 prot) #x0008 0)
+                                                       flags)
+                                               (ldb (byte 32 32) offset)
+                                               (ldb (byte 32 0) offset)
+                                               length)))
+         (unwind-protect
+              (if (zerop (sb-alien::sap-int addr))
+                  (sb-win32::win32-error "MapViewOfFile")
+                  addr)
+           (sb-win32::close-handle mapping))))))
+
+  (export
+   (defun munmap (address length)
+     (declare (ignore length))
+     (when (zerop (sb-win32:unmap-view-of-file address))
+       (sb-win32::win32-error "UnmapViewOfFile"))))
+
+  (export
+   (defun msync (address length flags)
+     (declare (ignore flags))
+     (when (zerop (sb-win32:flush-view-of-file address length))
+       (sb-win32::win32-error "FlushViewOfFile")))))
 
 ;;; mlockall, munlockall
 (define-call "mlockall" int minusp (flags int))

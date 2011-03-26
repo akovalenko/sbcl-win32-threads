@@ -153,14 +153,18 @@
 (defmethod device-close ((stream file-simple-stream) abort)
   (with-stream-class (file-simple-stream stream)
     (let ((fd (or (sm input-handle stream) (sm output-handle stream))))
+      (block nil
       (when (sb-int:fixnump fd)
         (cond (abort
                (when (any-stream-instance-flags stream :output)
-                 (revert-file (sm filename stream) (sm original stream))))
+                   ;; can't delet open file on win32
+                   #+win32 (sb-unix:unix-close fd)
+                   (revert-file (sm filename stream) (sm original stream))
+                   #+win32 (return)))
               (t
                (when (sm delete-original stream)
                  (delete-original (sm filename stream) (sm original stream)))))
-        (sb-unix:unix-close fd))
+          (sb-unix:unix-close fd)))
       (when (sm buffer stream)
         (free-buffer (sm buffer stream))
         (setf (sm buffer stream) nil))))
@@ -224,7 +228,9 @@
           (let ((buffer
                  (handler-case
                   (sb-posix:mmap nil size prot sb-posix::MAP-SHARED fd 0)
-                  (sb-posix:syscall-error nil))))
+                  (sb-posix:syscall-error nil)
+                   #+win32
+                  (error nil))))
             (when (null buffer)
               (sb-unix:unix-close fd)
               (sb-ext:cancel-finalization stream)

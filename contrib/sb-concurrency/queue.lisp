@@ -50,9 +50,12 @@ sequence enqueued."
 (defun enqueue (value queue)
   "Adds VALUE to the end of QUEUE. Returns VALUE."
   (let ((node (make-node :value value)))
-    (loop for tail = (queue-tail queue)
+    (loop with tail = (queue-tail queue)
           do (setf (node-next node) tail)
-             (when (eq tail (sb-ext:compare-and-swap (queue-tail queue) tail node))
+             (when (eq tail
+                       (setf tail
+                             (sb-ext:compare-and-swap (queue-tail queue)
+                                                      tail node)))
                (setf (node-prev tail) node)
                (return value)))))
 

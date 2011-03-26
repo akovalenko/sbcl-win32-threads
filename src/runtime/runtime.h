@@ -15,6 +15,15 @@
 #ifndef _SBCL_RUNTIME_H_
 #define _SBCL_RUNTIME_H_
 
+#if defined(LISP_FEATURE_WIN32)
+#include "pthreads_win32.h"
+#else
+#include <signal.h>
+#include <pthread.h>
+#endif
+
+#include <stdint.h>
+
 #if defined(LISP_FEATURE_SB_THREAD)
 #define thread_self() pthread_self()
 #define thread_kill pthread_kill
@@ -27,6 +36,15 @@
 #define thread_sigmask sigprocmask
 #define thread_mutex_lock(l) 0
 #define thread_mutex_unlock(l) 0
+#endif
+
+#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
+void os_preinit();
+#endif
+
+#if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
+void map_gc_page();
+void unmap_gc_page();
 #endif
 
 /* Block blockable interrupts for each SHOW, if not 0. */
@@ -51,7 +69,6 @@
 
 #if QSHOW_SIGNAL_SAFE == 1 && !defined(LISP_FEATURE_WIN32)
 
-#include <signal.h>
 extern sigset_t blockable_sigset;
 
 #define QSHOW_BLOCK                                             \
@@ -99,28 +116,57 @@ extern sigset_t blockable_sigset;
 /* even on alpha, int happens to be 4 bytes.  long is longer. */
 /* FIXME: these names really shouldn't reflect their length and this
    is not quite right for some of the FFI stuff */
+#if defined(LISP_FEATURE_WIN32)&&defined(LISP_FEATURE_X86_64)
+typedef unsigned long long u64;
+typedef signed long long s64;
+#else
 typedef unsigned long u64;
 typedef signed long s64;
+#endif
 typedef unsigned int u32;
 typedef signed int s32;
 
 /* this is an integral type the same length as a machine pointer */
+#if defined(LISP_FEATURE_WIN32)&&defined(LISP_FEATURE_X86_64)
+typedef unsigned long long pointer_sized_uint_t ;
+#else
 typedef unsigned long pointer_sized_uint_t ;
+#endif
 
 #include <sys/types.h>
 
+
+#if defined(LISP_FEATURE_WIN32)
+
+void odprintf_(const char * fmt, ...);
+#if defined(LISP_FEATURE_DEBUG_WIN32)
+#define odprintf odprintf_
+#else
+#define odprintf(...)
+#endif
+
+#endif
+
 #if defined(LISP_FEATURE_SB_THREAD)
-#include <pthread.h>
+#if defined(LISP_FEATURE_WIN32)
+void gc_safepoint();
+void gc_enter_safe_region();
+void gc_enter_unsafe_region();
+void gc_leave_region();
+#endif
 typedef pthread_t os_thread_t;
 #else
 typedef pid_t os_thread_t;
 #endif
 
+typedef pointer_sized_uint_t uword_t;
+typedef intptr_t sword_t;
+
 /* FIXME: we do things this way because of the alpha32 port.  once
    alpha64 has arrived, all this nastiness can go away */
 #if 64 == N_WORD_BITS
 #define LOW_WORD(c) ((pointer_sized_uint_t)c)
-typedef unsigned long lispobj;
+typedef pointer_sized_uint_t lispobj;
 #else
 #define LOW_WORD(c) ((long)(c) & 0xFFFFFFFFL)
 /* fake it on alpha32 */
@@ -139,7 +185,7 @@ widetag_of(lispobj obj)
     return obj & WIDETAG_MASK;
 }
 
-static inline unsigned long
+static inline pointer_sized_uint_t
 HeaderValue(lispobj obj)
 {
   return obj >> N_WIDETAG_BITS;
@@ -208,7 +254,12 @@ make_fixnum(long n)
     return n << N_FIXNUM_TAG_BITS;
 }
 
-static inline long
+/* sometimes we want to use fixnums as switch() keys. Unfortunately,
+   it's impossible even with static inline make_fixnum, but o.k. with
+   constant expression, like this: */
+#define MAKE_FIXNUM(n) ((n)<<N_FIXNUM_TAG_BITS)
+
+static inline s64
 fixnum_value(lispobj n)
 {
     return n >> N_FIXNUM_TAG_BITS;

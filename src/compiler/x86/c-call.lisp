@@ -83,7 +83,7 @@
       (if (alien-integer-type-signed type)
           `(sign-extend ,alien ,(alien-type-bits type))
           `(logand ,alien ,(1- (ash 1 (alien-type-bits type)))))
-      alien))
+      `(truly-the ,(invoke-alien-type-method :lisp-rep type) alien)))
 
 (define-alien-type-method (system-area-pointer :result-tn) (type state)
   (declare (ignore type))
@@ -262,17 +262,28 @@
                    :from :eval :to :result) ecx)
   (:temporary (:sc unsigned-reg :offset edx-offset
                    :from :eval :to :result) edx)
+  #!+sb-gc-safepoint
+  (:temporary (:sc unsigned-reg :offset esi-offset) esi)
+  #!+sb-gc-safepoint
+  (:temporary (:sc unsigned-reg :offset edi-offset) edi)
   (:node-var node)
   (:vop-var vop)
   (:save-p t)
-  (:ignore args ecx edx)
+  (:ignore args eax edx
+           #!+sb-gc-safepoint esi
+           #!+sb-gc-safepoint edi)
   (:generator 0
     ;; FIXME & OAOOM: This is brittle and error-prone to maintain two
     ;; instances of the same logic, on in arch-assem.S, and one in
     ;; c-call.lisp. If you modify this, modify that one too...
-    (cond ((policy node (> space speed))
-           (move eax function)
-           (inst call (make-fixup "call_into_c" :foreign)))
+    (cond ((or #!+sb-gc-safepoint t
+               (policy node (> space speed)))
+           (move ecx function)
+           (let ((wrapper
+                  (if (and results (location= (tn-ref-tn results) fr0-tn))
+                      "call_into_c_fp_result"
+                      "call_into_c")))
+             (inst call (make-fixup wrapper :foreign))))
           (t
            ;; Setup the NPX for C; all the FP registers need to be
            ;; empty; pop them all.
@@ -282,7 +293,6 @@
            ;; Clear out DF: Darwin, Windows, and Solaris at least require
            ;; this, and it should not hurt others either.
            (inst cld)
-
            (inst call function)
            ;; To give the debugger a clue. FIXME: not really internal-error?
            (note-this-location vop :internal-error)
@@ -304,7 +314,8 @@
 ;;; to 53-bit mode after coming back using the SET-FPU-WORD-FOR-LISP VOP.
 (define-vop (set-fpu-word-for-c)
   (:node-var node)
-  (:generator 0
+  (:generator 0 (policy node (= debug 0))
+    #!-sb-auto-fpu-switch
     (when (policy node (= sb!c::float-accuracy 3))
       (inst sub esp-tn 4)
       (inst fnstcw (make-ea :word :base esp-tn))
@@ -315,7 +326,8 @@
 
 (define-vop (set-fpu-word-for-lisp)
   (:node-var node)
-  (:generator 0
+  (:generator 0 (policy node (= debug 0))
+    #!-sb-auto-fpu-switch
     (when (policy node (= sb!c::float-accuracy 3))
       (inst fnstcw (make-ea :word :base esp-tn))
       (inst wait)
@@ -348,8 +360,11 @@
       (let ((delta (logandc2 (+ amount 3) 3)))
         (inst mov temp
               (make-ea-for-symbol-tls-index *alien-stack*))
-        (inst sub (make-ea :dword :base temp) delta :fs)))
-    (load-tl-symbol-value result *alien-stack*))
+        #!+(and win32 sb-thread)
+        (inst add temp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
+        (inst sub (make-ea :dword :base temp) delta #!-(and win32 sb-thread) :fs)))
+    (load-tl-symbol-value result *alien-stack*)
+    (inst test result (make-ea :dword :base result)))
   #!-sb-thread
   (:generator 0
     (aver (not (location= result esp-tn)))
@@ -368,7 +383,9 @@
       (let ((delta (logandc2 (+ amount 3) 3)))
         (inst mov temp
               (make-ea-for-symbol-tls-index *alien-stack*))
-        (inst add (make-ea :dword :base temp) delta :fs))))
+        #!+(and win32 sb-thread)
+        (inst add temp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
+        (inst add (make-ea :dword :base temp) delta #!-(and win32 sb-thread) :fs))))
   #!-sb-thread
   (:generator 0
     (unless (zerop amount)
@@ -392,7 +409,8 @@
   `(deref (sap-alien (sap+ ,sp ,offset) (* ,type))))
 
 #-sb-xc-host
-(defun alien-callback-assembler-wrapper (index return-type arg-types)
+(defun alien-callback-assembler-wrapper (index return-type arg-types
+                                         &optional (stack-offset 0))
   "Cons up a piece of code which calls call-callback with INDEX and a
 pointer to the arguments."
   (declare (ignore arg-types))
@@ -413,15 +431,27 @@ pointer to the arguments."
               (inst push eax)                       ; arg1
               (inst push (ash index 2))             ; arg0
 
-              ;; Indirect the access to ENTER-ALIEN-CALLBACK through
-              ;; the symbol-value slot of SB-ALIEN::*ENTER-ALIEN-CALLBACK*
-              ;; to ensure it'll work even if the GC moves ENTER-ALIEN-CALLBACK.
-              ;; Skip any SB-THREAD TLS magic, since we don't expecte anyone
-              ;; to rebind the variable. -- JES, 2006-01-01
-              (load-symbol-value eax sb!alien::*enter-alien-callback*)
-              (inst push eax) ; function
-              (inst mov  eax (foreign-symbol-address "funcall3"))
-              (inst call eax)
+              #!+sb-foreign-thread
+              (progn
+                (inst mov eax (foreign-symbol-address "fff_generic_callback"))
+                (inst call eax))
+              #!-sb-foreign-thread
+              (progn
+                #!+(and win32 sb-thread)
+                (enter-unsafe-region-instructions/no-fixup)
+
+                ;; Indirect the access to ENTER-ALIEN-CALLBACK through
+                ;; the symbol-value slot of SB-ALIEN::*ENTER-ALIEN-CALLBACK*
+                ;; to ensure it'll work even if the GC moves ENTER-ALIEN-CALLBACK.
+                ;; Skip any SB-THREAD TLS magic, since we don't expecte anyone
+                ;; to rebind the variable. -- JES, 2006-01-01
+                (load-symbol-value eax sb!alien::*enter-alien-callback*)
+                (inst push eax)         ; function
+                (inst mov  eax (foreign-symbol-address "funcall3"))
+                (inst call eax)
+
+                #!+(and win32 sb-thread)
+                (leave-region-instructions/no-fixup))
               ;; now put the result into the right register
               (cond
                 ((and (alien-integer-type-p return-type)
@@ -442,7 +472,9 @@ pointer to the arguments."
                  (error "unrecognized alien type: ~A" return-type)))
               (inst mov esp ebp)                   ; discard frame
               (inst pop ebp)                       ; restore frame pointer
-              (inst ret))
+              (if (= 0 stack-offset)
+                  (inst ret)
+                  (inst ret stack-offset)))
     (finalize-segment segment)
     ;; Now that the segment is done, convert it to a static
     ;; vector we can point foreign code to.

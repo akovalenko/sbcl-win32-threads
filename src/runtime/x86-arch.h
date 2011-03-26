@@ -21,6 +21,17 @@
 #define COMPILER_BARRIER \
     do { __asm__ __volatile__ ( "" : : : "memory"); } while (0)
 
+#ifdef LISP_FEATURE_WIN32
+extern int os_number_of_processors;
+#define yield_on_uniprocessor()                 \
+    do { if (os_number_of_processors<=1) SwitchToThread(); } while(0)
+#else
+/* Stubs are better than ifdef EVERYWHERE. */
+#define yield_on_uniprocessor()                 \
+    do {} while(0)
+#endif
+
+
 static inline void
 get_spinlock(volatile lispobj *word, unsigned long value)
 {
@@ -36,13 +47,16 @@ get_spinlock(volatile lispobj *word, unsigned long value)
              : "r" (value), "m" (*word)
              : "memory", "cc");
 #else
+        if (eax!=0) {
+            asm volatile("rep; nop");
+        }
         asm volatile ("xor %0,%0\n\
               lock cmpxchg %1,%2"
              : "=a" (eax)
              : "r" (value), "m" (*word)
              : "memory", "cc");
 #endif
-
+        yield_on_uniprocessor();
     } while(eax!=0);
 #else
     *word=value;
@@ -78,5 +92,11 @@ swap_lispobjs(volatile lispobj *dest, lispobj value)
 
 extern void fast_bzero_detect(void *, size_t);
 extern void (*fast_bzero_pointer)(void *, size_t);
+extern void fast_bzero(void *, size_t);
+
+extern void arch_write_linkage_table_jmp(char * reloc, void * fun);
+extern void arch_write_linkage_table_ref(void * reloc, void * data);
+
+#include "x86-fpu-x87.h"
 
 #endif /* _X86_ARCH_H */

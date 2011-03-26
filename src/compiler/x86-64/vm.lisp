@@ -170,7 +170,10 @@
   (eval-when (:compile-toplevel :load-toplevel :execute)
     (defparameter *register-arg-names* '(rdx rdi rsi)))
   (defregset    *register-arg-offsets* rdx rdi rsi)
-  (defregset    *c-call-register-arg-offsets* rdi rsi rdx rcx r8 r9))
+  #!-win32
+  (defregset    *c-call-register-arg-offsets* rdi rsi rdx rcx r8 r9)
+  #!+win32
+  (defregset    *c-call-register-arg-offsets* rcx rdx r8 r9))
 
 ;;;; SB definitions
 
@@ -226,7 +229,8 @@
 ;;; (What a KLUDGE! Anyone who wants to come in and clean up this mess
 ;;; has my gratitude.) (FIXME: Maybe this should be me..)
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (def!constant kludge-nondeterministic-catch-block-size 5))
+  (def!constant kludge-nondeterministic-catch-block-size #!-win32 5 #!+win32
+    #!-x86 5 #!+x86 7))
 
 (!define-storage-classes
 

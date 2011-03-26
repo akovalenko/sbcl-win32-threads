@@ -112,6 +112,11 @@
 (defmacro load-tl-symbol-value (reg symbol)
   `(progn
     (inst mov ,reg (make-ea-for-symbol-tls-index ,symbol))
+    #!+win32
+    (progn
+      (inst add ,reg (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
+      (inst mov ,reg (make-ea :dword :base ,reg)))
+    #!-win32
     (inst mov ,reg (make-ea :dword :base ,reg) :fs)))
 #!-sb-thread
 (defmacro load-tl-symbol-value (reg symbol) `(load-symbol-value ,reg ,symbol))
@@ -120,6 +125,11 @@
 (defmacro store-tl-symbol-value (reg symbol temp)
   `(progn
     (inst mov ,temp (make-ea-for-symbol-tls-index ,symbol))
+    #!+win32
+    (progn
+      (inst add ,temp (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
+      (inst mov (make-ea :dword :base ,temp) ,reg))
+    #!-win32
     (inst mov (make-ea :dword :base ,temp) ,reg :fs)))
 #!-sb-thread
 (defmacro store-tl-symbol-value (reg symbol temp)
@@ -129,6 +139,13 @@
 (defmacro load-binding-stack-pointer (reg)
   #!+sb-thread
   `(progn
+     #!+win32
+     (progn
+       (inst mov ,reg (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
+       (inst mov ,reg (make-ea :dword
+                               :base ,reg
+                               :disp (* 4 thread-binding-stack-pointer-slot))))
+     #!-win32
      (inst mov ,reg (make-ea :dword
                              :disp (* 4 thread-binding-stack-pointer-slot))
            :fs))
@@ -138,6 +155,14 @@
 (defmacro store-binding-stack-pointer (reg)
   #!+sb-thread
   `(progn
+     #!+win32
+     (progn
+       (inst push eax-tn)
+       (inst push ,reg)
+       (inst mov eax-tn (make-ea :dword :disp +win32-tib-arbitrary-field-offset+) :fs)
+       (inst pop (make-ea :dword :base eax-tn :disp (* 4 thread-binding-stack-pointer-slot)))
+       (inst pop eax-tn))
+     #!-win32
      (inst mov (make-ea :dword
                         :disp (* 4 thread-binding-stack-pointer-slot))
            ,reg :fs))
@@ -211,43 +236,76 @@
 (defun allocation-inline (alloc-tn size)
   (let ((ok (gen-label))
         (done (gen-label))
+        #!+(and sb-thread win32)
+        (scratch-tns (loop for my-tn in `(,eax-tn ,ebx-tn ,edx-tn ,ecx-tn)
+                           when (and (not (location= alloc-tn my-tn))
+                                     (or (not (tn-p size))
+                                         (not (location= size my-tn))))
+                             collect my-tn))
+        (tls-prefix #!+sb-thread :fs)
         (free-pointer
          (make-ea :dword :disp
                   #!+sb-thread (* n-word-bytes thread-alloc-region-slot)
                   #!-sb-thread (make-fixup "boxed_region" :foreign)
-                  :scale 1)) ; thread->alloc_region.free_pointer
+                  :scale 1))       ; thread->alloc_region.free_pointer
         (end-addr
          (make-ea :dword :disp
                   #!+sb-thread (* n-word-bytes (1+ thread-alloc-region-slot))
                   #!-sb-thread (make-fixup "boxed_region" :foreign 4)
-                  :scale 1)))   ; thread->alloc_region.end_addr
-    (unless (and (tn-p size) (location= alloc-tn size))
-      (inst mov alloc-tn size))
-    (inst add alloc-tn free-pointer #!+sb-thread :fs)
-    (inst cmp alloc-tn end-addr #!+sb-thread :fs)
-    (inst jmp :be ok)
-    (let ((dst (ecase (tn-offset alloc-tn)
-                 (#.eax-offset "alloc_overflow_eax")
-                 (#.ecx-offset "alloc_overflow_ecx")
-                 (#.edx-offset "alloc_overflow_edx")
-                 (#.ebx-offset "alloc_overflow_ebx")
-                 (#.esi-offset "alloc_overflow_esi")
-                 (#.edi-offset "alloc_overflow_edi"))))
-      (inst call (make-fixup dst :foreign)))
-    (inst jmp-short done)
-    (emit-label ok)
+                  :scale 1)))          ; thread->alloc_region.end_addr
+
+    (multiple-value-bind
+          #!+(and sb-thread win32) (scratch-tn swap-tn)
+      #!+(and sb-thread win32) (values-list scratch-tns)
+      #!-(and sb-thread win32) () #!-(and sb-thread win32) ()
+      (unless (and (tn-p size) (location= alloc-tn size))
+        (inst mov alloc-tn size))
+      #!+(and sb-thread win32)
+      (progn
+        (inst push scratch-tn)
+        (inst push swap-tn)
+        (inst mov scratch-tn
+              (make-ea :dword :disp
+                       +win32-tib-arbitrary-field-offset+) tls-prefix)
+        (setf (ea-base free-pointer) scratch-tn
+              (ea-base end-addr) scratch-tn
+              tls-prefix nil))
+      (inst add alloc-tn free-pointer tls-prefix)
+      (inst cmp alloc-tn end-addr tls-prefix)
+      (inst jmp :be ok)
+      (let ((dst (ecase (tn-offset alloc-tn)
+                   (#.eax-offset "alloc_overflow_eax")
+                   (#.ecx-offset "alloc_overflow_ecx")
+                   (#.edx-offset "alloc_overflow_edx")
+                   (#.ebx-offset "alloc_overflow_ebx")
+                   (#.esi-offset "alloc_overflow_esi")
+                   (#.edi-offset "alloc_overflow_edi"))))
+        (inst call (make-fixup dst :foreign)))
+      (inst jmp-short done)
+      (emit-label ok)
     ;; Swap ALLOC-TN and FREE-POINTER
-    (cond ((and (tn-p size) (location= alloc-tn size))
-           ;; XCHG is extremely slow, use the xor swap trick
-           (inst xor alloc-tn free-pointer #!+sb-thread :fs)
-           (inst xor free-pointer alloc-tn #!+sb-thread :fs)
-           (inst xor alloc-tn free-pointer #!+sb-thread :fs))
-          (t
-           ;; It's easier if SIZE is still available.
-           (inst mov free-pointer alloc-tn #!+sb-thread :fs)
-           (inst sub alloc-tn size)))
-    (emit-label done))
-  (values))
+      (cond ((and (tn-p size) (location= alloc-tn size))
+             ;; XCHG is extremely slow, use the xor swap trick
+             #!-win32
+             (progn
+               (inst xor alloc-tn free-pointer tls-prefix)
+               (inst xor free-pointer alloc-tn tls-prefix)
+               (inst xor alloc-tn free-pointer tls-prefix))
+             #!+win32
+             (progn
+               (inst mov swap-tn free-pointer tls-prefix)
+               (inst mov free-pointer alloc-tn tls-prefix)
+               (inst mov alloc-tn swap-tn)))
+            (t
+             ;; It's easier if SIZE is still available.
+             (inst mov free-pointer alloc-tn tls-prefix)
+             (inst sub alloc-tn size)))
+      (emit-label done)
+      #!+(and sb-thread win32)
+      (progn
+        (inst pop swap-tn)
+        (inst pop scratch-tn)))
+    (values)))
 
 
 ;;; Emit code to allocate an object with a size in bytes given by
@@ -261,6 +319,7 @@
 ;;; (FIXME: so why aren't we asserting this?)
 
 (defun allocation (alloc-tn size &optional inline dynamic-extent lowtag)
+  (declare (ignorable inline))
   (cond
     (dynamic-extent
      (allocation-dynamic-extent alloc-tn size lowtag))
@@ -354,17 +413,29 @@
 ;;; pa section.
 #!+sb-thread
 (defmacro %clear-pseudo-atomic ()
+  #!-win32
   '(inst mov (make-ea :dword :disp (* 4 thread-pseudo-atomic-bits-slot)) 0 :fs))
 
 #!+sb-thread
 (defmacro pseudo-atomic (&rest forms)
+  #!+sb-gc-safepoint
+  ;; 1. Without signals, we can rely on pseudo-atomic being really
+  ;; atomic.  2. When interrupted flag used to be set earlier,
+  ;; GC-SAFEPOINT-PAGE-ADDR is instantly unmapped instead. It makes
+  ;; all Lisp threads interrupt eventually; the thread where it
+  ;; happens, itself, interrupts at the end of [pseudo-]atomic
+  ;; section..
+  `(progn ,@forms
+          (inst test al-tn (make-ea :byte :disp sb!vm::gc-safepoint-page-addr)))
+  #!-sb-gc-safepoint
   (with-unique-names (label)
     `(let ((,label (gen-label)))
        (inst mov (make-ea :dword :disp (* 4 thread-pseudo-atomic-bits-slot))
              ebp-tn :fs)
        ,@forms
-       (inst xor (make-ea :dword :disp (* 4 thread-pseudo-atomic-bits-slot))
-             ebp-tn :fs)
+       (progn
+         (inst xor (make-ea :dword :disp (* 4 thread-pseudo-atomic-bits-slot))
+               ebp-tn :fs))
        (inst jmp :z ,label)
        ;; if PAI was set, interrupts were disabled at the same time
        ;; using the process signal mask.
@@ -566,3 +637,40 @@ collection."
                            `(touch-object ,pin))
                          pins)))))
       `(progn ,@body)))
+
+;;; Safepoints stuff
+
+#!+ (and sb-thread win32)
+(progn
+  (defun enter-safe-region-instructions ()
+    (inst pusha)
+    (inst call (make-fixup "gc_enter_safe_region" :foreign))
+    (inst popa))
+
+  (defun enter-unsafe-region-instructions ()
+    (inst pusha)
+    (inst call (make-fixup "gc_enter_unsafe_region" :foreign))
+    (inst popa))
+
+  (defun leave-region-instructions ()
+    (inst pusha)
+    (inst call (make-fixup "gc_leave_region" :foreign))
+    (inst popa))
+
+  (defun enter-safe-region-instructions/no-fixup ()
+    (inst pusha)
+    (inst mov eax-tn (foreign-symbol-address "gc_enter_safe_region"))
+    (inst call eax-tn)
+    (inst popa))
+
+  (defun enter-unsafe-region-instructions/no-fixup ()
+    (inst pusha)
+    (inst mov eax-tn (foreign-symbol-address "gc_enter_unsafe_region"))
+    (inst call eax-tn)
+    (inst popa))
+
+  (defun leave-region-instructions/no-fixup ()
+    (inst pusha)
+    (inst mov eax-tn (foreign-symbol-address "gc_leave_region"))
+    (inst call eax-tn)
+    (inst popa)))
