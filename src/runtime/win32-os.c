@@ -1417,7 +1417,7 @@ void os_init(char *argv[], char *envp[])
 #endif
     resolve_optional_imports();
     mwwFlag = (ptr_GetWriteWatch && ptr_ResetWriteWatch) ? MEM_WRITE_WATCH : 0u;
-    runtime_module_handle = win32_get_module_handle_by_address(&runtime_module_handle);
+    runtime_module_handle = (HMODULE)win32_get_module_handle_by_address(&runtime_module_handle);
 }
 
 unsigned long core_mmap_unshared_pages = 0;
@@ -1858,12 +1858,12 @@ static char* non_external_self_name = "//////<SBCL executable>";
 #ifdef LISP_FEATURE_FDS_ARE_WINDOWS_HANDLES
 #define maybe_open_osfhandle(handle,mode) (handle)
 #define maybe_get_osfhandle(fd) (fd)
+#define FDTYPE HANDLE
 #else
 #define maybe_open_osfhandle _open_osfhandle
 #define maybe_get_osfhandle _get_osfhandle
+#define FDTYPE int
 #endif
-
-
 
 int win32_open_for_mmap(const char* fileName)
 {
@@ -3359,7 +3359,7 @@ boolean win32_maybe_interrupt_io(void* thread)
 
 static const LARGE_INTEGER zero_large_offset = {.QuadPart = 0LL};
 
-int win32_unix_write(int fd, void * buf, int count)
+int win32_unix_write(FDTYPE fd, void * buf, int count)
 {
     HANDLE handle;
     DWORD written_bytes;
@@ -3370,7 +3370,6 @@ int win32_unix_write(int fd, void * buf, int count)
     BOOL seekable;
     BOOL ok;
 
-    odprintf("write(%d, 0x%p, %d)", fd, buf, count);
     handle =(HANDLE)maybe_get_osfhandle(fd);
     if (console_handle_p(handle))
         return win32_write_unicode_console(handle,buf,count);
@@ -3396,8 +3395,6 @@ int win32_unix_write(int fd, void * buf, int count)
     io_end_interruptible(handle);
 
     if (ok) {
-        odprintf("write(%d, 0x%p, %d) immeditately wrote %d bytes",
-                 fd, buf, count, written_bytes);
         goto done_something;
     } else {
         if (GetLastError()!=ERROR_IO_PENDING) {
@@ -3432,7 +3429,7 @@ int win32_unix_write(int fd, void * buf, int count)
     return written_bytes;
 }
 
-int win32_unix_read(int fd, void * buf, int count)
+int win32_unix_read(FDTYPE fd, void * buf, int count)
 {
     HANDLE handle;
     OVERLAPPED overlapped = {.Internal=0};
@@ -3444,7 +3441,6 @@ int win32_unix_read(int fd, void * buf, int count)
     LARGE_INTEGER file_position;
     BOOL seekable;
 
-    odprintf("read(%d, 0x%p, %d)", fd, buf, count);
     handle = (HANDLE)maybe_get_osfhandle(fd);
 
     if (console_handle_p(handle)) {
