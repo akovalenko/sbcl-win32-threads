@@ -785,7 +785,7 @@ u32 os_get_build_time_shared_libraries(u32 excl_maximum,
                           && image_import_descriptor->FirstThunk;
              ++image_import_descriptor)
         {
-            MEMORY_BASIC_INFORMATION moduleMapping;
+            HMODULE hmodule;
             if (dyndebug_runtime_link) {
                 fprintf(dyndebug_output,"Now should know DLL: %s\n",
                         (char*)(base + image_import_descriptor->Name));
@@ -819,17 +819,13 @@ u32 os_get_build_time_shared_libraries(u32 excl_maximum,
              * That's all: mapped region base _is_ a DLL's image base
              * and also its module handle (these 3 things are always
              * the same on win32). */
-#ifdef LISP_FEATURE_X86
-            if (VirtualQuery
-                (*(LPCVOID**)
-                 ((LPCVOID)base + image_import_descriptor->FirstThunk),
-                 &moduleMapping, sizeof (moduleMapping)))
-#else
-            if ((moduleMapping.AllocationBase = (LPVOID)
-                 GetModuleHandle((char*)(base + image_import_descriptor->Name))))
-#endif
-            {
 
+            hmodule = (HMODULE)
+                win32_get_module_handle_by_address(
+                    ((LPCVOID**) ((LPCVOID)base + image_import_descriptor->FirstThunk))[1]);
+
+            if (hmodule)
+            {
                 /* We may encouncer some module more than once while
                    traversing import descriptors (it's usually a
                    result of non-trivial linking process, like doing
@@ -851,15 +847,15 @@ u32 os_get_build_time_shared_libraries(u32 excl_maximum,
 
                 for (j=0; j<nlibrary; ++j)
                 {
-                    if(check_duplicates[j] == moduleMapping.AllocationBase)
+                    if(check_duplicates[j] == hmodule)
                         break;
                 }
                 if (j<nlibrary) continue; /* duplicate => skip it in
                                            * outer loop */
 
-                check_duplicates[nlibrary] = moduleMapping.AllocationBase;
+                check_duplicates[nlibrary] = hmodule;
                 if (opt_store_handles) {
-                    opt_store_handles[nlibrary] = moduleMapping.AllocationBase;
+                    opt_store_handles[nlibrary] = hmodule;
                 }
                 if (opt_store_names) {
                     opt_store_names[nlibrary] = (const char *)
@@ -867,7 +863,7 @@ u32 os_get_build_time_shared_libraries(u32 excl_maximum,
                 }
                 if (dyndebug_runtime_link) {
                     fprintf(stderr,"DLL detection: %u, base %p: %s\n",
-                            nlibrary, moduleMapping.AllocationBase,
+                            nlibrary, hmodule,
                             (char*)(base + image_import_descriptor->Name));
                 }
                 ++ nlibrary;
@@ -1360,6 +1356,7 @@ char mmap_unshared[(DYNAMIC_SPACE_END-DYNAMIC_SPACE_START)/BACKEND_PAGE_BYTES];
 
 typeof(GetWriteWatch) *ptr_GetWriteWatch;
 typeof(ResetWriteWatch) *ptr_ResetWriteWatch;
+typeof(GetModuleHandleExA) *ptr_GetModuleHandleExA;
 
 BOOL WINAPI CancelIoEx(HANDLE handle, LPOVERLAPPED overlapped);
 typeof(CancelIoEx) *ptr_CancelIoEx;
@@ -1380,14 +1377,29 @@ static void resolve_optional_imports()
         RESOLVE(kernel32,ResetWriteWatch);
         RESOLVE(kernel32,CancelIoEx);
         RESOLVE(kernel32,CancelSynchronousIo);
+        RESOLVE(kernel32,GetModuleHandleExA);
     }
 }
 
 #undef RESOLVE
 
-int os_number_of_processors = 1;
+intptr_t win32_get_module_handle_by_address(os_vm_address_t addr)
+{
+    MEMORY_BASIC_INFORMATION moduleMapping;
+    HMODULE result = 0;
+    return
+        ptr_GetModuleHandleExA ?
+        (intptr_t)(ptr_GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                          (LPCSTR)addr, &result) ? result : 0)
+         :
+        (VirtualQuery(addr, &moduleMapping, sizeof (moduleMapping)) ?
+         (intptr_t)moduleMapping.AllocationBase : 0);
+}
 
+int os_number_of_processors = 1;
 DWORD mwwFlag = 0u;
+HMODULE runtime_module_handle = 0u;
 
 void os_init(char *argv[], char *envp[])
 {
@@ -1426,6 +1438,7 @@ void os_init(char *argv[], char *envp[])
 #endif
     resolve_optional_imports();
     mwwFlag = (ptr_GetWriteWatch && ptr_ResetWriteWatch) ? MEM_WRITE_WATCH : 0u;
+    runtime_module_handle = win32_get_module_handle_by_address(&runtime_module_handle);
 }
 
 unsigned long core_mmap_unshared_pages = 0;
@@ -3748,7 +3761,7 @@ HANDLE win32_dup_and_unwrap_fd(int fd, boolean inheritable)
 {
     HANDLE outer;
     if (fd<0 || (!DuplicateHandle(GetCurrentProcess(),
-                                  _get_osfhandle(fd),
+                                  (HANDLE)_get_osfhandle(fd),
                                   GetCurrentProcess(),
                                   &outer,
                                   0u,

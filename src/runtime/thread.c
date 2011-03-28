@@ -626,7 +626,7 @@ const unsigned int tls_index_start = FIRST_TLS_INDEX;
 boolean is_thread_local_addr(struct thread* th, os_vm_address_t addr)
 {
     ptrdiff_t diff = ((char*)th->os_address)-(char*)addr;
-    return diff > 0 && diff < THREAD_STRUCT_SIZE;
+    return diff > (ptrdiff_t)0 && diff < (ptrdiff_t)THREAD_STRUCT_SIZE;
 }
 
 boolean is_some_thread_local_addr(os_vm_address_t addr)
@@ -641,6 +641,7 @@ boolean is_some_thread_local_addr(os_vm_address_t addr)
         }
         }
     pthread_mutex_unlock(&all_threads_lock);
+    return result;
 }
 
 #endif

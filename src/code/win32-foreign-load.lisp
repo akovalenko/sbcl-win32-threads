@@ -67,7 +67,7 @@
                  namestring (getlasterror)))
         (setf (shared-object-handle obj) handle)
         handle)
-      (get-module-handle nil)))
+      (extern-alien "runtime_module_handle" hinstance)))
 
 (defun dlclose-or-lose (&optional (obj nil objp))
   (when (and objp (shared-object-handle obj))
