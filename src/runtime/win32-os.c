@@ -400,6 +400,8 @@ void *real_uwp_seh_handler;
 
 os_vm_address_t core_mmap_end;
 
+HMODULE runtime_module_handle = 0u;
+
 static void *get_seh_frame(void)
 {
     void* retval;
@@ -749,7 +751,7 @@ u32 os_get_build_time_shared_libraries(u32 excl_maximum,
                                        void** opt_store_handles,
                                        const char *opt_store_names[])
 {
-    void* base = opt_root ? opt_root : (void*)GetModuleHandle(NULL);
+    void* base = opt_root ? opt_root : (void*)runtime_module_handle;
     /* base defaults to 0x400000 with GCC/mingw32. If you dereference
      * that location, you'll see 'MZ' bytes */
     void* base_magic_location =
@@ -790,39 +792,17 @@ u32 os_get_build_time_shared_libraries(u32 excl_maximum,
                 fprintf(dyndebug_output,"Now should know DLL: %s\n",
                         (char*)(base + image_import_descriptor->Name));
             }
-            /* A TRICK but not exactly a KLUDGE (win32 is a cruel
-             * world). Since Windows XP, if we want to know which DLL
-             * contains an address, we have GetModuleHandleEx.
+            /* Code using image thunk data to get its handle was here, with a
+             * number of platform-specific tricks (like using VirtualQuery for
+             * old OSes lacking GetModuleHandleEx).
              *
-             * But I need a more compelling reason to drop Win2k
-             * support; besides a personal opinion on Win2k (the best
-             * product in NT line, IMHO), I have a favourite (generic)
-             * method of choosing the low bound of version range that
-             * worth support:
-             *
-             * A version of OS/platform/kernel where your project
-             * usually works despite the absence of any testing,
-             * porting or compatibility effort on your side
-             *
-             * deserves to be supported, even when _some_ amount of
-             * effort is apparently needed later.
-             *
-             * ... So instead of depending on GetModuleHandleEx, I
-             * query an address range of file mapping object that
-             * contains the address I found. DLLs and EXEs are similar
-             * in many respects to ``normal'' memory-mapped files; in
-             * fact, SEC_IMAGE mapping attribute is (approximately)
-             * the only ``special'' property of EXE/DLL mapping,
-             * allowing section rearrangement, automatic memory
-             * protection adjustment, etc.
-             *
-             * That's all: mapped region base _is_ a DLL's image base
-             * and also its module handle (these 3 things are always
-             * the same on win32). */
+             * It's now replaced with requesting handle by name, which is
+             * theoretically unreliable (with SxS, multiple modules with same
+             * name are quite possible), but good enough to find the
+             * link-time dependencies of our executable or DLL. */
 
             hmodule = (HMODULE)
-                win32_get_module_handle_by_address(
-                    ((LPCVOID**) ((LPCVOID)base + image_import_descriptor->FirstThunk))[1]);
+                GetModuleHandle(base + image_import_descriptor->Name);
 
             if (hmodule)
             {
@@ -1399,7 +1379,6 @@ intptr_t win32_get_module_handle_by_address(os_vm_address_t addr)
 
 int os_number_of_processors = 1;
 DWORD mwwFlag = 0u;
-HMODULE runtime_module_handle = 0u;
 
 void os_init(char *argv[], char *envp[])
 {
