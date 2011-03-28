@@ -398,6 +398,7 @@ void pop_gcing_safety(struct gcing_safety *from)
 #define EXCEPTION_PORT_TO_THREAD_STRUCT(th) ((struct thread *) th)
 #endif
 
+extern boolean is_some_thread_local_addr(os_vm_address_t addr);
 extern void create_initial_thread(lispobj);
 extern void thread_register_gc_trigger();
 

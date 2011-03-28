@@ -114,8 +114,12 @@ int dyndebug_io = 0;
 int dyndebug_seh = 0;
 int dyndebug_misc = 0;
 
+int dyndebug_lowpagefault_halt = 0;
+int dyndebug_lowpagefault_log = 0;
+
 int dyndebug_to_filestream = 1;
 int dyndebug_to_odstring = 0;
+
 
 unsigned int dyndebug_charge_count = 0;
 FILE* dyndebug_output = NULL;
@@ -2056,19 +2060,14 @@ is_linkage_table_addr(os_vm_address_t addr)
 boolean
 is_valid_lisp_addr(os_vm_address_t addr)
 {
-    struct thread *th;
     if(in_range_p(addr, READ_ONLY_SPACE_START, READ_ONLY_SPACE_SIZE) ||
        in_range_p(addr, STATIC_SPACE_START   , STATIC_SPACE_SIZE) ||
-       in_range_p(addr, DYNAMIC_SPACE_START  , dynamic_space_size))
+       in_range_p(addr, DYNAMIC_SPACE_START  , dynamic_space_size) ||
+       is_some_thread_local_addr(addr))
         return 1;
-    for_each_thread(th) {
-        if(((os_vm_address_t)th->control_stack_start <= addr) && (addr < (os_vm_address_t)th->control_stack_end))
-            return 1;
-        if(in_range_p(addr, (uword_t)th->binding_stack_start, BINDING_STACK_SIZE))
-            return 1;
-    }
     return 0;
 }
+
 
 /* A tiny bit of interrupt.c state we want our paws on. */
 extern boolean internal_errors_enabled;
@@ -2441,16 +2440,16 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         oldctx = self ? self->gc_safepoint_context : 0;
         self->gc_safepoint_context = &ctx;
     }
+#define myreg(xx) (voidreg(context,xx))
     odxprint(seh,
              "SEH: rec %p, ctxptr %p, rip %p, fault %p\n"
-             "... thread %p, code %p, rcx %p, fp-tags %p\n\n",
+             "... code %p, rcx %p, fp-tags %p\n\n",
              exception_record,
              context,
-             voidreg(context,ip),
+             myreg(ip),
              fault_address,
-             self,
              (void*)(intptr_t)code,
-             voidreg(context,cx),
+             myreg(cx),
              context->FloatSave.TagWord);
 
 #ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
@@ -2685,29 +2684,21 @@ handle_exception(EXCEPTION_RECORD *exception_record,
             }
 
 
-            if (((lispobj)fault_address)<0xFFFF) {
-#if defined(LISP_FEATURE_X86)
-                fprintf(stderr,
-                        "Low page access (?) thread %p\n"
-                        "(addr 0x%p, EIP 0x%08lx ESP 0x%08lx EBP 0x%08lx)\n",
-                            self,
-                            fault_address,
-                            context->Eip,
-                            context->Esp,
-                            context->Ebp);
-#else
+            if (dyndebug_lowpagefault_log && (((lispobj)fault_address)<0xFFFF)) {
                 fprintf(stderr,
                         "Low page access (?) thread %p\n"
                         "(addr 0x%p, EIP 0x%p ESP 0x%p EBP 0x%p)\n",
-                            self,
+                        self,
                         fault_address,
-                        (void*)context->Rip,
-                        (void*)context->Rsp,
-                        (void*)context->Rbp);
-#endif
-                /* c_level_backtrace("Low page access",5); */
-                Sleep(INFINITE);
-                ExitProcess(0);
+                        voidreg(context,ip),
+                        voidreg(context,sp),
+                        voidreg(context,bp));
+                if (dyndebug_lowpagefault_halt) {
+                    Sleep(INFINITE);
+                    ExitProcess(0);
+                } else {
+                    goto complain;
+                }
             }
         }
         if (fault_address == GC_SAFEPOINT_PAGE_ADDR) {
@@ -2738,6 +2729,8 @@ handle_exception(EXCEPTION_RECORD *exception_record,
             goto finish;
         }
         if (fault_address == undefined_alien_address)
+            goto complain;
+        if (!is_valid_lisp_addr(fault_address))
             goto complain;
 
 #if defined(LISP_FEATURE_X86)
