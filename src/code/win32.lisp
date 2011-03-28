@@ -1181,3 +1181,4 @@ format for such streams."
                               (if allow +handle-flag-inherit+ 0))
       allow
       (win32-error '(setf inheritable-handle-p))))
+

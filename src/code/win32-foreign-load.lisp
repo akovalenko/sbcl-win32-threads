@@ -101,11 +101,10 @@
           (return result))))))
 
 (defun runtime-exported-symbols ()
-  #!+x86
   ;; TODO: reimplement for x86-64. Not so hard.
   (let* ((image-base (int-sap (get-module-handle nil)))
          (pe-base (sap+ image-base (sap-ref-32 image-base 60)))
-         (export-directory (sap+ pe-base (- 248 (* 16 8))))
+         (export-directory (sap+ pe-base (- #!+x86 248 #!+x86-64 264 (* 16 8))))
          (export-data (sap+ image-base (sap-ref-32 export-directory 0)))
          (n-functions (sap-ref-32 export-data 20))
          (n-names (sap-ref-32 export-data 24))
