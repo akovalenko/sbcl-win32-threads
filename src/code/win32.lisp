@@ -1018,6 +1018,10 @@ UNIX epoch: January 1st 1970."
                       (otherwise (- error-code)))))
           (progn
             (initialize-comm-timeouts handle)
+            (when (plusp (logand sb!unix::o_append flags))
+              ;; FIXME: seeking to the end is not enough for real APPEND
+              ;; semantics, but it's better than nothing.
+              (set-file-pointer-ex handle 0 2))
             (let ((fd (open-osfhandle handle (logior sb!unix::o_binary flags))))
               (if (minusp fd)
                   (values nil (sb!unix::get-errno))
