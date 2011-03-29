@@ -440,7 +440,7 @@ not supported."
    (defun mmap (addr length prot flags fd offset)
      (declare (ignore addr))
      (sb-sys:without-interrupts
-       (let* ((osfhandle (sb-win32:get-osfhandle fd))
+       (let* ((osfhandle (sb-win32::real-get-osfhandle fd))
               (mapping (sb-win32:create-file-mapping osfhandle nil prot
                                                      (ldb (byte 32 32) length)
                                                      (ldb (byte 32 0) length)

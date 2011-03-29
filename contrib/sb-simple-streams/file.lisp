@@ -226,11 +226,18 @@
             (warn "Unable to memory-map entire file.")
             (setf size (1- most-positive-fixnum)))
           (let ((buffer
+                 #-win32
                  (handler-case
                   (sb-posix:mmap nil size prot sb-posix::MAP-SHARED fd 0)
                   (sb-posix:syscall-error nil)
-                   #+win32
-                  (error nil))))
+                  (error nil))
+                 #+win32
+                 (let ((mapping (sb-win32::create-file-mapping fd nil 2 0 size nil)))
+                   (typecase mapping
+                     ((integer -1 0) nil)
+                     (t (let ((sap (prog1 (sb-win32::map-view-of-file mapping 4 0 0 size)
+                                     (sb-win32::close-handle mapping))))
+                          (and (not (zerop (sb-sys:sap-int sap))) sap)))))))
             (when (null buffer)
               (sb-unix:unix-close fd)
               (sb-ext:cancel-finalization stream)
