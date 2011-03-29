@@ -161,8 +161,10 @@ if the symbol isn't found."
             finally (return
                       (format nil
                               "~A {~X}"
-                              (cast (sap-alien (int-sap last-name-addr) (* char))
-                                    c-string)
+                              (if last-name-addr
+                                  (cast (sap-alien (int-sap last-name-addr) (* char))
+                                     c-string)
+                                  "foreign function")
                               addr))))
     #!+os-provides-dladdr
     (with-alien ((info (struct dl-info
