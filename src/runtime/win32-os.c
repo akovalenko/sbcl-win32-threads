@@ -885,7 +885,7 @@ void os_link_runtime()
     u32 nsymbol;
     lispobj symbol_name;
     char *namechars;
-    void *myself = GetModuleHandleW(NULL);
+    void *myself = (void*)runtime_module_handle;
     HMODULE buildTimeImages[16] = {myself};
     boolean datap;
     u32 i;
