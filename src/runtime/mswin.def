@@ -1,4 +1,3 @@
-NAME sbcl.exe
 EXPORTS
 	opendir
 	readdir
