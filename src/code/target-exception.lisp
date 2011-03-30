@@ -41,6 +41,15 @@
     (sb!thread:interrupt-thread (sb!thread::foreground-thread) #'break-it)))
 ||#
 
+(define-alien-type ()
+    (struct exception-record
+            (exception-code dword)
+            (exception-flags dword)
+            (exception-record system-area-pointer)
+            (exception-address system-area-pointer)
+            (number-parameters dword)
+            (exception-information system-area-pointer)))
+
 ;;; Map Windows Exception code to condition names: symbols or strings
 (defvar *exception-code-map*
   (macrolet ((cons-name (symbol)
@@ -52,14 +61,21 @@
      (cons +exception-flt-underflow+         'floating-point-underflow)
      (cons +exception-flt-overflow+          'floating-point-overflow)
      (cons +exception-flt-inexact-result+    'floating-point-inexact)
-     (cons +exception-flt-denormal-operand+  'sb!kernel::floating-point-exception)
-     (cons +exception-flt-stack-check+       'sb!kernel::floating-point-exception)
+     (cons +exception-flt-denormal-operand+
+           (lambda (&key &allow-other-keys)
+             (error 'sb!kernel::floating-point-exception
+                    :traps (getf (get-floating-point-modes) :traps))))
+     (cons +exception-access-violation+
+           (lambda (&key context memory-fault-address
+                    &allow-other-keys)
+             (error 'memory-fault-error
+                    :context (sap-int context)
+                    :address (sap-int memory-fault-address))))
+     (cons +exception-flt-stack-check+       'floating-point-invalid-operation)
      ;; Stack overflow
      (cons +exception-stack-overflow+        'sb!kernel::control-stack-exhausted)
      ;; Various
      (cons-name +exception-single-step+)
-     (cons-name +exception-access-violation+) ; FIXME: should turn into MEMORY-FAULT-ERROR
-                                              ; plus the faulting address
      (cons-name +exception-array-bounds-exceeded+)
      (cons-name +exception-breakpoint+)
      (cons-name +exception-datatype-misalignment+)
@@ -71,14 +87,16 @@
      (cons-name +exception-noncontinuable-exception+)
      (cons-name +exception-priv-instruction+))))
 
-(define-alien-type ()
-    (struct exception-record
-            (exception-code dword)
-            (exception-flags dword)
-            (exception-record system-area-pointer)
-            (exception-address system-area-pointer)
-            (number-parameters dword)
-            (exception-information system-area-pointer)))
+(define-condition unhandled-exception (error)
+  ((name :initarg :name :reader unhandled-exception-name)
+   (code :initarg :code :reader unhandled-exception-code)
+   (pc   :initarg :pc   :reader unhandled-exception-pc))
+  (:report (lambda (exception stream)
+             (format stream
+                     "Unhandled exception ~X ~@[(~A)~] at ~X"
+                     (unhandled-exception-code exception)
+                     (unhandled-exception-name exception)
+                     (unhandled-exception-pc exception)))))
 
 ;;; Actual exception handler. We hit something the runtime doesn't
 ;;; want to or know how to deal with (that is, not a sigtrap or gc wp
@@ -88,34 +106,30 @@
          (code (slot record 'exception-code))
          (number-parameters (slot record 'number-parameters))
          (condition-name (cdr (assoc code *exception-code-map*)))
+         (memory-fault-access-sap
+          (and (eql code +exception-access-violation+)
+               (> number-parameters 1)
+               (sap-ref-sap
+                (alien-sap (addr (slot record 'exception-information)))
+                (alien-size system-area-pointer :bytes))))
+         (pc (sap-int (slot record 'exception-address)))
          (sb!debug:*stack-top-hint*
           (nth-value 1 (sb!kernel:find-interrupted-name-and-frame))))
-    (when (and (eql code +exception-access-violation+)
-               (> number-parameters 1)
-               (sap= (sap-ref-sap
-                      (alien-sap (addr (slot record 'exception-information)))
-                      (alien-size system-area-pointer :bytes))
+    (when (and memory-fault-access-sap
+               (sap= memory-fault-access-sap
                      (extern-alien "undefined_alien_address"
                                    system-area-pointer)))
       (setf condition-name 'sb!kernel::undefined-alien-variable-error))
-    (if condition-name
-        (typecase condition-name
-          (string
-             (error "~S at ~S info ~S eip ~S"
-                    condition-name
-                    (slot record 'exception-address)
-                    (sap-ref-sap
-                      (alien-sap (addr (slot record 'exception-information)))
-                      (alien-size system-area-pointer :bytes))
-                    (sap-ref-sap
-                     (alien-funcall (extern-alien "os_context_pc_addr"
-                                                  (function system-area-pointer
-                                                            system-area-pointer))
-                                    context-sap) 0)))
-          (t
-             (error condition-name)))
-        (error "An exception occurred in context ~S: ~S. (Exception code: ~S)"
-               context-sap exception-record-sap code))))
+    (typecase condition-name
+      (function
+         (funcall condition-name
+                  :context context-sap
+                  :exception-record record
+                  :memory-fault-address memory-fault-access-sap
+                  :pc pc))
+      (t (error 'unhandled-exception :pc pc
+                :code code :name condition-name)))))
+
 
 ;;;; etc.
 
