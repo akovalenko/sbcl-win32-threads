@@ -129,7 +129,6 @@
                   :pc pc))
       (t (error 'unhandled-exception :pc pc
                 :code code :name condition-name)))))
-
 
 ;;;; etc.
 
