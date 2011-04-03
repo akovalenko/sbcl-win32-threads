@@ -1,3 +1,2 @@
-NAME sbcl.exe
 EXPORTS
 	log1p

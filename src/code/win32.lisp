@@ -1018,6 +1018,9 @@ UNIX epoch: January 1st 1970."
                       (otherwise (- error-code)))))
           (progn
             (initialize-comm-timeouts handle)
+            ;; FIXME: seeking to the end is not enough for real APPEND
+            ;; semantics, but it's better than nothing.
+            (set-file-pointer-ex handle 0 (if (plusp (logand sb!unix::o_append flags)) 2 0))
             (let ((fd (open-osfhandle handle (logior sb!unix::o_binary flags))))
               (if (minusp fd)
                   (values nil (sb!unix::get-errno))
@@ -1181,3 +1184,4 @@ format for such streams."
                               (if allow +handle-flag-inherit+ 0))
       allow
       (win32-error '(setf inheritable-handle-p))))
+

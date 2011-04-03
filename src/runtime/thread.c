@@ -621,6 +621,29 @@ free_thread_struct(struct thread *th)
 #ifdef LISP_FEATURE_SB_THREAD
 /* FIXME: should be MAX_INTERRUPTS -1 ? */
 const unsigned int tls_index_start = FIRST_TLS_INDEX;
+
+/* test if an address is within thread-local space */
+boolean is_thread_local_addr(struct thread* th, os_vm_address_t addr)
+{
+    ptrdiff_t diff = ((char*)th->os_address)-(char*)addr;
+    return diff > (ptrdiff_t)0 && diff < (ptrdiff_t)THREAD_STRUCT_SIZE;
+}
+
+boolean is_some_thread_local_addr(os_vm_address_t addr)
+{
+    boolean result = 0;
+    struct thread *th;
+    pthread_mutex_lock(&all_threads_lock);
+    for_each_thread(th) {
+        if(is_thread_local_addr(th,addr)) {
+            result = 1;
+            break;
+        }
+        }
+    pthread_mutex_unlock(&all_threads_lock);
+    return result;
+}
+
 #endif
 
 /* this is called from any other thread to create the new one, and

@@ -136,7 +136,7 @@ if the symbol isn't found."
           (when (and (<= table-addr addr)
                      (< addr (+ table-addr sb!vm:linkage-table-entry-size)))
             (return-from sap-foreign-symbol (car name-and-datap))))))
-    #!+(and win32 x86)
+    #!+win32
     (when
         (and (boundp '*runtime-dlhandle*)
              *runtime-dlhandle*
@@ -160,10 +160,12 @@ if the symbol isn't found."
             until (>= known-addr addr)
             finally (return
                       (format nil
-                              "~A +#x~X"
-                              (cast (sap-alien (int-sap last-name-addr) (* char))
-                                    c-string)
-                              (- addr last-addr)))))
+                              "~A {~X}"
+                              (if last-name-addr
+                                  (cast (sap-alien (int-sap last-name-addr) (* char))
+                                     c-string)
+                                  "foreign function")
+                              addr))))
     #!+os-provides-dladdr
     (with-alien ((info (struct dl-info
                                (filename c-string)

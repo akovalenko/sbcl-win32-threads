@@ -114,8 +114,12 @@ int dyndebug_io = 0;
 int dyndebug_seh = 0;
 int dyndebug_misc = 0;
 
+int dyndebug_lowpagefault_halt = 0;
+int dyndebug_lowpagefault_log = 0;
+
 int dyndebug_to_filestream = 1;
 int dyndebug_to_odstring = 0;
+
 
 unsigned int dyndebug_charge_count = 0;
 FILE* dyndebug_output = NULL;
@@ -395,6 +399,8 @@ void *base_seh_frame;
 void *real_uwp_seh_handler;
 
 os_vm_address_t core_mmap_end;
+
+HMODULE runtime_module_handle = 0u;
 
 static void *get_seh_frame(void)
 {
@@ -745,7 +751,7 @@ u32 os_get_build_time_shared_libraries(u32 excl_maximum,
                                        void** opt_store_handles,
                                        const char *opt_store_names[])
 {
-    void* base = opt_root ? opt_root : (void*)GetModuleHandle(NULL);
+    void* base = opt_root ? opt_root : (void*)runtime_module_handle;
     /* base defaults to 0x400000 with GCC/mingw32. If you dereference
      * that location, you'll see 'MZ' bytes */
     void* base_magic_location =
@@ -781,51 +787,25 @@ u32 os_get_build_time_shared_libraries(u32 excl_maximum,
                           && image_import_descriptor->FirstThunk;
              ++image_import_descriptor)
         {
-            MEMORY_BASIC_INFORMATION moduleMapping;
+            HMODULE hmodule;
             if (dyndebug_runtime_link) {
                 fprintf(dyndebug_output,"Now should know DLL: %s\n",
                         (char*)(base + image_import_descriptor->Name));
             }
-            /* A TRICK but not exactly a KLUDGE (win32 is a cruel
-             * world). Since Windows XP, if we want to know which DLL
-             * contains an address, we have GetModuleHandleEx.
+            /* Code using image thunk data to get its handle was here, with a
+             * number of platform-specific tricks (like using VirtualQuery for
+             * old OSes lacking GetModuleHandleEx).
              *
-             * But I need a more compelling reason to drop Win2k
-             * support; besides a personal opinion on Win2k (the best
-             * product in NT line, IMHO), I have a favourite (generic)
-             * method of choosing the low bound of version range that
-             * worth support:
-             *
-             * A version of OS/platform/kernel where your project
-             * usually works despite the absence of any testing,
-             * porting or compatibility effort on your side
-             *
-             * deserves to be supported, even when _some_ amount of
-             * effort is apparently needed later.
-             *
-             * ... So instead of depending on GetModuleHandleEx, I
-             * query an address range of file mapping object that
-             * contains the address I found. DLLs and EXEs are similar
-             * in many respects to ``normal'' memory-mapped files; in
-             * fact, SEC_IMAGE mapping attribute is (approximately)
-             * the only ``special'' property of EXE/DLL mapping,
-             * allowing section rearrangement, automatic memory
-             * protection adjustment, etc.
-             *
-             * That's all: mapped region base _is_ a DLL's image base
-             * and also its module handle (these 3 things are always
-             * the same on win32). */
-#ifdef LISP_FEATURE_X86
-            if (VirtualQuery
-                (*(LPCVOID**)
-                 ((LPCVOID)base + image_import_descriptor->FirstThunk),
-                 &moduleMapping, sizeof (moduleMapping)))
-#else
-            if ((moduleMapping.AllocationBase = (LPVOID)
-                 GetModuleHandle((char*)(base + image_import_descriptor->Name))))
-#endif
-            {
+             * It's now replaced with requesting handle by name, which is
+             * theoretically unreliable (with SxS, multiple modules with same
+             * name are quite possible), but good enough to find the
+             * link-time dependencies of our executable or DLL. */
 
+            hmodule = (HMODULE)
+                GetModuleHandle(base + image_import_descriptor->Name);
+
+            if (hmodule)
+            {
                 /* We may encouncer some module more than once while
                    traversing import descriptors (it's usually a
                    result of non-trivial linking process, like doing
@@ -847,15 +827,15 @@ u32 os_get_build_time_shared_libraries(u32 excl_maximum,
 
                 for (j=0; j<nlibrary; ++j)
                 {
-                    if(check_duplicates[j] == moduleMapping.AllocationBase)
+                    if(check_duplicates[j] == hmodule)
                         break;
                 }
                 if (j<nlibrary) continue; /* duplicate => skip it in
                                            * outer loop */
 
-                check_duplicates[nlibrary] = moduleMapping.AllocationBase;
+                check_duplicates[nlibrary] = hmodule;
                 if (opt_store_handles) {
-                    opt_store_handles[nlibrary] = moduleMapping.AllocationBase;
+                    opt_store_handles[nlibrary] = hmodule;
                 }
                 if (opt_store_names) {
                     opt_store_names[nlibrary] = (const char *)
@@ -863,7 +843,7 @@ u32 os_get_build_time_shared_libraries(u32 excl_maximum,
                 }
                 if (dyndebug_runtime_link) {
                     fprintf(stderr,"DLL detection: %u, base %p: %s\n",
-                            nlibrary, moduleMapping.AllocationBase,
+                            nlibrary, hmodule,
                             (char*)(base + image_import_descriptor->Name));
                 }
                 ++ nlibrary;
@@ -905,7 +885,7 @@ void os_link_runtime()
     u32 nsymbol;
     lispobj symbol_name;
     char *namechars;
-    void *myself = GetModuleHandleW(NULL);
+    void *myself = (void*)runtime_module_handle;
     HMODULE buildTimeImages[16] = {myself};
     boolean datap;
     u32 i;
@@ -1356,6 +1336,7 @@ char mmap_unshared[(DYNAMIC_SPACE_END-DYNAMIC_SPACE_START)/BACKEND_PAGE_BYTES];
 
 typeof(GetWriteWatch) *ptr_GetWriteWatch;
 typeof(ResetWriteWatch) *ptr_ResetWriteWatch;
+typeof(GetModuleHandleExA) *ptr_GetModuleHandleExA;
 
 BOOL WINAPI CancelIoEx(HANDLE handle, LPOVERLAPPED overlapped);
 typeof(CancelIoEx) *ptr_CancelIoEx;
@@ -1376,13 +1357,27 @@ static void resolve_optional_imports()
         RESOLVE(kernel32,ResetWriteWatch);
         RESOLVE(kernel32,CancelIoEx);
         RESOLVE(kernel32,CancelSynchronousIo);
+        RESOLVE(kernel32,GetModuleHandleExA);
     }
 }
 
 #undef RESOLVE
 
-int os_number_of_processors = 1;
+intptr_t win32_get_module_handle_by_address(os_vm_address_t addr)
+{
+    MEMORY_BASIC_INFORMATION moduleMapping;
+    HMODULE result = 0;
+    return
+        ptr_GetModuleHandleExA ?
+        (intptr_t)(ptr_GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                          (LPCSTR)addr, &result) ? result : 0)
+         :
+        (VirtualQuery(addr, &moduleMapping, sizeof (moduleMapping)) ?
+         (intptr_t)moduleMapping.AllocationBase : 0);
+}
 
+int os_number_of_processors = 1;
 DWORD mwwFlag = 0u;
 
 void os_init(char *argv[], char *envp[])
@@ -1422,6 +1417,7 @@ void os_init(char *argv[], char *envp[])
 #endif
     resolve_optional_imports();
     mwwFlag = (ptr_GetWriteWatch && ptr_ResetWriteWatch) ? MEM_WRITE_WATCH : 0u;
+    runtime_module_handle = (HMODULE)win32_get_module_handle_by_address(&runtime_module_handle);
 }
 
 unsigned long core_mmap_unshared_pages = 0;
@@ -1862,12 +1858,12 @@ static char* non_external_self_name = "//////<SBCL executable>";
 #ifdef LISP_FEATURE_FDS_ARE_WINDOWS_HANDLES
 #define maybe_open_osfhandle(handle,mode) (handle)
 #define maybe_get_osfhandle(fd) (fd)
+#define FDTYPE HANDLE
 #else
 #define maybe_open_osfhandle _open_osfhandle
 #define maybe_get_osfhandle _get_osfhandle
+#define FDTYPE int
 #endif
-
-
 
 int win32_open_for_mmap(const char* fileName)
 {
@@ -2056,19 +2052,14 @@ is_linkage_table_addr(os_vm_address_t addr)
 boolean
 is_valid_lisp_addr(os_vm_address_t addr)
 {
-    struct thread *th;
     if(in_range_p(addr, READ_ONLY_SPACE_START, READ_ONLY_SPACE_SIZE) ||
        in_range_p(addr, STATIC_SPACE_START   , STATIC_SPACE_SIZE) ||
-       in_range_p(addr, DYNAMIC_SPACE_START  , dynamic_space_size))
+       in_range_p(addr, DYNAMIC_SPACE_START  , dynamic_space_size) ||
+       is_some_thread_local_addr(addr))
         return 1;
-    for_each_thread(th) {
-        if(((os_vm_address_t)th->control_stack_start <= addr) && (addr < (os_vm_address_t)th->control_stack_end))
-            return 1;
-        if(in_range_p(addr, (uword_t)th->binding_stack_start, BINDING_STACK_SIZE))
-            return 1;
-    }
     return 0;
 }
+
 
 /* A tiny bit of interrupt.c state we want our paws on. */
 extern boolean internal_errors_enabled;
@@ -2441,16 +2432,16 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         oldctx = self ? self->gc_safepoint_context : 0;
         self->gc_safepoint_context = &ctx;
     }
+#define myreg(xx) (voidreg(context,xx))
     odxprint(seh,
              "SEH: rec %p, ctxptr %p, rip %p, fault %p\n"
-             "... thread %p, code %p, rcx %p, fp-tags %p\n\n",
+             "... code %p, rcx %p, fp-tags %p\n\n",
              exception_record,
              context,
-             voidreg(context,ip),
+             myreg(ip),
              fault_address,
-             self,
              (void*)(intptr_t)code,
-             voidreg(context,cx),
+             myreg(cx),
              context->FloatSave.TagWord);
 
 #ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
@@ -2685,29 +2676,21 @@ handle_exception(EXCEPTION_RECORD *exception_record,
             }
 
 
-            if (((lispobj)fault_address)<0xFFFF) {
-#if defined(LISP_FEATURE_X86)
-                fprintf(stderr,
-                        "Low page access (?) thread %p\n"
-                        "(addr 0x%p, EIP 0x%08lx ESP 0x%08lx EBP 0x%08lx)\n",
-                            self,
-                            fault_address,
-                            context->Eip,
-                            context->Esp,
-                            context->Ebp);
-#else
+            if (dyndebug_lowpagefault_log && (((lispobj)fault_address)<0xFFFF)) {
                 fprintf(stderr,
                         "Low page access (?) thread %p\n"
                         "(addr 0x%p, EIP 0x%p ESP 0x%p EBP 0x%p)\n",
-                            self,
+                        self,
                         fault_address,
-                        (void*)context->Rip,
-                        (void*)context->Rsp,
-                        (void*)context->Rbp);
-#endif
-                /* c_level_backtrace("Low page access",5); */
-                Sleep(INFINITE);
-                ExitProcess(0);
+                        voidreg(context,ip),
+                        voidreg(context,sp),
+                        voidreg(context,bp));
+                if (dyndebug_lowpagefault_halt) {
+                    Sleep(INFINITE);
+                    ExitProcess(0);
+                } else {
+                    goto complain;
+                }
             }
         }
         if (fault_address == GC_SAFEPOINT_PAGE_ADDR) {
@@ -2738,6 +2721,8 @@ handle_exception(EXCEPTION_RECORD *exception_record,
             goto finish;
         }
         if (fault_address == undefined_alien_address)
+            goto complain;
+        if (!is_valid_lisp_addr(fault_address))
             goto complain;
 
 #if defined(LISP_FEATURE_X86)
@@ -3374,7 +3359,7 @@ boolean win32_maybe_interrupt_io(void* thread)
 
 static const LARGE_INTEGER zero_large_offset = {.QuadPart = 0LL};
 
-int win32_unix_write(int fd, void * buf, int count)
+int win32_unix_write(FDTYPE fd, void * buf, int count)
 {
     HANDLE handle;
     DWORD written_bytes;
@@ -3385,7 +3370,6 @@ int win32_unix_write(int fd, void * buf, int count)
     BOOL seekable;
     BOOL ok;
 
-    odprintf("write(%d, 0x%p, %d)", fd, buf, count);
     handle =(HANDLE)maybe_get_osfhandle(fd);
     if (console_handle_p(handle))
         return win32_write_unicode_console(handle,buf,count);
@@ -3411,8 +3395,6 @@ int win32_unix_write(int fd, void * buf, int count)
     io_end_interruptible(handle);
 
     if (ok) {
-        odprintf("write(%d, 0x%p, %d) immeditately wrote %d bytes",
-                 fd, buf, count, written_bytes);
         goto done_something;
     } else {
         if (GetLastError()!=ERROR_IO_PENDING) {
@@ -3447,7 +3429,7 @@ int win32_unix_write(int fd, void * buf, int count)
     return written_bytes;
 }
 
-int win32_unix_read(int fd, void * buf, int count)
+int win32_unix_read(FDTYPE fd, void * buf, int count)
 {
     HANDLE handle;
     OVERLAPPED overlapped = {.Internal=0};
@@ -3459,7 +3441,6 @@ int win32_unix_read(int fd, void * buf, int count)
     LARGE_INTEGER file_position;
     BOOL seekable;
 
-    odprintf("read(%d, 0x%p, %d)", fd, buf, count);
     handle = (HANDLE)maybe_get_osfhandle(fd);
 
     if (console_handle_p(handle)) {
@@ -3755,7 +3736,7 @@ HANDLE win32_dup_and_unwrap_fd(int fd, boolean inheritable)
 {
     HANDLE outer;
     if (fd<0 || (!DuplicateHandle(GetCurrentProcess(),
-                                  _get_osfhandle(fd),
+                                  (HANDLE)_get_osfhandle(fd),
                                   GetCurrentProcess(),
                                   &outer,
                                   0u,

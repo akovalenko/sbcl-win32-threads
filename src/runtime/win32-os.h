@@ -92,6 +92,7 @@ void establish_c_fpu_world();
 void os_commit_wp_violation_data(boolean call_gc);
 
 boolean win32_maybe_interrupt_io(void* thread);
+intptr_t win32_get_module_handle_by_address(os_vm_address_t addr);
 
 /* Temporal per-thread storage for non-lisp values, that I constantly
    need on Win32 to run code snippets injected by SEH handler and

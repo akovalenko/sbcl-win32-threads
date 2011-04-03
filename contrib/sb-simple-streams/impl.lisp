@@ -916,7 +916,8 @@ is supported only on simple-streams."
       (ansi-stream
        (sb-impl::ansi-stream-write-string string stream start end))
       (fundamental-stream
-       (sb-gray:stream-write-string stream string start end)))))
+       (sb-gray:stream-write-string stream string start end))))
+  string)
 
 (defun write-line (string &optional (stream *standard-output*)
                           &key (start 0) end)
