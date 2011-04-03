@@ -87,17 +87,6 @@
      (cons-name +exception-noncontinuable-exception+)
      (cons-name +exception-priv-instruction+))))
 
-(define-condition unhandled-exception (error)
-  ((name :initarg :name :reader unhandled-exception-name)
-   (code :initarg :code :reader unhandled-exception-code)
-   (pc   :initarg :pc   :reader unhandled-exception-pc))
-  (:report (lambda (exception stream)
-             (format stream
-                     "Unhandled exception ~X ~@[(~A)~] at ~X"
-                     (unhandled-exception-code exception)
-                     (unhandled-exception-name exception)
-                     (unhandled-exception-pc exception)))))
-
 ;;; Actual exception handler. We hit something the runtime doesn't
 ;;; want to or know how to deal with (that is, not a sigtrap or gc wp
 ;;; violation), so it calls us here.
