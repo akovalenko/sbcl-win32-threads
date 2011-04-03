@@ -109,16 +109,17 @@
                      (extern-alien "undefined_alien_address"
                                    system-area-pointer)))
       (setf condition-name 'sb!kernel::undefined-alien-variable-error))
-    (typecase condition-name
-      (function
-         (funcall condition-name
-                  :context context-sap
-                  :exception-record record
-                  :memory-fault-address memory-fault-access-sap
-                  :pc pc))
-      ((and symbol (not null)) (error condition-name))
-      (t (error 'sb!kernel::unhandled-exception :pc pc
-                :code code :name condition-name)))))
+    (with-simple-restart (continue "Continue execution at {~X}" pc)
+      (typecase condition-name
+        (function
+           (funcall condition-name
+                    :context context-sap
+                    :exception-record record
+                    :memory-fault-address memory-fault-access-sap
+                    :pc pc))
+        ((and symbol (not null)) (error condition-name))
+        (t (error 'sb!kernel::unhandled-exception :pc pc
+                  :code code :name condition-name))))))
 
 ;;;; etc.
 
