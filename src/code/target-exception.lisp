@@ -116,7 +116,7 @@
                   :exception-record record
                   :memory-fault-address memory-fault-access-sap
                   :pc pc))
-      (t (error 'unhandled-exception :pc pc
+      (t (error 'sb!kernel::unhandled-exception :pc pc
                 :code code :name condition-name)))))
 
 ;;;; etc.
