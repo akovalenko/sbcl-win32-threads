@@ -1097,14 +1097,6 @@ UNIX epoch: January 1st 1970."
               (close-socket handle))
             (sb!unix:unix-close fd))))))
 
-(define-alien-routine ("GetExitCodeProcess" get-exit-code-process)
-    int
-  (handle unsigned) (exit-code unsigned :out))
-
-(define-alien-routine ("GetExitCodeThread" get-exit-code-thread)
-    int
-  (handle handle) (exit-code dword :out))
-
 (defun make-console-fds (&optional (direction :io))
   #!+sb-doc
   "Reopen console input and/or output with CreateFile, wrap new

@@ -27,7 +27,7 @@
       (y-chars dword)
       (fill-attribute dword)
       (flags dword)
-      (show-window word)
+      (show-window unsigned-short)
       (nil unsigned-short)
       (nil (* t))
       (stdin handle)
@@ -48,6 +48,12 @@
   (current-directory system-string)
   (startup-info (* t))
   (process-information (* t)))
+
+(define-alien-routine ("GetExitCodeProcess" get-exit-code-process) int
+  (handle unsigned) (exit-code dword :out))
+
+(define-alien-routine ("GetExitCodeThread" get-exit-code-thread) int
+  (handle handle) (exit-code dword :out))
 
 (defun mswin-spawn (program argv stdin stdout stderr searchp envp waitp)
   (declare (ignorable envp))
@@ -72,3 +78,4 @@
                            (multiple-value-bind (got code) (get-exit-code-process child)
                              (if got code -1))))
                  child))))))
+
