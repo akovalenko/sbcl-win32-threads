@@ -145,7 +145,6 @@
   #+sb-doc
   "List of process structures for all active processes.")
 
-#-win32
 (defvar *active-processes-lock*
   (sb-thread:make-mutex :name "Lock for active processes."))
 
