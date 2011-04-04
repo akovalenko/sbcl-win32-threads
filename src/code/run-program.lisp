@@ -186,7 +186,7 @@
 #+win32
 (define-alien-routine ("GetExitCodeProcess" get-exit-code-process)
     int
-  (handle unsigned) (exit-code unsigned :out))
+  (handle unsigned) (exit-code unsigned-int :out))
 
 (defun process-status (process)
   #+sb-doc
