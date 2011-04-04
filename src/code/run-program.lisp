@@ -753,11 +753,6 @@ Users Manual for details about the PROCESS structure."#-win32"
                                       (values stdout output-stream)
                                       (get-descriptor-for ,@args))))
                            ,@body))
-                      (get-lowio-fd (hi-level-fd unix-access)
-                        #-fds-are-windows-handles
-                        hi-level-fd
-                        #+fds-are-windows-handles
-                        `(sb-win32::real-open-osfhandle ,hi-level-fd ,unix-access))
                       (with-open-pty (((pty-name pty-stream) (pty cookie))
                                       &body body)
                         #+win32 `(declare (ignore ,pty ,cookie))
@@ -787,6 +782,33 @@ Users Manual for details about the PROCESS structure."#-win32"
                                           :direction :output
                                           :if-exists if-error-exists
                                           :external-format external-format)
+                   #+fds-are-windows-handles
+                   (let ((child (sb-win32::mswin-spawn
+                                 progname
+                                 (with-output-to-string (argv)
+                                   (dolist (arg simple-args)
+                                     (write-string arg argv)
+                                     (write-char #\Space argv)))
+                                 stdin stdout stderr
+                                 search nil wait)))
+                     (unless (= child -1)
+                               (setf proc
+                                     (apply
+                                      #'make-process
+                                      :pid child
+                                      :input input-stream
+                                      :output output-stream
+                                      :error error-stream
+                                      :status-hook status-hook
+                                      :cookie cookie
+                                      #-win32 (list :pty pty-stream
+                                                    :%status :running)
+                                      #+win32 (if wait
+                                                  (list :%status :exited
+                                                        :exit-code child)
+                                                  (list :%status :running))))
+                               (push proc *active-processes*)))
+                   #-fds-are-windows-handles
                    (with-open-pty ((pty-name pty-stream) (pty cookie))
                      ;; Make sure we are not notified about the child
                      ;; death before we have installed the PROCESS
@@ -797,9 +819,7 @@ Users Manual for details about the PROCESS structure."#-win32"
                            (with-environment-vec (environment-vec environment)
                              (setq child (without-gcing
                                            (spawn progname args-vec
-                                                  (get-lowio-fd stdin sb-unix::o_rdonly)
-                                                  (get-lowio-fd stdout sb-unix::o_wronly)
-                                                  (get-lowio-fd stderr sb-unix::o_wronly)
+                                                  stdin stdout stderr
                                                   (if search 1 0)
                                                   environment-vec pty-name
                                                   (if wait 1 0))))

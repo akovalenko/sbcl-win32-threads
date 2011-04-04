@@ -459,6 +459,7 @@ corresponds to NAME, or NIL if there is none."
 ;;; Duplicate an existing file descriptor (given as the argument) and
 ;;; return it. If FD is not a valid file descriptor, NIL and an error
 ;;; number are returned.
+#!-fds-are-windows-handles
 (defun unix-dup (fd)
   (declare (type unix-fd fd))
   (int-syscall ("[_]dup" int) fd))
