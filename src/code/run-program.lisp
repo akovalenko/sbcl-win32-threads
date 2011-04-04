@@ -153,11 +153,8 @@
 ;;; mutex is needed. More importantly the sigchld signal handler also
 ;;; accesses it, that's why we need without-interrupts.
 (defmacro with-active-processes-lock (() &body body)
-  #-win32
   `(sb-thread::with-system-mutex (*active-processes-lock*)
-     ,@body)
-  #+win32
-  `(progn ,@body))
+     ,@body))
 
 (defstruct (process (:copier nil))
   pid                 ; PID of child process
