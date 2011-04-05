@@ -69,16 +69,17 @@
               (slot startup-info 'stderr) (maybe-std-handle stderr)
               (slot startup-info 'flags) (if inheritp +startf-use-std-handles+ 0))
         (without-interrupts
-          (and (create-process (if searchp nil program)
-                               argv
-                               nil nil
-                               inheritp 0 nil nil
-                               (alien-sap startup-info)
-                               (alien-sap process-information))
-               (let ((child (slot process-information 'process-handle)))
-                 (close-handle (slot process-information 'thread-handle))
-                 (if waitp
-                     (do () ((/= 1 (with-local-interrupts (wait-object-or-signal child)))
-                               (multiple-value-bind (got code) (get-exit-code-process child)
-                                 (if got code -1))))
-                     child))))))))
+          (if (create-process (if searchp nil program)
+                              argv
+                              nil nil
+                              inheritp 0 nil nil
+                              (alien-sap startup-info)
+                              (alien-sap process-information))
+              (let ((child (slot process-information 'process-handle)))
+                (close-handle (slot process-information 'thread-handle))
+                (if waitp
+                    (do () ((/= 1 (with-local-interrupts (wait-object-or-signal child)))
+                              (multiple-value-bind (got code) (get-exit-code-process child)
+                                (if got code -1))))
+                    child))
+              -1))))))
