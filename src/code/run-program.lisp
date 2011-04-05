@@ -745,31 +745,36 @@ Users Manual for details about the PROCESS structure."#-win32"
            ;; expand into UNWIND-PROTECT forms.  They're just
            ;; syntactic sugar to make the rest of the routine slightly
            ;; easier to read.
-           (macrolet ((with-fd-and-stream-for (((fd stream) which &rest args)
+           (macrolet ((with-no-with ((&optional no) (&whole form with-something parameters &body body))
+                        (declare (ignore with-something parameters))
+                        (typecase no
+                          (keyword `(progn ,@body))
+                          (null form)
+                          (t `(let ,no (declare (ignorable ,@no)) ,@body))))
+                      (with-fd-and-stream-for (((fd stream) which &rest args)
                                                &body body)
                         `(multiple-value-bind (,fd ,stream)
                              ,(ecase which
                                 ((:input :output)
-                                 `(get-descriptor-for ,@args))
+                                   `(get-descriptor-for ,@args))
                                 (:error
-                                 `(if (eq ,(first args) :output)
-                                      ;; kludge: we expand into
-                                      ;; hard-coded symbols here.
-                                      (values stdout output-stream)
-                                      (get-descriptor-for ,@args))))
+                                   `(if (eq ,(first args) :output)
+                                        ;; kludge: we expand into
+                                        ;; hard-coded symbols here.
+                                        (values stdout output-stream)
+                                        (get-descriptor-for ,@args))))
                            ,@body))
                       (with-open-pty (((pty-name pty-stream) (pty cookie))
                                       &body body)
-                        #+win32 `(declare (ignore ,pty ,cookie))
-                        #+win32 `(let (,pty-name ,pty-stream) ,@body)
-                        #-win32 `(multiple-value-bind (,pty-name ,pty-stream)
-                                     (open-pty ,pty ,cookie)
-                                   ,@body))
+                        `(multiple-value-bind (,pty-name ,pty-stream)
+                             (open-pty ,pty ,cookie)
+                           ,@body))
                       (with-args-vec ((vec args) &body body)
                         `(with-c-strvec (,vec ,args)
                            ,@body))
                       (with-environment-vec ((vec env) &body body)
-                        #+win32 `(let (,vec) ,@body)
+                        #+win32 `(let (,vec)
+                                   ,@body)
                         #-win32 `(with-c-strvec (,vec ,env) ,@body)))
              (with-fd-and-stream-for ((stdin input-stream) :input
                                       input cookie
@@ -787,68 +792,55 @@ Users Manual for details about the PROCESS structure."#-win32"
                                           :direction :output
                                           :if-exists if-error-exists
                                           :external-format external-format)
-                   #+fds-are-windows-handles
-                   (let ((child (sb-win32::mswin-spawn
-                                 progname
-                                 (with-output-to-string (argv)
-                                   (dolist (arg simple-args)
-                                     (write-string arg argv)
-                                     (write-char #\Space argv)))
-                                 stdin stdout stderr
-                                 search nil wait)))
-                     (unless (= child -1)
-                               (setf proc
-                                     (apply
-                                      #'make-process
-                                      :pid child
-                                      :input input-stream
-                                      :output output-stream
-                                      :error error-stream
-                                      :status-hook status-hook
-                                      :cookie cookie
-                                      #-win32 (list :pty pty-stream
-                                                    :%status :running)
-                                      #+win32 (if wait
-                                                  (list :%status :exited
-                                                        :exit-code child)
-                                                  (list :%status :running))))
-                               (push proc *active-processes*)))
-                   #-fds-are-windows-handles
-                   (with-open-pty ((pty-name pty-stream) (pty cookie))
-                     ;; Make sure we are not notified about the child
-                     ;; death before we have installed the PROCESS
-                     ;; structure in *ACTIVE-PROCESSES*.
-                     (let (child)
-                       (with-active-processes-lock ()
-                         (with-args-vec (args-vec simple-args)
-                           (with-environment-vec (environment-vec environment)
-                             (setq child (without-gcing
+                   (with-no-with (#+win32 (pty-name pty-stream))
+                     (with-open-pty ((pty-name pty-stream) (pty cookie))
+                       ;; Make sure we are not notified about the child
+                       ;; death before we have installed the PROCESS
+                       ;; structure in *ACTIVE-PROCESSES*.
+                       (let (child)
+                         (with-active-processes-lock ()
+                           (with-no-with (#+fds-are-windows-handles (args-vec))
+                             (with-args-vec (args-vec simple-args)
+                               (with-no-with (#+win32 (environment-vec))
+                                 (with-environment-vec (environment-vec environment)
+                                   (setq child
+                                         #+fds-are-windows-handles
+                                         (sb-win32::mswin-spawn
+                                          progname
+                                          (with-output-to-string (argv)
+                                            (dolist (arg simple-args)
+                                              (write-string arg argv)
+                                              (write-char #\Space argv)))
+                                          stdin stdout stderr
+                                          search nil wait)
+                                         #-fds-are-windows-handles
+                                         (without-gcing
                                            (spawn progname args-vec
                                                   stdin stdout stderr
                                                   (if search 1 0)
                                                   environment-vec pty-name
                                                   (if wait 1 0))))
-                             (unless (= child -1)
-                               (setf proc
-                                     (apply
-                                      #'make-process
-                                      :pid child
-                                      :input input-stream
-                                      :output output-stream
-                                      :error error-stream
-                                      :status-hook status-hook
-                                      :cookie cookie
-                                      #-win32 (list :pty pty-stream
-                                                    :%status :running)
-                                      #+win32 (if wait
-                                                  (list :%status :exited
-                                                        :exit-code child)
-                                                  (list :%status :running))))
-                               (push proc *active-processes*)))))
-                       ;; Report the error outside the lock.
-                       (when (= child -1)
-                         (error "couldn't fork child process: ~A"
-                                (strerror)))))))))
+                                   (unless (= child -1)
+                                     (setf proc
+                                           (apply
+                                            #'make-process
+                                            :pid child
+                                            :input input-stream
+                                            :output output-stream
+                                            :error error-stream
+                                            :status-hook status-hook
+                                            :cookie cookie
+                                            #-win32 (list :pty pty-stream
+                                                          :%status :running)
+                                            #+win32 (if wait
+                                                        (list :%status :exited
+                                                              :exit-code child)
+                                                        (list :%status :running))))
+                                     (push proc *active-processes*)))))))
+                         ;; Report the error outside the lock.
+                         (when (= child -1)
+                           (error "couldn't fork child process: ~A"
+                                  (strerror))))))))))
         (dolist (fd *close-in-parent*)
           (sb-unix:unix-close fd))
         (unless proc
