@@ -314,6 +314,11 @@ status slot."
   ;; maybe it should be set to :CLOSED, or similar?
   (with-active-processes-lock ()
    (setf *active-processes* (delete process *active-processes*)))
+  #+win32
+  (let ((handle (shiftf (process-pid process) nil)))
+    (when (and handle (plusp handle))
+      (or (sb-win32:close-handle handle)
+          (sb-win32::win32-error 'process-close))))
   process)
 
 (defun get-processes-status-changes ()

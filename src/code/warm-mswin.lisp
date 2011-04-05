@@ -36,8 +36,7 @@
 
 (defconstant +startf-use-std-handles+ #x100)
 
-(define-alien-routine ("CreateProcessW" create-process)
-    lispbool
+(define-alien-routine ("CreateProcessW" create-process) lispbool
   (application-name system-string)
   (command-line system-string)
   (process-security-attributes (* t))
@@ -57,25 +56,29 @@
 
 (defun mswin-spawn (program argv stdin stdout stderr searchp envp waitp)
   (declare (ignorable envp))
-  (with-alien ((process-information process-information)
-               (startup-info startup-info))
-    (setf (slot startup-info 'cb) (alien-size startup-info :bytes)
-          (slot startup-info 'stdin) stdin
-          (slot startup-info 'stdout) stdout
-          (slot startup-info 'stderr) stderr
-          (slot startup-info 'flags) +startf-use-std-handles+)
-    (without-interrupts
-      (and (create-process (if searchp nil program)
-                           argv
-                           nil nil
-                           t 0 nil nil
-                           (alien-sap startup-info)
-                           (alien-sap process-information))
-           (let ((child (slot process-information 'process-handle)))
-             (close-handle (slot process-information 'thread-handle))
-             (if waitp
-                 (do () ((/= 1 (with-local-interrupts (wait-object-or-signal child)))
-                           (multiple-value-bind (got code) (get-exit-code-process child)
-                             (if got code -1))))
-                 child))))))
-
+  (let ((std-handles (get-std-handles))
+        (inheritp nil))
+    (flet ((maybe-std-handle (arg)
+             (let ((default (pop std-handles)))
+               (case arg (-1 default) (otherwise (setf inheritp t) arg)))))
+      (with-alien ((process-information process-information)
+                   (startup-info startup-info))
+        (setf (slot startup-info 'cb) (alien-size startup-info :bytes)
+              (slot startup-info 'stdin) (maybe-std-handle stdin)
+              (slot startup-info 'stdout) (maybe-std-handle stdout)
+              (slot startup-info 'stderr) (maybe-std-handle stderr)
+              (slot startup-info 'flags) (if inheritp +startf-use-std-handles+ 0))
+        (without-interrupts
+          (and (create-process (if searchp nil program)
+                               argv
+                               nil nil
+                               inheritp 0 nil nil
+                               (alien-sap startup-info)
+                               (alien-sap process-information))
+               (let ((child (slot process-information 'process-handle)))
+                 (close-handle (slot process-information 'thread-handle))
+                 (if waitp
+                     (do () ((/= 1 (with-local-interrupts (wait-object-or-signal child)))
+                               (multiple-value-bind (got code) (get-exit-code-process child)
+                                 (if got code -1))))
+                     child))))))))
