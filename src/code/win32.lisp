@@ -1187,3 +1187,13 @@ format for such streams."
       (if duplicated
           (values handle 0)
           (values nil (- (get-last-error)))))))
+
+#!+fds-are-windows-handles
+(defun call-with-crt-fd (thunk handle &optional (flags 0))
+  (multiple-value-bind (duplicate errno)
+      (sb!unix:unix-dup handle)
+    (if duplicate
+        (let ((fd (real-open-osfhandle duplicate flags)))
+          (unwind-protect (funcall thunk fd)
+            (real-crt-close fd)))
+        (values nil errno))))
