@@ -424,7 +424,7 @@ and get an output stream in response\)."
                     :external-format external-format
                     :timeout timeout
                     :auto-close auto-close
-                    :serve-events serve-events))
+                    :serve-events (and serve-events #+win32 nil)))
       (setf (slot-value socket 'stream) stream))
     (sb-ext:cancel-finalization socket)
     stream))
