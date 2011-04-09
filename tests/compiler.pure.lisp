@@ -3600,6 +3600,7 @@
   ;; Test that compile-times don't explode when quoted constants
   ;; get big.
   (labels ((time-n (n)
+             (gc :full t) ; Let's not confuse the issue with GC            
              (let* ((tree (make-tree (expt 10 n) nil))
                     (t0 (get-internal-run-time))
                     (f (compile nil `(lambda (x) (eq x (quote ,tree)))))
@@ -3614,7 +3615,10 @@
            (max-small (reduce #'max times :end 3))
            (max-big (reduce #'max times :start 3)))
       ;; This way is hopefully fairly CPU-performance insensitive.
-      (assert (> (* (+ 2 max-small) 2) max-big)))))
+      (unless (> (+ (truncate internal-time-units-per-second 10)
+                    (* 2 max-small))
+                 max-big)
+        (error "Bad scaling or test? ~S" times)))))
 
 (with-test (:name :bug-309063)
   (let ((fun (compile nil `(lambda (x)
@@ -3787,3 +3791,71 @@
                                    (f (mod a e))))
                                s)))
                       (g a)))))
+
+(with-test (:name :funcall-lambda-inlined)
+  (assert (not
+           (ctu:find-code-constants
+            (compile nil
+                     `(lambda (x y)
+                        (+ x (funcall (lambda (z) z) y))))
+            :type 'function))))
+
+(with-test (:name :bug-720382)
+  (let ((w 0))
+    (let ((f
+           (handler-bind (((and warning (not style-warning))
+                           (lambda (c) (incf w))))
+             (compile nil `(lambda (b) ((lambda () b) 1))))))
+      (assert (= w 1))
+      (assert (eq :error
+                  (handler-case (funcall f 0)
+                    (error () :error)))))))
+
+(with-test (:name :multiple-args-to-function)
+  (let ((form `(flet ((foo (&optional (x 13)) x))
+                 (funcall (function foo 42))))
+        (*evaluator-mode* :interpret))
+    (assert (eq :error
+                (handler-case (eval form)
+                  (error () :error))))
+    (multiple-value-bind (fun warn fail)
+        (compile nil `(lambda () ,form))
+      (assert (and warn fail))
+          (assert (eq :error
+                      (handler-case (funcall fun)
+                        (error () :error)))))))
+
+;;; This doesn't test LVAR-FUN-IS directly, but captures it
+;;; pretty accurately anyways.
+(with-test (:name :lvar-fun-is)
+  (dolist (fun (list
+                (lambda (x) (member x x :test #'eq))
+                (lambda (x) (member x x :test 'eq))
+                (lambda (x) (member x x :test #.#'eq))))
+    (assert (equal (list #'sb-kernel:%member-eq)
+                   (ctu:find-named-callees fun))))
+  (dolist (fun (list
+                (lambda (x)
+                  (declare (notinline eq))
+                  (member x x :test #'eq))
+                (lambda (x)
+                  (declare (notinline eq))
+                  (member x x :test 'eq))
+                (lambda (x)
+                  (declare (notinline eq))
+                  (member x x :test #.#'eq))))
+    (assert (member #'sb-kernel:%member-test
+                    (ctu:find-named-callees fun)))))
+
+(with-test (:name :delete-to-delq-opt)
+  (dolist (fun (list (lambda (x y)
+                       (declare (list y))
+                       (delete x y :test #'eq))
+                     (lambda (x y)
+                       (declare (fixnum x) (list y))
+                       (delete x y))
+                     (lambda (x y)
+                       (declare (symbol x) (list y))
+                       (delete x y :test #'eql))))
+    (assert (equal (list #'sb-int:delq)
+                   (ctu:find-named-callees fun)))))
