@@ -916,11 +916,17 @@ corresponds to NAME, or NIL if there is none."
              (%extract-stat-results (addr buf))
              name (addr buf))))
 (defun unix-fstat (fd)
+  #!-fds-are-windows-handles
   (declare (type unix-fd fd))
-  (with-alien ((buf (struct wrapped_stat)))
-    (syscall ("fstat_wrapper" int (* (struct wrapped_stat)))
-             (%extract-stat-results (addr buf))
-             fd (addr buf))))
+  (#!-fds-are-windows-handles
+   funcall
+   #!+fds-are-windows-handles
+   sb!win32::call-with-crt-fd
+   (lambda (fd)
+     (with-alien ((buf (struct wrapped_stat)))
+       (syscall ("fstat_wrapper" int (* (struct wrapped_stat)))
+                (%extract-stat-results (addr buf))
+                fd (addr buf)))) fd))
 
 ;;;; time.h
 
