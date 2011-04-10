@@ -1291,6 +1291,54 @@ static void restore_lisp_tls()
 
 #endif  /* LISP_FEATURE_SB_THREAD */
 
+
+#ifdef LISP_FEATURE_X86_64
+/* Windows has 32-bit 'longs', so printf...%lX (and other %l patterns) doesn't
+ * work well with address-sized values, like it's done all over the place in
+ * SBCL. And msvcrt uses I64, not LL, for printing long longs.
+ *
+ * I've already had enough search/replace with longs/words/intptr_t for today,
+ * so I prefer to solve this problem with a format string translator. */
+
+/* There is (will be) defines for printf and friends. */
+
+static int translating_vfprintf(FILE*stream, const char *fmt, va_list args)
+{
+    char translated[1024];
+    int i=0, delta = 0;
+
+    while (fmt[i-delta] && i<sizeof(translated)-1) {
+        if((fmt[i-delta]=='%')&&
+           (fmt[i-delta+1]=='l')) {
+            translated[i++]='%';
+            translated[i++]='I';
+            translated[i++]='6';
+            translated[i++]='4';
+            delta += 2;
+        } else {
+            translated[i]=fmt[i-delta];
+            ++i;
+        }
+    }
+    translated[i++]=0;
+    return vfprintf(stream,translated,args);
+}
+
+int printf(const char*fmt,...)
+{
+    va_list args;
+    va_start(args,fmt);
+    return translating_vfprintf(stdout,fmt,args);
+}
+int fprintf(FILE*stream,const char*fmt,...)
+{
+    va_list args;
+    va_start(args,fmt);
+    return translating_vfprintf(stream,fmt,args);
+}
+
+#endif
+
 #ifdef COMPOSITE_MAPPING
 
 /* Our own `pagemaps' to track pages causing exceptions in mmapped
