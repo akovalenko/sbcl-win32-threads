@@ -115,16 +115,16 @@ write_bytes(FILE *file, char *addr, size_t bytes, os_vm_offset_t file_offset)
 #if defined(LISP_FEATURE_SB_THREAD) && defined(LISP_FEATURE_SB_LUTEX)
 /* saving lutexes in the core */
 static void **lutex_addresses;
-static long n_lutexes = 0;
-static long max_lutexes = 0;
+static intptr_t n_lutexes = 0;
+static intptr_t max_lutexes = 0;
 
-static long
+static intptr_t
 default_scan_action(lispobj *obj)
 {
     return (sizetab[widetag_of(*obj)])(obj);
 }
 
-static long
+static intptr_t
 lutex_scan_action(lispobj *obj)
 {
     /* note the address of the lutex */
@@ -139,14 +139,14 @@ lutex_scan_action(lispobj *obj)
     return (*sizetab[widetag_of(*obj)])(obj);
 }
 
-typedef long (*scan_table[256])(lispobj *obj);
+typedef intptr_t (*scan_table[256])(lispobj *obj);
 
 static void
-scan_objects(lispobj *start, long n_words, scan_table table)
+scan_objects(lispobj *start, intptr_t n_words, scan_table table)
 {
     lispobj *end = start + n_words;
     lispobj *object_ptr;
-    long n_words_scanned;
+    intptr_t n_words_scanned;
     for (object_ptr = start;
          object_ptr < end;
          object_ptr += n_words_scanned) {
@@ -157,7 +157,7 @@ scan_objects(lispobj *start, long n_words, scan_table table)
 }
 
 static void
-scan_for_lutexes(lispobj *addr, long n_words)
+scan_for_lutexes(lispobj *addr, intptr_t n_words)
 {
     static int initialized = 0;
     static scan_table lutex_scan_table;
@@ -314,12 +314,12 @@ save_to_filehandle(FILE *file, char *filename, lispobj init_function,
 
 #ifdef LISP_FEATURE_GENCGC
     {
-        os_vm_size_t size = (last_free_page*sizeof(long)+os_vm_page_size-1)
+        os_vm_size_t size = (last_free_page*sizeof(intptr_t)+os_vm_page_size-1)
             &~(os_vm_page_size-1);
         uword_t *data = calloc(size, 1);
         if (data) {
             uword_t word;
-            long offset;
+            intptr_t offset;
             int i;
             for (i = 0; i < last_free_page; i++) {
                 /* Thanks to alignment requirements, the two low bits
@@ -341,7 +341,7 @@ save_to_filehandle(FILE *file, char *filename, lispobj init_function,
 
 #if defined(LISP_FEATURE_SB_THREAD) && defined(LISP_FEATURE_SB_LUTEX)
     if(n_lutexes > 0) {
-        long offset;
+        intptr_t offset;
         printf("writing %ld lutexes to the core...\n", n_lutexes);
         write_lispobj(LUTEX_TABLE_CORE_ENTRY_TYPE_CODE, file);
         /* word count of the entry */

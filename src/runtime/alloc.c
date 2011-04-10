@@ -158,7 +158,7 @@ alloc_cons(lispobj car, lispobj cdr)
 }
 
 lispobj
-alloc_number(long n)
+alloc_number(intptr_t n)
 {
     struct bignum *ptr;
 

@@ -29,7 +29,7 @@ struct var {
     lispobj obj;
     lispobj (*update_fn)(struct var *var);
     char *name;
-    long clock;
+    intptr_t clock;
     boolean map_back, permanent;
 
     struct var *nnext; /* Next in name list */
@@ -38,7 +38,7 @@ struct var {
 
 static int hash_name(char *name)
 {
-    unsigned long value = 0;
+    uword_t value = 0;
 
     while (*name != '\0') {
         value = (value << 1) ^ *(unsigned char *)(name++);
@@ -50,7 +50,7 @@ static int hash_name(char *name)
 
 static int hash_obj(lispobj obj)
 {
-    return (unsigned long)obj % OBJ_BUCKETS;
+    return (uword_t)obj % OBJ_BUCKETS;
 }
 
 void flush_vars()
@@ -176,12 +176,12 @@ lispobj var_value(struct var *var)
     return var->obj;
 }
 
-long var_clock(struct var *var)
+intptr_t var_clock(struct var *var)
 {
     return var->clock;
 }
 
-void var_setclock(struct var *var, long val)
+void var_setclock(struct var *var, intptr_t val)
 {
     var->clock = val;
 }

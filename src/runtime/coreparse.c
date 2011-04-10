@@ -302,7 +302,7 @@ load_core_file(char *file, os_vm_offset_t file_offset)
         len = *ptr++;
         remaining_len = len - 2; /* (-2 to cancel the two ++ operations) */
         FSHOW((stderr, "/val=0x%ld, remaining_len=0x%ld\n",
-               (long)val, (long)remaining_len));
+               (intptr_t)val, (intptr_t)remaining_len));
 
         switch (val) {
 

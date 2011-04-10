@@ -26,7 +26,7 @@
 
 
 static void
-ensure_space(lispobj *start, unsigned long size)
+ensure_space(lispobj *start, uword_t size)
 {
     if (os_validate((os_vm_address_t)start,(os_vm_size_t)size)==NULL) {
         fprintf(stderr,

@@ -634,9 +634,9 @@ build_fake_control_stack_frames(struct thread *th,os_context_t *context)
     /* Build a fake stack frame or frames */
 
     access_control_frame_pointer(th) =
-        (lispobj *)(unsigned long)
+        (lispobj *)(uword_t)
             (*os_context_register_addr(context, reg_CSP));
-    if ((lispobj *)(unsigned long)
+    if ((lispobj *)(uword_t)
             (*os_context_register_addr(context, reg_CFP))
         == access_control_frame_pointer(th)) {
         /* There is a small window during call where the callee's
@@ -694,19 +694,19 @@ fake_foreign_function_call(os_context_t *context)
     thread->pseudo_atomic_bits =
 #else
     dynamic_space_free_pointer =
-        (lispobj *)(unsigned long)
+        (lispobj *)(uword_t)
 #endif
             (*os_context_register_addr(context, reg_ALLOC));
 /*     fprintf(stderr,"dynamic_space_free_pointer: %p\n", */
 /*             dynamic_space_free_pointer); */
 #if defined(LISP_FEATURE_ALPHA) || defined(LISP_FEATURE_MIPS)
-    if ((long)dynamic_space_free_pointer & 1) {
+    if ((intptr_t)dynamic_space_free_pointer & 1) {
         lose("dead in fake_foreign_function_call, context = %x\n", context);
     }
 #endif
 /* why doesnt PPC and SPARC do something like this: */
 #if defined(LISP_FEATURE_HPPA)
-    if ((long)dynamic_space_free_pointer & 4) {
+    if ((intptr_t)dynamic_space_free_pointer & 4) {
         lose("dead in fake_foreign_function_call, context = %x, d_s_f_p = %x\n", context, dynamic_space_free_pointer);
     }
 #endif
@@ -758,13 +758,13 @@ undo_fake_foreign_function_call(os_context_t *context)
 #if defined(reg_ALLOC) && !defined(LISP_FEATURE_SB_THREAD)
     /* Put the dynamic space free pointer back into the context. */
     *os_context_register_addr(context, reg_ALLOC) =
-        (unsigned long) dynamic_space_free_pointer
+        (uword_t) dynamic_space_free_pointer
         | (*os_context_register_addr(context, reg_ALLOC)
            & LOWTAG_MASK);
     /*
-      ((unsigned long)(*os_context_register_addr(context, reg_ALLOC))
+      ((uword_t)(*os_context_register_addr(context, reg_ALLOC))
       & ~LOWTAG_MASK)
-      | ((unsigned long) dynamic_space_free_pointer & LOWTAG_MASK);
+      | ((uword_t) dynamic_space_free_pointer & LOWTAG_MASK);
     */
 #endif
 #if defined(reg_ALLOC) && defined(LISP_FEATURE_SB_THREAD)
@@ -772,7 +772,7 @@ undo_fake_foreign_function_call(os_context_t *context)
      * into the context (p-a-bits for p-a, and dynamic space free
      * pointer for ROOM). */
     *os_context_register_addr(context, reg_ALLOC) =
-        (unsigned long) dynamic_space_free_pointer
+        (uword_t) dynamic_space_free_pointer
         | (thread->pseudo_atomic_bits & LOWTAG_MASK);
     /* And clear them so we don't get bit later by call-in/call-out
      * not updating them. */
@@ -1043,14 +1043,14 @@ interrupt_handle_now(int signal, siginfo_t *info, os_context_t *context)
 
     } else if (lowtag_of(handler.lisp) == FUN_POINTER_LOWTAG) {
         /* Once we've decided what to do about contexts in a
-         * return-elsewhere world (the original context will no longer
+         * return-elsewhere world (the original context will no intptr_ter
          * be available; should we copy it or was nobody using it anyway?)
          * then we should convert this to return-elsewhere */
 
         /* CMUCL comment said "Allocate the SAPs while the interrupts
          * are still disabled.".  I (dan, 2003.08.21) assume this is
          * because we're not in pseudoatomic and allocation shouldn't
-         * be interrupted.  In which case it's no longer an issue as
+         * be interrupted.  In which case it's no intptr_ter an issue as
          * all our allocation from C now goes through a PA wrapper,
          * but still, doesn't hurt.
          *
@@ -1365,7 +1365,7 @@ arrange_return_to_lisp_function(os_context_t *context, lispobj function)
      * much of a problem. In other words, running out of the control
      * stack between a syscall and (GET-ERRNO) may clobber errno if
      * something fails during signalling or in the handler. But I
-     * can't see what can go wrong as long as there is no CONTINUE
+     * can't see what can go wrong as intptr_t as there is no CONTINUE
      * like restart on them. */
 #ifdef LISP_FEATURE_X86
     /* Suppose the existence of some function that saved all
@@ -1510,12 +1510,12 @@ arrange_return_to_lisp_function(os_context_t *context, lispobj function)
 #else
     /* this much of the calling convention is common to all
        non-x86 ports */
-    *os_context_pc_addr(context) = (os_context_register_t)(unsigned long)code;
+    *os_context_pc_addr(context) = (os_context_register_t)(uword_t)code;
     *os_context_register_addr(context,reg_NARGS) = 0;
     *os_context_register_addr(context,reg_LIP) =
-        (os_context_register_t)(unsigned long)code;
+        (os_context_register_t)(uword_t)code;
     *os_context_register_addr(context,reg_CFP) =
-        (os_context_register_t)(unsigned long)access_control_frame_pointer(th);
+        (os_context_register_t)(uword_t)access_control_frame_pointer(th);
 #endif
 #ifdef ARCH_HAS_NPC_REGISTER
     *os_context_npc_addr(context) =
@@ -1526,7 +1526,7 @@ arrange_return_to_lisp_function(os_context_t *context, lispobj function)
         (os_context_register_t)(fun + FUN_POINTER_LOWTAG);
 #endif
     FSHOW((stderr, "/arranged return to Lisp function (0x%lx)\n",
-           (long)function));
+           (intptr_t)function));
 }
 
 /* KLUDGE: Theoretically the approach we use for undefined alien
@@ -1805,7 +1805,7 @@ undoably_install_low_level_interrupt_handler (int signal,
 #endif
 
 /* This is called from Lisp. */
-unsigned long
+uword_t
 install_handler(int signal, void handler(int, siginfo_t*, os_context_t*))
 {
 #ifndef LISP_FEATURE_WIN32
@@ -1844,7 +1844,7 @@ install_handler(int signal, void handler(int, siginfo_t*, os_context_t*))
 
     FSHOW((stderr, "/leaving POSIX install_handler(%d, ..)\n", signal));
 
-    return (unsigned long)oldhandler.lisp;
+    return (uword_t)oldhandler.lisp;
 #else
     /* Probably-wrong Win32 hack */
     return 0;

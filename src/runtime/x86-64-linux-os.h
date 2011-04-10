@@ -2,7 +2,7 @@
 #define _X86_64_LINUX_OS_H
 
 typedef struct ucontext os_context_t;
-typedef long os_context_register_t;
+typedef uword_t os_context_register_t;
 
 static inline os_context_t *arch_os_get_context(void **void_context)
 {

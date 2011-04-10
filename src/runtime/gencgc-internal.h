@@ -85,7 +85,7 @@ struct page {
         /* True if the page is known to contain only zeroes. */
         need_to_zero :1;
 
-    /* the generation that this page belongs to. This should be valid
+    /* the generation that this page beintptr_ts to. This should be valid
      * for all pages that may have objects allocated, even current
      * allocation region pages - this allows the space of an object to
      * be easily determined. */
@@ -102,10 +102,10 @@ extern struct page *page_table;
 
 /* forward declarations */
 
-void sniff_code_object(struct code *code, unsigned long displacement);
+void sniff_code_object(struct code *code, uword_t displacement);
 void gencgc_apply_code_fixups(struct code *old_code, struct code *new_code);
 
-long update_dynamic_space_free_pointer(void);
+intptr_t update_dynamic_space_free_pointer(void);
 void gc_alloc_update_page_tables(int page_type_flag, struct alloc_region *alloc_region);
 void gc_alloc_update_all_page_tables(void);
 void gc_set_region_empty(struct alloc_region *region);
