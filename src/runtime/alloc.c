@@ -60,6 +60,11 @@ pa_alloc(int bytes, int page_type_flag)
 #endif
     clear_pseudo_atomic_atomic(th);
 
+#ifdef LISP_FEATURE_SB_GC_SAFEPOINT
+    COMPILER_BARRIER;
+    *(volatile char *)GC_SAFEPOINT_PAGE_ADDR;
+    COMPILER_BARRIER;
+#else
     if (get_pseudo_atomic_interrupted(th)) {
         /* WARNING KLUDGE FIXME: pa_alloc() is not pseudo-atomic on
          * anything but x86[-64]. maybe_defer_handler doesn't defer
@@ -82,6 +87,7 @@ pa_alloc(int bytes, int page_type_flag)
         result = (lispobj *) *access_control_stack_pointer(th);
 #endif
     }
+#endif
     return result;
 }
 #else
@@ -152,7 +158,7 @@ alloc_cons(lispobj car, lispobj cdr)
 }
 
 lispobj
-alloc_number(long n)
+alloc_number(intptr_t n)
 {
     struct bignum *ptr;
 

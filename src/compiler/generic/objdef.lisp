@@ -50,7 +50,7 @@
 (define-primitive-object (bignum :lowtag other-pointer-lowtag
                                  :widetag bignum-widetag
                                  :alloc-trans sb!bignum::%allocate-bignum)
-  (digits :rest-p t :c-type #!-alpha "long" #!+alpha "u32"))
+  (digits :rest-p t :c-type #!-alpha "sword_t" #!+alpha "u32"))
 
 (define-primitive-object (ratio :type ratio
                                 :lowtag other-pointer-lowtag
@@ -142,7 +142,7 @@
   ;; VECTOR -- see SHRINK-VECTOR.
   (length :ref-trans sb!c::vector-length
           :type index)
-  (data :rest-p t :c-type #!-alpha "unsigned long" #!+alpha "u32"))
+  (data :rest-p t :c-type #!-alpha "uword_t" #!+alpha "u32"))
 
 (define-primitive-object (code :type code-component
                                :lowtag other-pointer-lowtag
@@ -296,8 +296,8 @@
   (current-cont :c-type #!-alpha "lispobj *" #!+alpha "u32")
   #!-(or x86 x86-64) current-code
   entry-pc
-  #!+win32 next-seh-frame
-  #!+win32 seh-frame-handler
+  #!+(and win32 x86) next-seh-frame
+  #!+(and win32 x86) seh-frame-handler
   tag
   (previous-catch :c-type #!-alpha "struct catch_block *" #!+alpha "u32"))
 
@@ -404,6 +404,7 @@
   (alien-stack-start :c-type "lispobj *" :length #!+alpha 2 #!-alpha 1)
   (alien-stack-pointer :c-type "lispobj *" :length #!+alpha 2 #!-alpha 1)
   #!+gencgc (alloc-region :c-type "struct alloc_region" :length 5)
+  #!+win32 (private-events :c-type "struct private_events" :length 2)
   (this :c-type "struct thread *" :length #!+alpha 2 #!-alpha 1)
   (prev :c-type "struct thread *" :length #!+alpha 2 #!-alpha 1)
   (next :c-type "struct thread *" :length #!+alpha 2 #!-alpha 1)
@@ -434,4 +435,18 @@
   ;; be handled by DEFINE-PRIMITIVE-OBJECT.
   #!+alpha
   (padding)
+  #!+sb-auto-fpu-switch
+  (in-lisp-fpu-mode :c-type "unsigned int" :length 1)
+  #!+sb-auto-fpu-switch
+  (saved-c-fpu-mode :c-type "unsigned int" :length 1)
+  #!+sb-auto-fpu-switch
+  (saved-lisp-fpu-mode :c-type "unsigned int" :length 1)
+  #!+sb-gc-safepoint
+  (csp-around-foreign-call :c-type "lispobj *" :length 1)
+  #!+sb-gc-safepoint
+  (pc-around-foreign-call :c-type "lispobj *" :length 1)
+  #!+sb-gc-safepoint
+  (gc-safepoint-context :c-type "os_context_t *" :length 1)
+  #!+win32
+  (synchronous-io-handle-and-flag :c-type "HANDLE" :length 1)
   (interrupt-contexts :c-type "os_context_t *" :rest-p t))

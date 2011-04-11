@@ -17,6 +17,7 @@
 #define _GC_H_
 
 #include "sbcl.h"
+#include <stdint.h>
 
 #ifdef LISP_FEATURE_GENCGC
 #define PAGE_BYTES GENCGC_PAGE_BYTES
@@ -24,7 +25,7 @@
 #define PAGE_BYTES BACKEND_PAGE_BYTES
 #endif
 
-typedef signed long page_index_t;
+typedef intptr_t page_index_t;
 typedef signed char generation_index_t;
 
 extern void gc_init(void);
@@ -42,6 +43,6 @@ extern void clear_auto_gc_trigger(void);
 
 extern boolean maybe_gc(os_context_t *context);
 
-extern unsigned long bytes_consed_between_gcs;
+extern uword_t bytes_consed_between_gcs;
 
 #endif /* _GC_H_ */

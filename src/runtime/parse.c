@@ -14,9 +14,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
-#include <signal.h>
 
 #include "sbcl.h"
+#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
+#include "pthreads_win32.h"
+#else
+#include <signal.h>
+#endif
 #include "runtime.h"
 
 #if defined(LISP_FEATURE_SB_LDB)
@@ -45,10 +49,10 @@ static void skip_ws(char **ptr)
         (*ptr)++;
 }
 
-static boolean string_to_long(char *token, long *value)
+static boolean string_to_long(char *token, uword_t *value)
 {
     int base, digit;
-    long num;
+    uword_t num;
     char *ptr;
 
     if (token == 0)
@@ -192,11 +196,11 @@ char *token;
 }
 #endif
 
-long parse_number(ptr)
+uword_t parse_number(ptr)
 char **ptr;
 {
     char *token = parse_token(ptr);
-    long result;
+    uword_t result;
 
     if (token == NULL) {
         printf("expected a number\n");
@@ -229,7 +233,7 @@ char **ptr;
         result &= ~7;
     }
     else {
-        long value;
+        uword_t value;
         if (!string_to_long(token, &value)) {
             printf("invalid number: ``%s''\n", token);
             throw_to_monitor();
@@ -312,9 +316,9 @@ char **ptr;
 {
     struct thread *thread=arch_os_get_current_thread();
     char *token = parse_token(ptr);
-    long pointer;
+    uword_t pointer;
     lispobj result;
-    long value;
+    uword_t value;
 
     if (token == NULL) {
         printf("expected an object\n");

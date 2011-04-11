@@ -211,10 +211,18 @@ waiting."
              (loop for to-msec = (if (and to-sec to-usec)
                                      (+ (* 1000 to-sec) (truncate to-usec 1000))
                                      -1)
-                   when (sb!unix:unix-simple-poll fd direction to-msec)
+                   when #!-win32
+                         (sb!unix:unix-simple-poll fd direction to-msec)
+                   #!+win32 (or (eq direction :output)
+                                (sb!win32:handle-listen
+                                 (sb!win32:get-osfhandle fd)))
                    do (return-from wait-until-fd-usable t)
                    else
-                   do (when to-sec (maybe-update-timeout))))))))
+                     do (when to-sec (maybe-update-timeout))
+                   #!+(and win32 sb-thread)
+                      (sb!thread:thread-yield)
+                   #!+(and win32 (not sb-thread))
+                      (sb-win32:microsleep 1)))))))
 
 ;;; Wait for up to timeout seconds for an event to happen. Make sure all
 ;;; pending events are processed before returning.

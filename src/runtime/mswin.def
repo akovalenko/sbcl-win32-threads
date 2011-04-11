@@ -1,0 +1,5 @@
+EXPORTS
+	opendir
+	readdir
+	closedir
+	

@@ -12,8 +12,12 @@
 #if !defined(_INCLUDE_INTERRUPT_H_)
 #define _INCLUDE_INTERRUPT_H_
 
+#include "sbcl.h"
+#include "runtime.h"
 #include <signal.h>
+#include <sys/types.h>
 #include <string.h>
+#include "os.h"
 
 /*
  * This is a workaround for some slightly silly Linux/GNU Libc
@@ -24,7 +28,12 @@
  * stack by the kernel, so copying a libc-sized sigset_t into it will
  * overflow and cause other data on the stack to be corrupted */
 /* FIXME: do not rely on NSIG being a multiple of 8 */
+
+#ifdef LISP_FEATURE_WIN32
+#define REAL_SIGSET_SIZE_BYTES (4)
+#else
 #define REAL_SIGSET_SIZE_BYTES ((NSIG/8))
+#endif
 
 static inline void
 sigcopyset(sigset_t *new, sigset_t *old)
@@ -147,7 +156,7 @@ typedef void (*interrupt_handler_t)(int, siginfo_t *, os_context_t *);
 extern void undoably_install_low_level_interrupt_handler (
                         int signal,
                         interrupt_handler_t handler);
-extern unsigned long install_handler(int signal,
+extern uword_t install_handler(int signal,
                                      interrupt_handler_t handler);
 
 extern union interrupt_handler interrupt_handlers[NSIG];

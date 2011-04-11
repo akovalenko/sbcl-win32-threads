@@ -32,6 +32,9 @@
 #include "vars.h"
 #include "os.h"
 #include "gencgc-alloc-region.h" /* genesis/thread.h needs this */
+#if defined(LISP_FEATURE_WIN32)
+#include "win32-thread-private-events.h" /* genesis/thread.h needs this */
+#endif
 #include "genesis/static-symbols.h"
 #include "genesis/primitive-objects.h"
 #include "genesis/static-symbols.h"

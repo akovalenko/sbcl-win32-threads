@@ -17,77 +17,10 @@ set -e
 # provided with absolutely no warranty. See the COPYING and CREDITS
 # files for more information.
 
-case `uname` in
-    Linux)
-        sbcl_os="linux"
-        ;;
-    OSF1)
-        # it's changed name twice since it was called OSF/1: clearly
-        # the marketers forgot to tell the engineers about Digital Unix
-        # _or_ OSF/1 ...
-        sbcl_os="osf1"
-        ;;
-    *BSD)
-        case `uname` in
-            FreeBSD)
-                sbcl_os="freebsd"
-                ;;
-            OpenBSD)
-                sbcl_os="openbsd"
-                ;;
-            NetBSD)
-                sbcl_os="netbsd"
-                ;;
-            *)
-                echo unsupported BSD variant: `uname`
-                exit 1
-                ;;
-        esac
-        ;;
-    Darwin)
-        sbcl_os="darwin"
-        ;;
-    SunOS)
-        sbcl_os="sunos"
-        ;;
-    CYGWIN* | WindowsNT | MINGW*)
-        sbcl_os="win32"
-        ;;
-    HP-UX)
-        sbcl_os="hpux"
-        ;;
-    *)
-        echo unsupported OS type: `uname`
-        exit 1
-        ;;
-esac
+echo //determining build host and target properties
+. ./guess-environment.sh
 
-link_or_copy() {
-   if [ "$sbcl_os" = "win32" ] ; then
-       cp -r "$1" "$2"
-   else
-       ln -s "$1" "$2"
-   fi
-}
-
-remove_dir_safely() {
-   if [ "$sbcl_os" = "win32" ] ; then
-        if [ -d "$1" ] ; then
-            rm -rf "$1"
-        elif [ -e "$1" ] ; then
-            echo "I'm afraid to remove non-directory $1."
-            exit 1
-        fi
-    else
-        if [ -h "$1" ] ; then
-            rm "$1"
-        elif [ -w "$1" ] ; then
-            echo "I'm afraid to replace non-symlink $1 with a symlink."
-            exit 1
-        fi
-    fi
-}
-
+echo //building for $sbcl_os and $sbcl_arch
 echo //entering make-config.sh
 
 echo //ensuring the existence of output/ directory
@@ -100,54 +33,12 @@ echo ';;;; Please do not edit it by hand.' >> $ltf
 echo ';;;; See make-config.sh.' >> $ltf
 printf '(' >> $ltf
 
-echo //guessing default target CPU architecture from host architecture
-case `uname -m` in
-    *86) guessed_sbcl_arch=x86 ;;
-    i86pc) guessed_sbcl_arch=x86 ;;
-    *x86_64) guessed_sbcl_arch=x86-64 ;;
-    amd64) guessed_sbcl_arch=x86-64 ;;
-    [Aa]lpha) guessed_sbcl_arch=alpha ;;
-    sparc*) guessed_sbcl_arch=sparc ;;
-    sun*) guessed_sbcl_arch=sparc ;;
-    *ppc) guessed_sbcl_arch=ppc ;;
-    ppc64) guessed_sbcl_arch=ppc ;;
-    Power*Macintosh) guessed_sbcl_arch=ppc ;;
-    parisc) guessed_sbcl_arch=hppa ;;
-    9000/800) guessed_sbcl_arch=hppa ;;
-    mips*) guessed_sbcl_arch=mips ;;
-    *)
-        # If we're not building on a supported target architecture, we
-        # we have no guess, but it's not an error yet, since maybe
-        # target architecture will be specified explicitly below.
-        guessed_sbcl_arch=''
-        ;;
-esac
-
-# Under Solaris, uname -m returns "i86pc" even if CPU is amd64.
-if [ "$sbcl_os" = "sunos" ] && [ `isainfo -k` = "amd64" ]; then
-    guessed_sbcl_arch=x86-64
-fi
-
-# Under Darwin, uname -m returns "i386" even if CPU is x86_64.
-if [ "$sbcl_os" = "darwin" ] && [ "`/usr/sbin/sysctl -n hw.optional.x86_64`" = "1" ]; then
-    guessed_sbcl_arch=x86-64
-fi
-
-echo //setting up CPU-architecture-dependent information
-sbcl_arch=${SBCL_ARCH:-$guessed_sbcl_arch}
-echo sbcl_arch=\"$sbcl_arch\"
-if [ "$sbcl_arch" = "" ] ; then
-    echo "can't guess target SBCL architecture, need SBCL_ARCH environment var"
-    exit 1
-fi
+echo //saving target CPU architecture
 printf ":%s" "$sbcl_arch" >> $ltf
 
-echo //setting up OS-dependent information
+echo //saving OS-dependent information
 
-# Under Darwin x86-64, guess whether Darwin 9+ or below.
 if [ "$sbcl_os" = "darwin" ] && [ "$sbcl_arch" = "x86-64" ]; then
-    darwin_version=`uname -r`
-    darwin_version_major=${DARWIN_VERSION_MAJOR:-${darwin_version%%.*}}
     if (( 8 < $darwin_version_major )); then
 	printf ' :inode64 :darwin9-or-better' >> $ltf
     fi
@@ -264,6 +155,20 @@ case "$sbcl_os" in
         ;;
     win32)
         printf ' :win32' >> $ltf
+	# Native :-]
+        # printf ' :sb-pthread-futex' >> $ltf
+	printf ' :sb-thread' >> $ltf
+	printf ' :sb-foreign-thread' >> $ltf
+        # of course it doesn't provide dlopen, but there is
+        # roughly-equivalent magic nevertheless.
+        printf ' :os-provides-dlopen' >> $ltf
+        # if [ $sbcl_arch = "x86" ]; then
+	#    printf ' :sb-auto-fpu-switch' >> $ltf
+	# fi
+	printf ' :sb-gc-safepoint' >> $ltf
+	# let's try
+	printf ' :fds-are-windows-handles' >> $ltf
+	printf ' :sb-dynamic-core' >> $ltf
         link_or_copy Config.$sbcl_arch-win32 Config
         link_or_copy $sbcl_arch-win32-os.h target-arch-os.h
         link_or_copy win32-os.h target-os.h
@@ -274,7 +179,6 @@ case "$sbcl_os" in
         ;;
 esac
 cd "$original_dir"
-
 # FIXME: Things like :c-stack-grows-..., etc, should be
 # *derived-target-features* or equivalent, so that there was a nicer
 # way to specify them then sprinkling them in this file. They should
@@ -303,16 +207,12 @@ if [ "$sbcl_arch" = "x86" ]; then
     printf ' :stack-allocatable-closures :stack-allocatable-vectors' >> $ltf
     printf ' :stack-allocatable-lists :stack-allocatable-fixed-objects' >> $ltf
     printf ' :alien-callbacks :cycle-counter :inline-constants ' >> $ltf
+    printf ' :alien-callback-conventions :alien-callback-stdcall :alien-callback-cdecl ' >> $ltf
     printf ' :memory-barrier-vops' >> $ltf
     case "$sbcl_os" in
     linux | freebsd | netbsd | openbsd | sunos | darwin | win32)
         printf ' :linkage-table' >> $ltf
     esac
-    if [ "$sbcl_os" = "win32" ]; then
-        # of course it doesn't provide dlopen, but there is
-        # roughly-equivalent magic nevertheless.
-        printf ' :os-provides-dlopen' >> $ltf
-    fi
     if [ "$sbcl_os" = "openbsd" ]; then
         rm -f src/runtime/openbsd-sigcontext.h
         sh tools-for-build/openbsd-sigcontext.sh > src/runtime/openbsd-sigcontext.h

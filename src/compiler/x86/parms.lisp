@@ -186,6 +186,8 @@
 
 #!+win32
 (progn
+  #!+sb-thread
+  (def!constant gc-safepoint-page-addr #x21000000)
 
   (def!constant read-only-space-start #x22000000)
   (def!constant read-only-space-end   #x220ff000)
@@ -385,3 +387,5 @@
 ;;; FIXME: Is this used? Delete it or document it.
 ;;; cf the sparc PARMS.LISP
 (defparameter *assembly-unit-length* 8)
+
+(defconstant +win32-tib-arbitrary-field-offset+ #.(+ #xE10 (* 4 63)))

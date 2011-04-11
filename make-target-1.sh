@@ -27,16 +27,16 @@ export LANG LC_ALL
 # order to produce the symbol table file that second genesis needs. It
 # could come either before or after running the cross compiler; that
 # doesn't matter.)
-echo //building runtime system and symbol table file
+echo //building runtime objects and static symbol table
 
 # The clean is needed for Darwin's readonlyspace hack.
 $GNUMAKE -C src/runtime clean
-# $GNUMAKE -C src/runtime depend
-$GNUMAKE -C src/runtime all
+
+$GNUMAKE -C src/runtime own-runtime-symbol-table
 
 # Use a little C program to grab stuff from the C header files and
 # smash it into Lisp source code.
 $GNUMAKE -C tools-for-build -I../src/runtime grovel-headers
-tools-for-build/grovel-headers > output/stuff-groveled-from-headers.lisp
+$XRUN ./tools-for-build/grovel-headers > output/stuff-groveled-from-headers.lisp
 
 $GNUMAKE -C src/runtime after-grovel-headers

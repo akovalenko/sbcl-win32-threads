@@ -40,7 +40,7 @@
 
 ;;; Terminating a thread that's waiting for the terminal.
 
-#+sb-thread
+#+(and sb-thread (not win32))
 (let ((thread (make-thread (lambda ()
                              (sb-thread::get-foreground)))))
   (sleep 1)
@@ -92,9 +92,11 @@
 
 #+sb-thread
 (with-test (:name parallel-find-class)
+  (setf (sb-alien:extern-alien "internal_errors_enabled" sb-alien:int) 1 )
   (let* ((oops nil)
-         (threads (loop repeat 10
+         (threads (loop repeat 30
                         collect (make-thread (lambda ()
+
                                                (handler-case
                                                    (loop repeat 10000
                                                          do (find-class (gensym) nil))
@@ -103,6 +105,7 @@
     (mapcar #'sb-thread:join-thread threads)
     (assert (not oops))))
 
+;; win32 doesn't have signal timers
 #+sb-thread
 (with-test (:name :semaphore-multiple-waiters)
   (let ((semaphore (make-semaphore :name "test sem")))
@@ -198,6 +201,7 @@
 ;;; are also some indications that pthread_mutex_lock is not re-entrant.
 #+(and sb-thread (not darwin))
 (with-test (:name symbol-value-in-thread.3)
+  (setf (sb-alien:extern-alien "internal_errors_enabled" sb-alien:int) 1 )
   (let* ((parent *current-thread*)
          (semaphore (make-semaphore))
          (running t)
@@ -211,7 +215,7 @@
                                         (loop repeat (random 128)
                                               do (setf ** *)))))))
     (write-string "; ")
-    (dotimes (i 15000)
+    (dotimes (i 4000)
       (when (zerop (mod i 200))
         (write-char #\.)
         (force-output))

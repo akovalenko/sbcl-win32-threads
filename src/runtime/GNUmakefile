@@ -55,10 +55,30 @@ OBJS = $(C_SRC:.c=.o) $(ASSEM_SRC:.S=.o) ${OS_OBJS}
 
 LIBS = ${OS_LIBS} -lm
 
-targets: $(TARGET) sbcl.nm
+targets: $(TARGET) final-runtime-symbol-table
 
-$(TARGET): $(OBJS)
+$(TARGET): $(OBJS) $(OS_LATE_OBJS)
 	$(CC) ${LINKFLAGS} -o $@ $^ $(LIBS)
+
+sbcl-own.nm: $(OBJS)
+	$(NM) $(OBJS) | $(GREP) -v " [FUw] \|^$$\|.o:$$" > ,$@
+	mv -f ,$@ $@
+
+# When LISP_FEATURE_SB_DYNAMIC_CORE is enabled, runtime uses dynamic
+# linking to resolve "static" foreign references in the core. Genesis
+# needs no symbol table in this case.
+
+ifndef LISP_FEATURE_SB_DYNAMIC_CORE
+
+own-runtime-symbol-table:	sbcl-own.nm
+final-runtime-symbol-table:	sbcl.nm
+
+else
+
+own-runtime-symbol-table:
+final-runtime-symbol-table:	
+
+endif
 
 sbcl.nm: $(TARGET)
 	$(NM) $(TARGET) | $(GREP) -v " [FUw] " > ,$@
@@ -87,5 +107,5 @@ clean:
 # By including those files, we cause GNU make to automatically re-make
 # all dependencies of the .c file if necessary.
 ifneq ($(MAKECMDGOALS),clean)
--include $(C_SRC:.c=.d) $(ASSEM_SRC:.S=.d)
+-include $(C_SRC:.c=.d) $(ASSEM_SRC:.S=.d) $(OS_LATE_OBJS:.o=.d)
 endif

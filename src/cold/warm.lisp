@@ -159,7 +159,12 @@
                 "SRC;CODE;PROFILE"
                 "SRC;CODE;NTRACE"
                 "SRC;CODE;STEP"
-                "SRC;CODE;RUN-PROGRAM"))
+                "SRC;CODE;WARM-LIB"
+                #+win32
+                "SRC;CODE;WARM-MSWIN"
+                "SRC;CODE;RUN-PROGRAM"
+                #+sb-foreign-thread
+                "SRC;CODE;FIBER"))
 
   (let ((fullname (concatenate 'string "SYS:" stem ".LISP")))
     (sb-int:/show "about to compile" fullname)

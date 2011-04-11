@@ -40,22 +40,10 @@
 #include "genesis/sap.h"
 #include "pthread-lutex.h"
 #endif
-
-
+#include "cpputil.h"
 unsigned char build_id[] =
 #include "../../output/build-id.tmp"
 ;
-
-int
-open_binary(char *filename, int mode)
-{
-#ifdef LISP_FEATURE_WIN32
-    mode |= O_BINARY;
-#endif
-
-    return open(filename, mode);
-}
-
 
 static struct runtime_options *
 read_runtime_options(int fd)
@@ -90,7 +78,7 @@ maybe_initialize_runtime_options(int fd)
 
     lseek(fd, -end_offset, SEEK_END);
 
-    if (new_runtime_options = read_runtime_options(fd)) {
+    if ((new_runtime_options = read_runtime_options(fd))) {
         runtime_options = new_runtime_options;
     }
 }
@@ -113,7 +101,7 @@ search_for_embedded_core(char *filename)
     os_vm_offset_t core_start, pos;
     int fd = -1;
 
-    if ((fd = open_binary(filename, O_RDONLY)) < 0)
+    if ((fd = os_open_core(filename, O_RDONLY)) < 0)
         goto lose;
     if (lseek(fd, -lispobj_size, SEEK_END) < 0)
         goto lose;
@@ -193,16 +181,16 @@ process_directory(int fd, lispobj *ptr, int count, os_vm_offset_t file_offset)
 
     for (entry = (struct ndir_entry *) ptr; --count>= 0; ++entry) {
 
-        long id = entry->identifier;
-        long offset = os_vm_page_size * (1 + entry->data_page);
+        intptr_t id = entry->identifier;
+        intptr_t offset = os_vm_page_size * (1 + entry->data_page);
         os_vm_address_t addr =
-            (os_vm_address_t) (os_vm_page_size * entry->address);
+            (os_vm_address_t) ((uword_t)os_vm_page_size * entry->address);
         lispobj *free_pointer = (lispobj *) addr + entry->nwords;
-        unsigned long len = os_vm_page_size * entry->page_count;
+        pointer_sized_uint_t len = os_vm_page_size * entry->page_count;
         if (len != 0) {
             os_vm_address_t real_addr;
             FSHOW((stderr, "/mapping %ld(0x%lx) bytes at 0x%lx\n",
-                   (long)len, (long)len, (unsigned long)addr));
+                   len, len, (uword_t)addr));
 #ifdef LISP_FEATURE_HPUX
             real_addr = copy_core_bytes(fd, offset + file_offset, addr, len);
 #else
@@ -216,8 +204,8 @@ process_directory(int fd, lispobj *ptr, int count, os_vm_offset_t file_offset)
             }
         }
 
-        FSHOW((stderr, "/space id = %ld, free pointer = 0x%lx\n",
-               id, (unsigned long)free_pointer));
+        FSHOW((stderr, "/space id = %ld, free pointer = 0x%p\n",
+               id, (uword_t)free_pointer));
 
         switch (id) {
         case DYNAMIC_CORE_SPACE_ID:
@@ -225,22 +213,22 @@ process_directory(int fd, lispobj *ptr, int count, os_vm_offset_t file_offset)
                 fprintf(stderr,
                         "dynamic space too small for core: %ldKiB required, %ldKiB available.\n",
                         len >> 10,
-                        (long)dynamic_space_size >> 10);
+                        (uword_t)dynamic_space_size >> 10);
                 exit(1);
             }
 #ifdef LISP_FEATURE_GENCGC
             if (addr != (os_vm_address_t)DYNAMIC_SPACE_START) {
-                fprintf(stderr, "in core: 0x%lx; in runtime: 0x%lx \n",
-                        (long)addr, (long)DYNAMIC_SPACE_START);
+                fprintf(stderr, "in core: 0x%p; in runtime: 0x%p \n",
+                        (uword_t)addr, (uword_t)DYNAMIC_SPACE_START);
                 lose("core/runtime address mismatch: DYNAMIC_SPACE_START\n");
             }
 #else
             if ((addr != (os_vm_address_t)DYNAMIC_0_SPACE_START) &&
                 (addr != (os_vm_address_t)DYNAMIC_1_SPACE_START)) {
-                fprintf(stderr, "in core: 0x%lx; in runtime: 0x%lx or 0x%lx\n",
-                        (long)addr,
-                        (long)DYNAMIC_0_SPACE_START,
-                        (long)DYNAMIC_1_SPACE_START);
+                fprintf(stderr, "in core: 0x%p; in runtime: 0x%p or 0x%p\n",
+                        (uword_t)addr,
+                        (uword_t)DYNAMIC_0_SPACE_START,
+                        (uword_t)DYNAMIC_1_SPACE_START);
                 lose("warning: core/runtime address mismatch: DYNAMIC_SPACE_START\n");
             }
 #endif
@@ -257,20 +245,20 @@ process_directory(int fd, lispobj *ptr, int count, os_vm_offset_t file_offset)
             break;
         case STATIC_CORE_SPACE_ID:
             if (addr != (os_vm_address_t)STATIC_SPACE_START) {
-                fprintf(stderr, "in core: 0x%lx - in runtime: 0x%lx\n",
-                        (long)addr, (long)STATIC_SPACE_START);
+                fprintf(stderr, "in core: 0x%p - in runtime: 0x%p\n",
+                        (uword_t)addr, (uword_t)STATIC_SPACE_START);
                 lose("core/runtime address mismatch: STATIC_SPACE_START\n");
             }
             break;
         case READ_ONLY_CORE_SPACE_ID:
             if (addr != (os_vm_address_t)READ_ONLY_SPACE_START) {
-                fprintf(stderr, "in core: 0x%lx - in runtime: 0x%lx\n",
-                        (long)addr, (long)READ_ONLY_SPACE_START);
+                fprintf(stderr, "in core: 0x%p - in runtime: 0x%p\n",
+                        (uword_t)addr, (uword_t)READ_ONLY_SPACE_START);
                 lose("core/runtime address mismatch: READ_ONLY_SPACE_START\n");
             }
             break;
         default:
-            lose("unknown space ID %ld addr 0x%lx\n", id, (long)addr);
+            lose("unknown space ID %ld addr 0x%p\n", id, addr);
         }
     }
 }
@@ -279,7 +267,7 @@ lispobj
 load_core_file(char *file, os_vm_offset_t file_offset)
 {
     lispobj *header, val, len, *ptr, remaining_len;
-    int fd = open_binary(file, O_RDONLY);
+    int fd = os_open_core(file, O_RDONLY);
     unsigned int count;
 
     lispobj initial_function = NIL;
@@ -291,7 +279,7 @@ load_core_file(char *file, os_vm_offset_t file_offset)
     }
 
     lseek(fd, file_offset, SEEK_SET);
-    header = calloc(os_vm_page_size / sizeof(u32), sizeof(u32));
+    header = calloc(os_vm_page_size / sizeof(uword_t), sizeof(uword_t));
 
     count = read(fd, header, os_vm_page_size);
     if (count < os_vm_page_size) {
@@ -314,7 +302,7 @@ load_core_file(char *file, os_vm_offset_t file_offset)
         len = *ptr++;
         remaining_len = len - 2; /* (-2 to cancel the two ++ operations) */
         FSHOW((stderr, "/val=0x%ld, remaining_len=0x%ld\n",
-               (long)val, (long)remaining_len));
+               (intptr_t)val, (intptr_t)remaining_len));
 
         switch (val) {
 
@@ -367,7 +355,7 @@ load_core_file(char *file, os_vm_offset_t file_offset)
                               ptr,
 #ifndef LISP_FEATURE_ALPHA
                               remaining_len / (sizeof(struct ndir_entry) /
-                                               sizeof(long)),
+                                               sizeof(lispobj)),
 #else
                               remaining_len / (sizeof(struct ndir_entry) /
                                                sizeof(u32)),
@@ -384,11 +372,11 @@ load_core_file(char *file, os_vm_offset_t file_offset)
         case LUTEX_TABLE_CORE_ENTRY_TYPE_CODE:
             SHOW("LUTEX_TABLE_CORE_ENTRY_TYPE_CODE case");
             {
-                size_t n_lutexes = *ptr;
-                size_t fdoffset = (*(ptr + 1) + 1) * (os_vm_page_size);
-                size_t data_length = n_lutexes * sizeof(struct sap *);
+                os_vm_size_t n_lutexes = *ptr;
+                os_vm_size_t fdoffset = (*(ptr + 1) + 1) * (os_vm_page_size);
+                os_vm_size_t data_length = n_lutexes * sizeof(struct sap *);
                 struct lutex **lutexes_to_resurrect = malloc(data_length);
-                long bytes_read;
+                uword_t bytes_read;
 
                 lseek(fd, fdoffset + file_offset, SEEK_SET);
 
@@ -418,12 +406,12 @@ load_core_file(char *file, os_vm_offset_t file_offset)
 #ifdef LISP_FEATURE_GENCGC
         case PAGE_TABLE_CORE_ENTRY_TYPE_CODE:
         {
-            size_t size = *ptr;
-            size_t fdoffset = (*(ptr+1) + 1) * (os_vm_page_size);
-            size_t offset = 0;
-            long bytes_read;
-            unsigned long data[4096];
-            unsigned long word;
+            os_vm_size_t size = *ptr;
+            os_vm_size_t fdoffset = (*(ptr+1) + 1) * (os_vm_page_size);
+            os_vm_size_t offset = 0;
+            uword_t bytes_read;
+            uword_t data[4096];
+            uword_t word;
             lseek(fd, fdoffset + file_offset, SEEK_SET);
             while ((bytes_read = read(fd, data, (size < 4096 ? size : 4096 )))
                     > 0)
@@ -431,7 +419,7 @@ load_core_file(char *file, os_vm_offset_t file_offset)
                 int i = 0;
                 size -= bytes_read;
                 while (bytes_read) {
-                    bytes_read -= sizeof(long);
+                    bytes_read -= sizeof(word);
                     /* Ignore all zeroes. The size of the page table
                      * core entry was rounded up to os_vm_page_size
                      * during the save, and might now have more
@@ -439,7 +427,7 @@ load_core_file(char *file, os_vm_offset_t file_offset)
                      *
                      * The low bits of each word are allocation flags.
                      */
-                    if (word=data[i]) {
+                    if ((word=data[i])) {
                         page_table[offset].region_start_offset = word & ~0x03;
                         page_table[offset].allocated = word & 0x03;
                     }

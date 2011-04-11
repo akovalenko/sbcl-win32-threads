@@ -107,6 +107,8 @@ export SBCL_XC_HOST
 find_gnumake
 
 sh make-target-1.sh
+$SBCL_XC_HOST < make-genesis-1a.lisp
+sh make-target-1a.sh
 
 # Instead of doing the full make-host-2.sh, we (1) use after-xc.core
 # to rebuild only obviously-out-of-date Lisp files, then (2) run

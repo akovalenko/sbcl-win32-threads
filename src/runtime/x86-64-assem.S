@@ -25,15 +25,15 @@
 #include "genesis/thread.h"
 	
 /* Minimize conditionalization for different OS naming schemes. */
-#if defined __linux__  || defined __FreeBSD__ || defined __OpenBSD__ || defined __NetBSD__ || defined __sun
+#if defined __linux__  || defined __FreeBSD__ || defined __OpenBSD__ || defined __NetBSD__ || defined __sun || defined _WIN64
 #define GNAME(var) var
 #else
 #define GNAME(var) _##var
 #endif
-
+	
 /* Get the right type of alignment. Linux, FreeBSD and OpenBSD
  * want alignment in bytes. */
-#if defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined __NetBSD__ || defined(__sun)
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined __NetBSD__ || defined(__sun)  || defined _WIN64
 #define align_4byte	4
 #define align_8byte	8
 #define align_16byte	16
@@ -57,6 +57,28 @@
 #else
 #define TYPE(name)
 #define SIZE(name)
+#endif
+
+#if defined(LISP_FEATURE_WIN32)
+#define RIntArg0 %rcx
+#define RIntArg1 %rdx
+#define RIntArg2 %r8
+#define RIntArg3 %r9
+#define MakeShadowSpace sub $0x20,%rsp
+#define FreeShadowSpace add $0x20,%rsp
+#define MakeShadowSpacePlus1 sub $0x28,%rsp
+#define FreeShadowSpacePlus1 add $0x28,%rsp
+#define SpareStackOffset 16
+#else
+#define RIntArg0 %rdi
+#define RIntArg1 %rsi
+#define RIntArg2 %rdx
+#define RIntArg3 %rcx
+#define MakeShadowSpace
+#define FreeShadowSpace
+#define MakeShadowSpacePlus1
+#define FreeShadowSpacePlus1
+#define SpareStackOffset -16
 #endif
 
 /*
@@ -157,9 +179,12 @@ GNAME(call_into_lisp_first_time):
 	
 	.align	align_16byte,0x90
 GNAME(call_into_lisp):
+	mov	%rbp,%rax
 	push	%rbp		# Save old frame pointer.
 	mov	%rsp,%rbp	# Establish new frame.
 Lstack:
+	push	%r15
+	mov	%rax,%r15
 	/* FIXME x86 saves FPU state here */
 	push	%rbx  	# these regs are callee-saved according to C
 	push	%r12	# so must be preserved and restored when 
@@ -174,6 +199,13 @@ Lstack:
 	push	%rsi	#
 	push	%rdx	#
 #ifdef LISP_FEATURE_SB_THREAD
+#ifdef LISP_FEATURE_SB_GC_SAFEPOINT
+	mov	(%rbp),%rcx
+	sub	$32,%rsp
+	call	GNAME(carry_frame_pointer)
+	add	$32,%rsp
+	mov	%rax,(%rbp)
+#endif
 #ifdef LISP_FEATURE_GCC_TLS
 	movq	%fs:0, %rax
 	movq	GNAME(current_thread)@TPOFF(%rax), %r12
@@ -236,7 +268,9 @@ LsingleValue:
 /* FIXME Restore the NPX state. */
 
 	mov	%rdx,%rax	# c-val
-	leave
+	mov	%r15,%rbp	# orig rbp
+	pop	%r15		# orig r15
+	add	$8,%rsp		# no need for saved (overridden) rbp
 	ret
 	SIZE(GNAME(call_into_lisp))
 
@@ -281,8 +315,11 @@ GNAME(undefined_tramp):
 	.globl  GNAME(alloc_tramp)
 	TYPE(GNAME(alloc_tramp))
 GNAME(alloc_tramp):
+	cld
 	push	%rbp		# Save old frame pointer.
 	mov	%rsp,%rbp	# Establish new frame.
+	and	$-16,%rsp
+	
 	push	%rax
 	push	%rcx
 	push	%rdx
@@ -292,9 +329,11 @@ GNAME(alloc_tramp):
 	push	%r9
 	push	%r10
 	push	%r11
-	mov	16(%rbp),%rdi	
+	push	%r11
+	mov	16(%rbp),%rdi
 	call	GNAME(alloc)
 	mov	%rax,16(%rbp)
+	pop	%r11
 	pop	%r11
 	pop	%r10
 	pop	%r9
@@ -304,6 +343,8 @@ GNAME(alloc_tramp):
 	pop	%rdx
 	pop	%rcx
 	pop	%rax
+	
+	mov	%rbp,%rsp
 	pop	%rbp
 	ret
 	SIZE(GNAME(alloc_tramp))
@@ -331,7 +372,7 @@ GNAME(closure_tramp):
 	.align	align_16byte,0x90
 	.globl  GNAME(funcallable_instance_tramp)
 #if !defined(LISP_FEATURE_DARWIN)
-        .type	GNAME(funcallable_instance_tramp),@function
+	TYPE(GNAME(funcallable_instance_tramp))
 #endif
         GNAME(funcallable_instance_tramp):
 	mov	FUNCALLABLE_INSTANCE_FUNCTION_OFFSET(%rax),%rax
@@ -339,7 +380,7 @@ GNAME(closure_tramp):
 	 * now, the first word of it contains the address to jump to. */
 	jmp	*CLOSURE_FUN_OFFSET(%rax)
 #if !defined(LISP_FEATURE_DARWIN)
-	.size	GNAME(funcallable_instance_tramp), .-GNAME(funcallable_instance_tramp)
+	SIZE(GNAME(funcallable_instance_tramp))
 #endif
 /*
  * fun-end breakpoint magic
@@ -417,15 +458,26 @@ GNAME(post_signal_tramp):
 	.globl  GNAME(fast_bzero)
 	TYPE(GNAME(fast_bzero))
         
+	#ifdef LISP_FEATURE_WIN32
+	#define xmmreg xmm7
+	#define redsave(reg,off) movups reg,-off(%rsp)
+	#define redrestore(reg,off) movups -off(%rsp),reg
+	#else
+	#define xmmreg xmm0
+	#define redsave(reg,off)
+	#define redrestore(reg,off)
+	#endif
+	
 GNAME(fast_bzero):
+	
         /* A fast routine for zero-filling blocks of memory that are
          * guaranteed to start and end at a 4096-byte aligned address.
          */
         shr $6, %rsi              /* Amount of 64-byte blocks to copy */
         jz Lend                   /* If none, stop */
         mov %rsi, %rcx            /* Save start address */
-        movups %xmm7, -16(%rsp)   /* Save XMM register */
-        xorps  %xmm7, %xmm7       /* Zero the XMM register */
+	redsave(%xmmreg,16)
+        xorps  %xmmreg, %xmmreg       /* Zero the XMM register */
         jmp Lloop
         .align align_16byte                 
 Lloop:
@@ -435,21 +487,22 @@ Lloop:
          * we're touching are not fetched into the L1 cache, since we're just
          * going to overwrite the memory soon anyway.
          */
-        movntdq %xmm7, 0(%rdi)
-        movntdq %xmm7, 16(%rdi)
-        movntdq %xmm7, 32(%rdi)
-        movntdq %xmm7, 48(%rdi)
+        movntdq %xmmreg, 0(%rdi)
+        movntdq %xmmreg, 16(%rdi)
+        movntdq %xmmreg, 32(%rdi)
+        movntdq %xmmreg, 48(%rdi)
 
         add $64, %rdi  /* Advance pointer */
         dec %rsi       /* Decrement 64-byte block count */
         jnz Lloop
         mfence         /* Ensure that the writes are globally visible, since
                         * MOVNTDQ is weakly ordered */
-        movups -16(%rsp), %xmm7 /* Restore the XMM register */
+	redrestore(%xmmreg,16)
         prefetcht0 0(%rcx)      /* Prefetch the start of the block into cache,
                                  * since it's likely to be used immediately. */
 Lend:        
 	ret
 	SIZE(GNAME(fast_bzero))
 
+		
         END()

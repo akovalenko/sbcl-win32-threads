@@ -229,7 +229,8 @@
   (show-and-call stream-cold-init-or-reset)
   (show-and-call !loader-cold-init)
   (show-and-call !foreign-cold-init)
-  #!-win32 (show-and-call signal-cold-init-or-reinit)
+  #!-(and win32 (not sb-thread))
+  (show-and-call signal-cold-init-or-reinit)
   (/show0 "enabling internal errors")
   (setf (sb!alien:extern-alien "internal_errors_enabled" boolean) t)
 
@@ -305,13 +306,16 @@ systems, UNIX-STATUS is used as the status code."
     (os-cold-init-or-reinit)
     (thread-init-or-reinit)
     (stream-reinit t)
-    #!-win32
+    #!-(and win32 (not sb-thread))
     (signal-cold-init-or-reinit)
     (setf (sb!alien:extern-alien "internal_errors_enabled" boolean) t)
     (float-cold-init-or-reinit))
   (gc-reinit)
   (foreign-reinit)
   (time-reinit)
+  #!+sb-foreign-thread
+  (when (fboundp 'sb!thread:foreign-thread-init)
+    (sb!thread:foreign-thread-init))
   ;; If the debugger was disabled in the saved core, we need to
   ;; re-disable ldb again.
   (when (eq *invoke-debugger-hook* 'sb!debug::debugger-disabled-hook)

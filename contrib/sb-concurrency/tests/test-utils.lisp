@@ -3,7 +3,7 @@
 #+sb-thread
 (progn
 
-(defparameter +timeout+ 30.0)
+(defparameter +timeout+ 120.0)
 
 (defun make-threads (n name fn)
   (loop for i from 1 to n

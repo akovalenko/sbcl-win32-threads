@@ -1122,6 +1122,17 @@ SB-EXT:PACKAGE-LOCKED-ERROR-SYMBOL."))
                     "No traps are enabled? How can this be?"
                     stream))))))
 
+(define-condition unhandled-exception (error)
+  ((name :initarg :name :reader unhandled-exception-name)
+   (code :initarg :code :reader unhandled-exception-code)
+   (pc   :initarg :pc   :reader unhandled-exception-pc))
+  (:report (lambda (exception stream)
+             (format stream
+                     "Unhandled exception ~X ~@[(~A)~] at ~X"
+                     (unhandled-exception-code exception)
+                     (unhandled-exception-name exception)
+                     (unhandled-exception-pc exception)))))
+
 (define-condition invalid-array-index-error (type-error)
   ((array :initarg :array :reader invalid-array-index-error-array)
    (axis :initarg :axis :reader invalid-array-index-error-axis))

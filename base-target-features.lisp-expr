@@ -220,6 +220,10 @@
  ;; x86oid Linux. Other platforms that support them include
  ;; x86oid Darwin, FreeBSD, and Solaris.
  ; :sb-thread
+ ;
+ ; This unofficial branch of SBCL for Windows fully supports callbacks when they happen
+ ; in threads previously unkown to Lisp.
+ ; :sb-foreign-thread
 
  ;; lutex support
  ;;
@@ -386,6 +390,18 @@
  ;;
  ;;   :alien-callbacks
  ;;     Alien callbacks have been implemented for this platform.
+ ;;
+ ;;   :alien-callback-conventions
+ ;;     Optional calling convention may be specified for alien
+ ;;     callbacks as part of alien function type, using a list of
+ ;;     convention keyword and return type instead of a bare return
+ ;;     type.
+ ;;
+ ;;   :alien-callback-stdcall
+ ;;     stdcall (x86) convention: callee cleans up the stack args.
+ ;;
+ ;;   :alien-callback-cdecl
+ ;;     cdecl (x86) convention: caller cleans up the stack args.
  ;;
  ;;   :compare-and-swap-vops
  ;;     The backend implements compare-and-swap VOPs.
