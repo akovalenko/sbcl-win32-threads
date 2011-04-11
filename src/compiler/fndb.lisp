@@ -80,7 +80,7 @@
 ;;;; classes
 
 (sb!xc:deftype name-for-class () t)
-(defknown classoid-name (classoid) name-for-class (flushable))
+(defknown classoid-name (classoid) symbol (flushable))
 (defknown find-classoid (name-for-class &optional t)
   (or classoid null) ())
 (defknown classoid-of (t) classoid (flushable))
@@ -966,7 +966,7 @@
   (flushable unsafe))
 (defknown make-string-output-stream
     (&key (:element-type type-specifier))
-    stream
+    string-output-stream
   (flushable))
 (defknown get-output-stream-string (stream) simple-string ())
 (defknown streamp (t) boolean (movable foldable flushable))
@@ -1270,16 +1270,11 @@
 
 ;;;; from the "Conditions" chapter:
 
-(defknown cell-error-name (cell-error) t)
 (defknown error (t &rest t) nil)
 (defknown cerror (format-control t &rest t) null)
 (defknown invalid-method-error (t format-control &rest t) *) ; FIXME: first arg is METHOD
 (defknown method-combination-error (format-control &rest t) *)
 (defknown signal (t &rest t) null)
-(defknown simple-condition-format-control (condition)
-  (or null format-control))
-(defknown simple-condition-format-arguments (condition)
-  list)
 (defknown warn (t &rest t) null)
 (defknown invoke-debugger (condition) nil)
 (defknown break (&optional format-control &rest t) null)
