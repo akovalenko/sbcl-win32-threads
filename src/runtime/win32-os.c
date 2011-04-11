@@ -1183,6 +1183,7 @@ void fff_generic_callback(lispobj arg0,lispobj arg1, lispobj arg2)
 #endif
     pthread_t companion_fiber;
     if (th) {
+        th->gc_safepoint_context = *(((void**)arg2)-1);
         BEGIN_GC_UNSAFE_CODE;
         funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,th),arg0,arg1,arg2);
         END_GC_UNSAFE_CODE;
@@ -2927,8 +2928,8 @@ wos_install_interrupt_handlers(struct lisp_exception_frame *handler)
     set_seh_frame(handler);
 #else
     static int once = 0;
-    if (!once)
-        AddVectoredExceptionHandler(once++,veh);
+    if (!once++)
+        AddVectoredExceptionHandler(1,veh);
 #endif
 }
 
