@@ -2717,13 +2717,13 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                      exception_record->ExceptionInformation[0]);
 #endif
         if (self) {
-            if (local_thread_stack_address_p(fault_address)&&
-                handle_guard_page_triggered(&ctx, fault_address)) {
-                BEGIN_GC_UNSAFE_CODE;
-                goto finish;
-                END_GC_UNSAFE_CODE;
+            if (local_thread_stack_address_p(fault_address)) {
+                if (handle_guard_page_triggered(&ctx, fault_address)) {
+                    goto finish; /* gc safety? */
+                } else {
+                    goto try_recommit;
+                }
             }
-
 
             if (dyndebug_lowpagefault_log && (((lispobj)fault_address)<0xFFFF)) {
                 fprintf(stderr,
@@ -2774,6 +2774,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         if (!is_valid_lisp_addr(fault_address))
             goto complain;
 
+    try_recommit:
 #if defined(LISP_FEATURE_X86)
         AVER(VirtualAlloc(PTR_ALIGN_DOWN(fault_address,os_vm_page_size),
                           os_vm_page_size,

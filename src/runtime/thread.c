@@ -205,10 +205,17 @@ initial_thread_trampoline(struct thread *th)
     pthread_mutex_lock(thread_qrl(th));
     link_thread(th);
     th->os_thread=thread_self();
+#ifndef LISP_FEATURE_WIN32
+    /* Win32 is too active in doing something strange to thread's stack
+       memory. Maybe there is no way to implement _our_ guard pages for control
+       stack on that platorm, after all. 
+
+       (don't forget) _resetstkoflw -- call when */
     protect_control_stack_hard_guard_page(1, NULL);
+    protect_control_stack_guard_page(1, NULL);
+#endif /* LISP_FEATURE_WIN32 */
     protect_binding_stack_hard_guard_page(1, NULL);
     protect_alien_stack_hard_guard_page(1, NULL);
-    protect_control_stack_guard_page(1, NULL);
     protect_binding_stack_guard_page(1, NULL);
     protect_alien_stack_guard_page(1, NULL);
 
