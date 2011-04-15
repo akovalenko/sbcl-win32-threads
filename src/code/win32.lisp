@@ -829,7 +829,7 @@ UNIX epoch: January 1st 1970."
       (set-file-pointer-ex handle offset whence)
     (if moved
         (values to-place 0)
-        (values nil (- (get-last-error))))))
+        (values -1 (- (get-last-error))))))
 
 ;;; File mapping support routines
 
