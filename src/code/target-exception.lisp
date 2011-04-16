@@ -115,8 +115,8 @@
            (funcall condition-name
                     :context context-sap
                     :exception-record record
-                    :memory-fault-address memory-fault-access-sap
-                    :pc pc))
+                    :memory-fault-address (or memory-fault-access-sap (int-sap 0))
+                    :pc (or pc (int-sap 0))))
         ((and symbol (not null)) (error condition-name))
         (t (error 'sb!kernel::unhandled-exception :pc pc
                   :code code :name condition-name))))))
