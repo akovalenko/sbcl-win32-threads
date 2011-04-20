@@ -1140,6 +1140,8 @@ void fff_foreign_callback( void *v_info_ptr)
     fff_call_info *info_ptr = v_info_ptr;
     lispobj *args = info_ptr->args;
     struct thread* self = arch_os_get_current_thread();
+    CONTEXT w32ctx;
+    os_context_t cbctx;
 
 #ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
     self->in_lisp_fpu_mode = 0;
@@ -1154,6 +1156,10 @@ void fff_foreign_callback( void *v_info_ptr)
        and restored, if needed, as a C context FPU control word. */
     if (fpu_cw & 1) x87_fldcw(fpu_cw & ~1);
 #endif
+
+    cbctx.win32_context = &w32ctx;
+    self->gc_safepoint_context = &cbctx;
+    *os_context_fp_addr(&cbctx) = *(((void**)args[2])-1);
 
     BEGIN_GC_UNSAFE_CODE;
     funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,self),
@@ -1182,8 +1188,14 @@ void fff_generic_callback(lispobj arg0,lispobj arg1, lispobj arg2)
     struct thread* th = arch_os_get_current_thread();
 #endif
     pthread_t companion_fiber;
+    CONTEXT w32ctx;
+    os_context_t cbctx;
+    
     if (th) {
-        th->gc_safepoint_context = *(((void**)arg2)-1);
+        cbctx.win32_context = &w32ctx;
+        th->gc_safepoint_context = &cbctx;
+        *os_context_fp_addr(&cbctx) = *(((void**)arg2)-1);
+
         BEGIN_GC_UNSAFE_CODE;
         funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,th),arg0,arg1,arg2);
         END_GC_UNSAFE_CODE;
