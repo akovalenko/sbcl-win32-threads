@@ -31,8 +31,7 @@ export SBCL_HOME
 if [ "$OSTYPE" = "cygwin" ] ; then
     SBCL_PWD=`echo $SBCL_PWD | sed s/\ /\\\\\\\\\ /g`
 fi
-
-SBCL="'$PWD/src/runtime/$SBCL_RUNTIME_EXECUTABLE' --noinform --core '$SBCL_PWD/output/sbcl.core' \
+SBCL="'$PWD/src/runtime/${SBCL_RUNTIME_EXECUTABLE:-"sbcl"}' --noinform --core '$SBCL_PWD/output/sbcl.core' \
 --lose-on-corruption --disable-debugger --no-sysinit --no-userinit"
 SBCL_BUILDING_CONTRIB=1
 export SBCL SBCL_BUILDING_CONTRIB

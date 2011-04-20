@@ -319,7 +319,10 @@ GNAME(alloc_tramp):
 	push	%rbp		# Save old frame pointer.
 	mov	%rsp,%rbp	# Establish new frame.
 	and	$-16,%rsp
-	
+	sub	$-16,%rsp
+	movaps	%xmm6,(%rsp)
+	sub	$-16,%rsp
+	movaps	%xmm7,(%rsp)
 	push	%rax
 	push	%rcx
 	push	%rdx
@@ -343,7 +346,8 @@ GNAME(alloc_tramp):
 	pop	%rdx
 	pop	%rcx
 	pop	%rax
-	
+	movaps	(%rsp),%xmm7
+	movaps	16(%rsp),%xmm6
 	mov	%rbp,%rsp
 	pop	%rbp
 	ret
