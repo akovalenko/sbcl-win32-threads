@@ -318,11 +318,10 @@ GNAME(alloc_tramp):
 	cld
 	push	%rbp		# Save old frame pointer.
 	mov	%rsp,%rbp	# Establish new frame.
-	and	$-16,%rsp
-	sub	$-16,%rsp
-	movaps	%xmm6,(%rsp)
-	sub	$-16,%rsp
-	movaps	%xmm7,(%rsp)
+	and	$-32,%rsp
+	sub	$32,%rsp
+	movaps	%xmm6,16(%rsp)
+	movups	%xmm7,(%rsp)
 	push	%rax
 	push	%rcx
 	push	%rdx
