@@ -745,7 +745,8 @@ UNIX epoch: January 1st 1970."
 ;;
 ;; http://msdn.microsoft.com/library/en-us/dllproc/base/setenvironmentvariable.asp
 (defun setenv (name value)
-  (declare (type simple-string name value))
+  (declare (type simple-string name)
+           (type (or null simple-string) value))
   (if value
       (void-syscall* (("SetEnvironmentVariable" t) system-string system-string)
                      name value)
