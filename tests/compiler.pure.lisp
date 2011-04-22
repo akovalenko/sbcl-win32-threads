@@ -3859,3 +3859,18 @@
                        (delete x y :test #'eql))))
     (assert (equal (list #'sb-int:delq)
                    (ctu:find-named-callees fun)))))
+
+(with-test (:name :bug-767959)
+  ;; This used to signal an error.
+  (compile nil `(lambda ()
+                  (declare (optimize sb-c:store-coverage-data))
+                  (assoc
+                   nil
+                   '((:ordinary . ordinary-lambda-list))))))
+
+(with-test (:name :member-on-long-constant-list)
+  ;; This used to blow stack with a sufficiently long list.
+  (let ((cycle (list t)))
+    (nconc cycle cycle)
+    (compile nil `(lambda (x)
+                    (member x ',cycle)))))
