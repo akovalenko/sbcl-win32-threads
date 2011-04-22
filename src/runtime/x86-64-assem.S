@@ -309,7 +309,19 @@ GNAME(undefined_tramp):
 	ret
 	SIZE(GNAME(undefined_tramp))
 
+/* The compiler apparently assumes xmm registers to be untouched by alloc_tramp. While neither SYSV nor
+   MS ABI states something like that about _all_ xmm regs (some of them are callee-saved everywhere),
+   Windows/x64 is now _known_ to break this assumption.
 
+FIXME:  The code below that saves all XMM registers is now activated only on
+        Windows. Other platfroms may need it as well.  */
+        
+#define stkxmmsave(n) movaps %xmm##n, n*16(%rsp)
+#define stkxmmload(n) movaps n*16(%rsp), %xmm##n
+#define map_all_xmm(op) \
+	op(0);op(1);op(2);op(3);op(4);op(5);op(6);op(7); \
+    op(8);op(9);op(10);op(11);op(12);op(13);op(14);op(15);
+        
 	.text
 	.align	align_16byte,0x90
 	.globl  GNAME(alloc_tramp)
@@ -319,9 +331,10 @@ GNAME(alloc_tramp):
 	push	%rbp		# Save old frame pointer.
 	mov	%rsp,%rbp	# Establish new frame.
 	and	$-32,%rsp
-	sub	$32,%rsp
-	movaps	%xmm6,16(%rsp)
-	movups	%xmm7,(%rsp)
+#ifdef LISP_FEATURE_WIN32
+	sub	$16*16,%rsp
+    map_all_xmm(stkxmmsave)
+#endif
 	push	%rax
 	push	%rcx
 	push	%rdx
@@ -345,8 +358,9 @@ GNAME(alloc_tramp):
 	pop	%rdx
 	pop	%rcx
 	pop	%rax
-	movaps	(%rsp),%xmm7
-	movaps	16(%rsp),%xmm6
+#ifdef LISP_FEATURE_WIN32
+    map_all_xmm(stkxmmload)
+#endif        
 	mov	%rbp,%rsp
 	pop	%rbp
 	ret
