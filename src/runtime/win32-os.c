@@ -1190,7 +1190,7 @@ void fff_generic_callback(lispobj arg0,lispobj arg1, lispobj arg2)
     pthread_t companion_fiber;
     CONTEXT w32ctx;
     os_context_t cbctx;
-    
+
     if (th) {
         cbctx.win32_context = &w32ctx;
         th->gc_safepoint_context = &cbctx;
