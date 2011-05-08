@@ -1985,12 +1985,22 @@ os_map(int fd, int offset, os_vm_address_t addr, os_vm_size_t len)
                                   PAGE_EXECUTE_WRITECOPY, 0, offset+len,
                                   NULL);
             if (!mapping) {
+#ifdef LISP_FEATURE_X86_64
+                /* Dirty trick (FIXME if you know how): WinXP/x64 apparently
+                 * doesn't support executable-copy-on-write, at least for
+                 * private pages, or needs some special workaround which I don't
+                 * know (?). It also rejects PAGE_EXECUTE_WRITECOPY, and this
+                 * fact is used here to skip core-mmapping on such systems
+                 * altogether. */
+                goto use_read;
+#else
                 mapping =
                     CreateFileMapping((HANDLE)_get_osfhandle(fd),NULL,
                                       PAGE_READONLY, 0, offset+len,
                                       NULL);
                 if (mapping)
                     os_supports_executable_mapping = 0;
+#endif
             } else {
                 os_supports_executable_mapping = 1;
             }
@@ -2026,15 +2036,15 @@ os_map(int fd, int offset, os_vm_address_t addr, os_vm_size_t len)
             }
         }
     }
+use_read:
     AVER(VirtualAlloc(addr, len, MEM_COMMIT, PAGE_EXECUTE_READWRITE)||
          VirtualAlloc(addr, len, MEM_RESERVE|MEM_COMMIT|mwwFlag,
                       PAGE_EXECUTE_READWRITE));
 
     CRT_AVER_NONNEGATIVE(lseek(fd, offset, SEEK_SET));
 
-    count = read(fd, addr, len);
+    count = _read(fd, addr, len);
     CRT_AVER( count == len );
-
     return addr;
 }
 
