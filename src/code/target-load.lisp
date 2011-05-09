@@ -28,31 +28,37 @@
 ;;;; LOAD-AS-SOURCE
 
 ;;; Load a text stream.  (Note that load-as-fasl is in another file.)
-(defun load-as-source (stream verbose print)
+(defun load-as-source (stream &key verbose print (context "loading"))
   (maybe-announce-load stream verbose)
-  (macrolet ((do-sexprs ((sexpr stream) &body body)
-               (aver (symbolp sexpr))
-               (with-unique-names (source-info)
-                 (once-only ((stream stream))
-                   `(if (handler-case (pathname stream)
-                          (error () nil))
-                        (let ((,source-info (sb!c::make-file-source-info
-                                            (pathname ,stream)
-                                            (stream-external-format ,stream))))
-                          (setf (sb!c::source-info-stream ,source-info) ,stream)
-                          (sb!c::do-forms-from-info ((,sexpr) ,source-info)
-                            ,@body))
-                        (do ((,sexpr (read ,stream nil *eof-object*)
-                                     (read ,stream nil *eof-object*)))
-                            ((eq ,sexpr *eof-object*))
-                          ,@body))))))
-    (do-sexprs (sexpr stream)
-      (if print
-          (let ((results (multiple-value-list (eval sexpr))))
-            (load-fresh-line)
-            (format t "~{~S~^, ~}~%" results))
-          (eval sexpr)))
-    t))
+  (let* ((pathname (ignore-errors (translate-logical-pathname stream)))
+         (native (when pathname (native-namestring pathname))))
+    (with-simple-restart (abort "Abort ~A file ~S." context native)
+      (flet ((eval-form (form index)
+               (with-simple-restart (continue "Ignore error and continue ~A file ~S."
+                                              context native)
+                 (loop
+                   (with-simple-restart (retry "Retry EVAL of current toplevel form.")
+                     (if print
+                         (let ((results (multiple-value-list (eval-tlf form index))))
+                           (load-fresh-line)
+                           (format t "~{~S~^, ~}~%" results))
+                         (eval-tlf form index)))
+                   (return)))))
+        (if pathname
+            (let* ((info (sb!c::make-file-source-info
+                          pathname (stream-external-format stream)))
+                   (sb!c::*source-info* info)
+                   (sb!c::*source-paths* (make-hash-table :test 'eq)))
+              (setf (sb!c::source-info-stream info) stream)
+              (sb!c::do-forms-from-info ((form current-index) info)
+                (sb!c::find-source-paths form current-index)
+                (eval-form form current-index)))
+            (let ((sb!c::*source-info* nil))
+              (do ((form (read stream nil *eof-object*)
+                         (read stream nil *eof-object*)))
+                  ((eq form *eof-object*))
+                (eval-form form nil)))))))
+  t)
 
 ;;;; LOAD itself
 
@@ -111,7 +117,7 @@
              (return-from load
                (if faslp
                    (load-as-fasl stream verbose print)
-                   (load-as-source stream verbose print))))))
+                   (load-as-source stream :verbose verbose :print print))))))
     ;; Case 1: stream.
     (when (streamp pathspec)
       (return-from load (load-stream pathspec (fasl-header-p pathspec))))
