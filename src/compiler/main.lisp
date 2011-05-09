@@ -164,6 +164,19 @@ Following options are defined:
       This option is an SBCL-specific experimental extension: Interface
       subject to change.
 
+  :SOURCE-NAMESTRING Namestring-Form
+      Attaches the value returned by the Namestring-Form to the internal
+      debug-source information as the namestring of the source file. Normally
+      the namestring of the input-file for COMPILE-FILE is used: this option
+      can be used to provide source-file information for functions compiled
+      using COMPILE, or to override the input-file of COMPILE-FILE.
+
+      If both an outer and an inner WITH-COMPILATION-UNIT provide a
+      SOURCE-NAMESTRING, the inner one takes precedence. Unaffected
+      by :OVERRIDE.
+
+      This is an SBCL-specific extension.
+
   :SOURCE-PLIST Plist-Form
       Attaches the value returned by the Plist-Form to internal debug-source
       information of functions compiled in within the dynamic extent of BODY.
@@ -201,12 +214,14 @@ Examples:
   `(%with-compilation-unit (lambda () ,@body) ,@options))
 
 (defvar *source-plist* nil)
+(defvar *source-namestring* nil)
 
-(defun %with-compilation-unit (fn &key override policy source-plist)
+(defun %with-compilation-unit (fn &key override policy source-plist source-namestring)
   (declare (type function fn))
   (flet ((with-it ()
            (let ((succeeded-p nil)
-                 (*source-plist* (append source-plist *source-plist*)))
+                 (*source-plist* (append source-plist *source-plist*))
+                 (*source-namestring* (or source-namestring *source-namestring*)))
              (if (and *in-compilation-unit* (not override))
                  ;; Inside another WITH-COMPILATION-UNIT, a WITH-COMPILATION-UNIT is
                  ;; ordinarily (unless OVERRIDE) basically a no-op.
@@ -1266,7 +1281,7 @@ Examples:
 ;;; compilation. Normally just evaluate in the appropriate
 ;;; environment, but also compile if outputting a CFASL.
 (defun eval-compile-toplevel (body path)
-  (eval-in-lexenv `(progn ,@body) *lexenv*)
+  (eval-tlf `(progn ,@body) (source-path-tlf-number path) *lexenv*)
   (when *compile-toplevel-object*
     (let ((*compile-object* *compile-toplevel-object*))
       (convert-and-maybe-compile `(progn ,@body) path))))
@@ -2035,6 +2050,6 @@ SPEED and COMPILATION-SPEED optimization values, and the
   (compile name lambda))
 
 #+sb-xc-host
-(defun eval-in-lexenv (form lexenv)
-  (declare (ignore lexenv))
+(defun eval-tlf (form index &optional lexenv)
+  (declare (ignore index lexenv))
   (eval form))

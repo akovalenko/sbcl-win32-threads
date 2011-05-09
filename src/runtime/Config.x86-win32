@@ -26,6 +26,7 @@ OS_SRC = win32-os.c x86-win32-os.c os-common.c pthreads_win32.c
 # (You *are* encouraged to design and implement a coherent stable
 # interface, though.:-| As far as I (WHN 2002-05-19) know, no one is
 # working on one and it would be a nice thing to have.)
+
 LINKFLAGS = -Wl,-export-all-symbols -mno-cygwin -Wl,mswin.def -Wl,--large-address-aware
 
 
@@ -42,6 +43,10 @@ CFLAGS =  -g -W -Wall \
 # breaks backtraces to death. Understandable, though unfortunate.
 # There are some prospective workarounds to try, but for now - let EBP
 # be in place.
+
+OS_LINK_FLAGS = 
+
+GC_SRC = gencgc.c
 
 ASFLAGS = $(CFLAGS)
 
@@ -61,6 +66,12 @@ mangled-stuff.nm: mangled-stuff.exe
 	mv -f ,$@ $@
 
 OS_CLEAN_FILES = mangled-stuff.exe mangled-stuff.nm
+
+ifneq ($(findstring cygwin,$(shell $(CC) -dumpmachine)),)
+OS_LINK_FLAGS := $(OS_LINK_FLAGS) -Wl,-mno-cygwin
+OS_LIBS := $(OS_LIBS) -mno-cygwin
+CFLAGS := $(CFLAGS) -mno-cygwin
+endif
 
 # Nothing to do for after-grovel-headers.
 .PHONY: after-grovel-headers

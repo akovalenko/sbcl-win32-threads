@@ -709,6 +709,10 @@ like *STACK-TOP-HINT* and unsupported stuff like *TRACED-FUN-LIST*."
                ;; to hide it from them..
                "INTERACTIVE-EVAL"
 
+               ;; Used by LOAD and EVAL-WHEN to pass toplevel indexes
+               ;; to compiler.
+               "EVAL-TLF"
+
                ;; weak pointers and finalization
                "CANCEL-FINALIZATION"
                "FINALIZE"
@@ -1140,6 +1144,7 @@ possibly temporariliy, because it might be used internally."
                "DEBUG-NAMIFY"
                "FORCE" "DELAY" "PROMISE-READY-P"
                "FIND-RESTART-OR-CONTROL-ERROR"
+               "LOAD-AS-SOURCE"
 
                ;; These could be moved back into SB!EXT if someone has
                ;; compelling reasons, but hopefully we can get by
