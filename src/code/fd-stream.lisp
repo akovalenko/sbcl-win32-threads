@@ -170,6 +170,8 @@
   (fd -1 :type
    #!-fds-are-windows-handles fixnum
    #!+fds-are-windows-handles sb!vm:signed-word)
+  ;; What do we know about the FD?
+  (fd-type :unknown :type keyword)
   ;; controls when the output buffer is flushed
   (buffering :full :type (member :full :line :none))
   ;; controls whether the input buffer must be cleared before output
@@ -988,11 +990,9 @@
        (go :main)
 
        ;; Check for blocking input before touching the stream if we are to
-       ;; serve events: if the FD is blocking, we don't want to hang on the
-       ;; write if we are to serve events or notice timeouts.
-       (if (and (or (fd-stream-serve-events stream)
-                    (fd-stream-timeout stream)
-                    *deadline*)
+       ;; serve events: if the FD is blocking, we don't want to try an uninterruptible
+       ;; read(). Regular files should never block, so we can elide the check.
+       (if (and (neq :regular (fd-stream-fd-type stream))
                 (sysread-may-block-p stream))
            (go :wait-for-input)
            (go :main))
@@ -2255,6 +2255,7 @@
         ((not (or input output))
          (error "File descriptor must be opened either for input or output.")))
   (let ((stream (%make-fd-stream :fd fd
+                                 :fd-type (sb!unix:fd-type fd)
                                  :name name
                                  :file file
                                  :original original

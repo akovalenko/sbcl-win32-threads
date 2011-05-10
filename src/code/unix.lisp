@@ -915,6 +915,7 @@ corresponds to NAME, or NIL if there is none."
     (syscall ("lstat_wrapper" c-string (* (struct wrapped_stat)))
              (%extract-stat-results (addr buf))
              name (addr buf))))
+
 (defun unix-fstat (fd)
   #!-fds-are-windows-handles
   (declare (type unix-fd fd))
@@ -927,6 +928,31 @@ corresponds to NAME, or NIL if there is none."
        (syscall ("fstat_wrapper" int (* (struct wrapped_stat)))
                 (%extract-stat-results (addr buf))
                 fd (addr buf)))) fd))
+
+(defun fd-type (fd)
+  (declare (type unix-fd fd))
+  (let ((fmt (logand
+              sb!unix:s-ifmt
+              (or (with-alien ((buf (struct wrapped_stat)))
+                    (syscall ("fstat_wrapper" int (* (struct wrapped_stat)))
+                             (slot buf 'st-mode)
+                             fd (addr buf)))
+                  0))))
+    (cond ((logtest sb!unix:s-ififo fmt)
+           :fifo)
+          ((logtest sb!unix:s-ifchr fmt)
+           :character)
+          ((logtest sb!unix:s-ifdir fmt)
+           :directory)
+          ((logtest sb!unix:s-ifblk fmt)
+           :block)
+          ((logtest sb!unix:s-ifreg fmt)
+           :regular)
+          ((logtest sb!unix:s-ifsock fmt)
+           :socket)
+          (t
+           :unknown))))
+
 
 ;;;; time.h
 
