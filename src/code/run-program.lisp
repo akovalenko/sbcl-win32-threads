@@ -738,7 +738,7 @@ Users Manual for details about the PROCESS structure."#-win32"
           (progname (native-namestring program))
           #+win32
           (progname (let ((native-namestring (native-namestring program)))
-                      (or (and (or (not search) (pathname-directory program))
+                      (or (and search (null (pathname-directory program))
                                (sb-win32::search-path native-namestring))
                           native-namestring)))
           (simple-args (simplify-args (cons progname args)))
