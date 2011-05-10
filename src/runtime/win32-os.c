@@ -2715,29 +2715,17 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         goto finish;
     }
     else if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
-#if defined(LISP_FEATURE_X86)
         odxprint(pagefaults,
                      "SEGV. ThSap %p, Eip %p, Esp %p, Esi %p, Edi %p, "
                      "Addr %p Access %d\n",
                      self,
-                     context->Eip,
-                     context->Esp,
-                     context->Esi,
-                     context->Edi,
+                     voidreg(context,ip),
+                     voidreg(context,sp),
+                     voidreg(context,si),
+                     voidreg(context,di),
                      fault_address,
                      exception_record->ExceptionInformation[0]);
-#else
-        odxprint(pagefaults,
-                     "SEGV. ThSap %p, Eip %p, Esp %p, Esi %p, Edi %p, "
-                     "Addr %p Access %d\n",
-                     self,
-                     context->Rip,
-                     context->Rsp,
-                     context->Rsi,
-                     context->Rdi,
-                     fault_address,
-                     exception_record->ExceptionInformation[0]);
-#endif
+
         os_vm_size_t commit_size = os_vm_page_size;
         if (self) {
             if (local_thread_stack_address_p(fault_address)) {
@@ -2751,9 +2739,11 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                     if (fault_address == self->alien_stack_pointer) {
                         /* FIXME: no "official" way to get THREAD_STRUCT_SIZE or
                          * alien stack end */
-                        while (is_thread_local_addr(self,(os_vm_address_t)self->alien_stack_pointer
-                                                    + commit_size + os_vm_page_size))
-                            commit_size += os_vm_page_size;
+                        MEMORY_BASIC_INFORMATION minfo;
+                        AVERLAX(VirtualQuery(fault_address, &minfo, sizeof minfo));
+                        commit_size =
+                            minfo.RegionSize -
+                            (fault_address - minfo.BaseAddress);
                     }
                     goto try_recommit;
                 }
