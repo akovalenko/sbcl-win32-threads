@@ -930,7 +930,8 @@ corresponds to NAME, or NIL if there is none."
                 fd (addr buf)))) fd))
 
 (defun fd-type (fd)
-  (declare (type unix-fd fd))
+  (declare (type unix-fd fd) #!+win32 (ignorable fd))
+  #!+win32 :unknown #!-win32
   (let ((fmt (logand
               sb!unix:s-ifmt
               (or (with-alien ((buf (struct wrapped_stat)))
