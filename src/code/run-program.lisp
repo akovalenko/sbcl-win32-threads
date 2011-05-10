@@ -725,7 +725,7 @@ Users Manual for details about the PROCESS structure."#-win32"
              ;; Apparently any spaces or double quotes in the arguments
              ;; need to be escaped on win32.
              #+win32 (mswin-escape-command-argument arg)))
-    (let (;; Clear various specials used by GET-DESCRIPTOR-FOR to
+    (let*(;; Clear various specials used by GET-DESCRIPTOR-FOR to
           ;; communicate cleanup info.
           *close-on-error*
           *close-in-parent*
