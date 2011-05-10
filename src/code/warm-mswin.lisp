@@ -48,6 +48,21 @@
   (startup-info (* t))
   (process-information (* t)))
 
+(defun search-path (partial-name)
+  "Searh executable using the system path"
+  (with-alien ((pathname-buffer pathname-buffer))
+    (syscall (("SearchPath" t) dword
+              system-string
+              system-string
+              system-string
+              dword
+              (* t)
+              (* t))
+             (and (plusp result)
+                  (decode-system-string pathname-buffer))
+             nil partial-name nil
+             max_path (cast pathname-buffer (* char)) nil)))
+
 (define-alien-routine ("GetExitCodeProcess" get-exit-code-process) int
   (handle unsigned) (exit-code dword :out))
 
@@ -69,7 +84,8 @@
               (slot startup-info 'stderr) (maybe-std-handle stderr)
               (slot startup-info 'flags) (if inheritp +startf-use-std-handles+ 0))
         (without-interrupts
-          (if (create-process (if searchp nil program)
+          (if (create-process (if searchp (search-path program)
+                                  program)
                               argv
                               nil nil
                               inheritp 0 nil nil
