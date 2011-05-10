@@ -2738,11 +2738,23 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                      fault_address,
                      exception_record->ExceptionInformation[0]);
 #endif
+        os_vm_size_t commit_size = os_vm_page_size;
         if (self) {
             if (local_thread_stack_address_p(fault_address)) {
                 if (handle_guard_page_triggered(&ctx, fault_address)) {
                     goto finish; /* gc safety? */
                 } else {
+                    /* Vop for alien stack allocation touches the very first
+                     * word of the new region to force commit.  We detect it
+                     * here and commit the whole active alien stack instead
+                     * of just a page. */
+                    if (fault_address == self->alien_stack_pointer) {
+                        /* FIXME: no "official" way to get THREAD_STRUCT_SIZE or
+                         * alien stack end */
+                        while (is_thread_local_addr(self,(os_vm_address_t)self->alien_stack_pointer
+                                                    + commit_size + os_vm_page_size))
+                            commit_size += os_vm_page_size;
+                    }
                     goto try_recommit;
                 }
             }
@@ -2799,7 +2811,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
     try_recommit:
 #if defined(LISP_FEATURE_X86)
         AVER(VirtualAlloc(PTR_ALIGN_DOWN(fault_address,os_vm_page_size),
-                          os_vm_page_size,
+                          commit_size,
                           MEM_COMMIT, PAGE_EXECUTE_READWRITE)
              ||(fprintf(stderr,"Unable to recommit addr %p eip 0x%08lx\n",
                         fault_address, context->Eip) &&
@@ -2809,7 +2821,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                  0)));
 #else
         AVER(VirtualAlloc(PTR_ALIGN_DOWN(fault_address,os_vm_page_size),
-                          os_vm_page_size,
+                          commit_size,
                           MEM_COMMIT, PAGE_EXECUTE_READWRITE)
              ||(fprintf(stderr,"Unable to recommit addr %p eip 0x%p\n",
                         fault_address, (void*)context->Rip) &&
