@@ -59,7 +59,7 @@
               (* t)
               (* t))
              (and (plusp result)
-                  (decode-system-string pathname-buffer))
+                  (values (decode-system-string pathname-buffer) result))
              nil partial-name nil
              max_path (cast pathname-buffer (* char)) nil)))
 
@@ -84,9 +84,8 @@
               (slot startup-info 'stderr) (maybe-std-handle stderr)
               (slot startup-info 'flags) (if inheritp +startf-use-std-handles+ 0))
         (without-interrupts
-          (if (create-process (if searchp (search-path program)
-                                  program)
-                              argv
+          (if (create-process (or (and searchp (search-path program)) program)
+                              (concatenate 'string argv (make-string max_path #\Nul))
                               nil nil
                               inheritp 0 nil nil
                               (alien-sap startup-info)
