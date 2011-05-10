@@ -28,8 +28,8 @@
       (fill-attribute dword)
       (flags dword)
       (show-window unsigned-short)
-      (nil unsigned-short)
-      (nil (* t))
+      (reserved1 unsigned-short)
+      (reserved2 (* t))
       (stdin handle)
       (stdout handle)
       (stderr handle)))
@@ -82,6 +82,8 @@
               (slot startup-info 'stdin) (maybe-std-handle stdin)
               (slot startup-info 'stdout) (maybe-std-handle stdout)
               (slot startup-info 'stderr) (maybe-std-handle stderr)
+              (slot startup-info 'reserved1) 0
+              (slot startup-info 'reserved2) nil
               (slot startup-info 'flags) (if inheritp +startf-use-std-handles+ 0))
         (without-interrupts
           (if (create-process (or (and searchp (search-path program)) program)
