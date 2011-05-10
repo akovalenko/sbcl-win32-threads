@@ -2373,6 +2373,7 @@ no guarantees of interface stability."
                "WITH-RESTARTED-SYSCALL"
                "SB-MKSTEMP"
                "UNIX-OFFSET"
+               "FD-TYPE"
 
                ;; stuff with a one-to-one mapping to Unix constructs
                "D-INO" "D-NAME" "D-NAMLEN" "D-OFF" "D-RECLEN" "DEV-T" "DIRECT"
