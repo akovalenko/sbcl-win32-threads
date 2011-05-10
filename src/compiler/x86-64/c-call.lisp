@@ -365,7 +365,10 @@
                                 (- other-pointer-lowtag))))
         (inst sub (make-ea :qword :base thread-base-tn
                            :scale 1 :index temp) delta)))
-    (load-tl-symbol-value result *alien-stack*))
+    (load-tl-symbol-value result *alien-stack*)
+    #!+win32
+    ;; Enforce memory commit (win32).
+    (inst test result (make-ea :qword :base result)))
   #!-sb-thread
   (:generator 0
     (aver (not (location= result rsp-tn)))
