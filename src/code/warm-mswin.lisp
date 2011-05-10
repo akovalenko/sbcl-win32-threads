@@ -85,7 +85,10 @@
               (slot startup-info 'flags) (if inheritp +startf-use-std-handles+ 0))
         (without-interrupts
           (if (create-process (or (and searchp (search-path program)) program)
-                              (concatenate 'string argv (make-string max_path #\Nul))
+                              (concatenate 'string argv
+                                           #.(make-string max_path
+                                                          :initial-element
+                                                          #\Nul))
                               nil nil
                               inheritp 0 nil nil
                               (alien-sap startup-info)
