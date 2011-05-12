@@ -1315,20 +1315,37 @@
 ;;; this function: then this function could become trivial and fast,
 ;;; calling FUNCTION once on the entire compacted segment buffer. --
 ;;; WHN 19990322
+;;;
+;;; Rewrote it to make one array and one call -- akovalenko
 (defun on-segment-contents-vectorly (segment function)
   (declare (type function function))
-  (let ((buffer (segment-buffer segment))
-        (i0 0))
-    (declare (type (simple-array (unsigned-byte 8)) buffer))
+  (let* ((buffer (segment-buffer segment))
+         (notes (segment-annotations segment))
+         (end (segment-final-index segment))
+         (length (- end
+                    (loop for note in notes
+                          when (filler-p note)
+                            sum (filler-bytes note)
+                          of-type index)))
+         (output (make-array length :element-type '(unsigned-byte 8)))
+         (i0 0) (destination 0))
+    (declare (type (simple-array (unsigned-byte assembly-unit))
+                   buffer output)
+             (type index length i0 destination end length))
     (flet ((frob (i0 i1)
-             (when (< i0 i1)
-               (funcall function (subseq buffer i0 i1)))))
-      (dolist (note (segment-annotations segment))
+             (loop
+               (unless (< i0 i1) (return))
+               (setf (aref output destination)
+                     (aref buffer i0)
+                     i0 (1+ i0)
+                     destination (1+ destination)))))
+      (dolist (note notes)
         (when (filler-p note)
           (let ((i1 (filler-index note)))
             (frob i0 i1)
             (setf i0 (+ i1 (filler-bytes note))))))
-      (frob i0 (segment-final-index segment))))
+      (frob i0 end)
+      (funcall function output)))
   (values))
 
 ;;; Write the code accumulated in SEGMENT to STREAM, and return the
