@@ -1329,7 +1329,7 @@
                           of-type index)))
          (output (make-array length :element-type '(unsigned-byte 8)))
          (i0 0) (destination 0))
-    (declare (type (simple-array (unsigned-byte assembly-unit))
+    (declare (type (simple-array assembly-unit)
                    buffer output)
              (type index length i0 destination end length))
     (flet ((frob (i0 i1)
