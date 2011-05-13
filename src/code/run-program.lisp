@@ -999,11 +999,14 @@ Users Manual for details about the PROCESS structure."#-win32"
       (cond ((eq object t)
              ;; No new descriptor is needed.
              (values -1 nil))
-            ((eq object nil)
+            ((or (eq object nil)
+                 (and (typep object 'broadcast-stream)
+                      (not (broadcast-stream-streams object))))
              ;; Use /dev/null.
              (multiple-value-bind
                    (fd errno)
-                 (sb-unix:unix-open dev-null
+                 (sb-unix:unix-open #-win32 #.(coerce "/dev/null" 'base-string)
+                                    #+win32 #.(coerce "nul" 'base-string)
                                     (case direction
                                       (:input sb-unix:o_rdonly)
                                       (:output sb-unix:o_wronly)
@@ -1014,8 +1017,6 @@ Users Manual for details about the PROCESS structure."#-win32"
                         #+win32 "~@<couldn't open \"nul\" device: ~2I~_~A~:>"
                         (strerror errno)))
                (push fd *close-in-parent*)
-               #+fds-are-windows-handles
-               (setf (sb-win32::inheritable-handle-p fd) t)
                (values fd nil)))
             ((eq object :stream)
              (multiple-value-bind (read-fd write-fd) (sb-unix:unix-pipe)
@@ -1092,57 +1093,60 @@ Users Manual for details about the PROCESS structure."#-win32"
                     #|
                     (when (and (null wait) #<some undetermined criterion>)
                     (error "~@<don't know how to get an fd for ~A, and so ~
-                             can't ensure that copying its data to the ~
-                             child process won't hang~:>" object))
+                    can't ensure that copying its data to the ~
+                    child process won't hang~:>" object))
                     |#
-                (let ((fd (make-temp-fd))
-                      (et (stream-element-type object)))
-                  (cond ((member et '(character base-char))
-                         (loop
-                           (multiple-value-bind
-                                 (line no-cr)
-                               (read-line object nil nil)
-                             (unless line
-                               (return))
-                             (let ((vector (string-to-octets
-                                            line
-                                            :external-format external-format)))
-                               (sb-unix:unix-write
-                                fd vector 0 (length vector)))
-                             (if no-cr
-                               (return)
-                               (sb-unix:unix-write
-                                fd #.(string #\Newline) 0 1)))))
-                        ((member et '(:default (unsigned-byte 8))
-                                 :test 'equal)
-                         (loop with buf = (make-array 256 :element-type '(unsigned-byte 8))
-                               for p = (read-sequence buf object)
-                               until (zerop p)
-                               do (sb-unix:unix-write fd buf 0 p))))
-                  (sb-unix:unix-lseek fd 0 sb-unix:l_set)
-                  (push fd *close-in-parent*)
-                  (return (values fd nil)))))
-             (:output
-              (block nil
-                ;; Similar to the :input trick above, except we
-                ;; arrange to copy data from the stream.  This is
-                ;; slightly saner than the input case, since we don't
-                ;; buffer to a file, but I think we may still lose if
-                ;; there's unflushed data in the stream buffer and we
-                ;; give the file descriptor to the child.
-                (multiple-value-bind (fd stream format)
-                    (get-stream-fd-and-external-format object :output)
-                  (declare (ignore format))
-                  (when fd
-                    (return (values fd stream))))
-                (multiple-value-bind (read-fd write-fd)
-                    (sb-unix:unix-pipe)
-                  (unless read-fd
-                    (error "couldn't create pipe: ~S" (strerror write-fd)))
-                  (copy-descriptor-to-stream read-fd object cookie
-                                             external-format)
-                  (push read-fd *close-on-error*)
-                  (push write-fd *close-in-parent*)
-                  (return (values write-fd nil)))))))
-          (t
-           (error "invalid option to RUN-PROGRAM: ~S" object))))))
+                    (let ((fd (make-temp-fd))
+                          (et (stream-element-type object)))
+                      (cond ((member et '(character base-char))
+                             (loop
+                               (multiple-value-bind
+                                     (line no-cr)
+                                   (read-line object nil nil)
+                                 (unless line
+                                   (return))
+                                 (let ((vector (string-to-octets
+                                                line
+                                                :external-format external-format)))
+                                   (sb-unix:unix-write
+                                    fd vector 0 (length vector)))
+                                 (if no-cr
+                                     (return)
+                                     (sb-unix:unix-write
+                                      fd #.(string #\Newline) 0 1)))))
+                            ((member et '(:default (unsigned-byte 8))
+                                     :test 'equal)
+                             (loop with buf = (make-array 256 :element-type '(unsigned-byte 8))
+                                   for p = (read-sequence buf object)
+                                   until (zerop p)
+                                   do (sb-unix:unix-write fd buf 0 p)))
+                            (t
+                             (error "Don't know how to copy from stream of element-type ~S"
+                                    et)))
+                      (sb-unix:unix-lseek fd 0 sb-unix:l_set)
+                      (push fd *close-in-parent*)
+                      (return (values fd nil)))))
+               (:output
+                  (block nil
+                    ;; Similar to the :input trick above, except we
+                    ;; arrange to copy data from the stream.  This is
+                    ;; slightly saner than the input case, since we don't
+                    ;; buffer to a file, but I think we may still lose if
+                    ;; there's unflushed data in the stream buffer and we
+                    ;; give the file descriptor to the child.
+                    (multiple-value-bind (fd stream format)
+                        (get-stream-fd-and-external-format object :output)
+                      (declare (ignore format))
+                      (when fd
+                        (return (values fd stream))))
+                    (multiple-value-bind (read-fd write-fd)
+                        (sb-unix:unix-pipe)
+                      (unless read-fd
+                        (error "couldn't create pipe: ~S" (strerror write-fd)))
+                      (copy-descriptor-to-stream read-fd object cookie
+                                                 external-format)
+                      (push read-fd *close-on-error*)
+                      (push write-fd *close-in-parent*)
+                      (return (values write-fd nil)))))))
+            (t
+             (error "invalid option to RUN-PROGRAM: ~S" object))))))
