@@ -929,6 +929,7 @@ corresponds to NAME, or NIL if there is none."
                 (%extract-stat-results (addr buf))
                 fd (addr buf)))) fd))
 
+#!-win32
 (defun fd-type (fd)
   (declare (type unix-fd fd) #!+win32 (ignorable fd))
   #!+win32 :unknown #!-win32
