@@ -24,6 +24,7 @@
              (,flet-name stream)
              (catch 'line-limit-abbreviation-happened
                (let ((stream (make-pretty-stream stream)))
+                 (declare (dynamic-extent stream))
                  (,flet-name stream)
                  (force-pretty-output stream)))))
        nil)))
