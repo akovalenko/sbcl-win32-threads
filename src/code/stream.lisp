@@ -1276,7 +1276,8 @@
 #!-sb-fluid
 (declaim (inline string-output-string-stream-buffer
                  string-output-string-stream-pointer
-                 string-output-string-stream-index))
+                 string-output-string-stream-index
+                 make-string-output-stream))
 (defstruct (string-output-stream
             (:include ansi-stream
                       (out #'string-ouch)
