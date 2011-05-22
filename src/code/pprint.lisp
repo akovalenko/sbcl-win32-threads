@@ -33,13 +33,16 @@
 ;;; passing thunks), but let's begin with an easy thing. For now, temporal
 ;;; streams are eating too much heap. 
 
-#!-sb-fluid (declaim (inline make-pretty-stream))
+#!-sb-fluid (declaim (inline make-pretty-stream
+                             make-custom-pretty-stream))
 
 (defstruct (pretty-stream (:include sb!kernel:ansi-stream
                                     (out #'pretty-out)
                                     (sout #'pretty-sout)
                                     (misc #'pretty-misc))
                           (:constructor make-pretty-stream (target))
+                          (:constructor make-custom-pretty-stream
+                           (&key target buffer blocks prefix suffix))
                           (:copier nil))
   ;; Where the output is going to finally go.
   (target (missing-arg) :type stream)

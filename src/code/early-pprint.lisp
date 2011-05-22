@@ -23,8 +23,20 @@
          (if (pretty-stream-p stream)
              (,flet-name stream)
              (catch 'line-limit-abbreviation-happened
-               (let ((stream (make-pretty-stream stream)))
-                 (declare (dynamic-extent stream))
+               (let* ((buffer (make-string 256))
+                      (logical-block (make-logical-block))
+                      (blocks (list logical-block))
+                      (prefix (make-string 256))
+                      (suffix (make-string 256))
+                      (stream (make-custom-pretty-stream
+                               :target stream
+                               :buffer buffer
+                               :blocks blocks
+                               :prefix prefix
+                               :suffix suffix)))
+                 (declare
+                  (dynamic-extent stream buffer logical-block
+                                  blocks prefix suffix))
                  (,flet-name stream)
                  (force-pretty-output stream)))))
        nil)))
