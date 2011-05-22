@@ -23,11 +23,13 @@
          (if (pretty-stream-p stream)
              (,flet-name stream)
              (catch 'line-limit-abbreviation-happened
-               (let* ((buffer (make-string 256))
+               (let* ((stack-buffer-size
+                       (* 4 initial-buffer-size))
+                      (buffer (make-string stack-buffer-size))
                       (logical-block (make-logical-block))
                       (blocks (list logical-block))
-                      (prefix (make-string 256))
-                      (suffix (make-string 256))
+                      (prefix (make-string stack-buffer-size))
+                      (suffix (make-string stack-buffer-size))
                       (stream (make-custom-pretty-stream
                                :target stream
                                :buffer buffer
