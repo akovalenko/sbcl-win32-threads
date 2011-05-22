@@ -302,6 +302,7 @@
 ;;; The few ...-TO-STRING functions above call this.
 (defun stringify-object (object)
   (let ((stream (make-string-output-stream)))
+    (declare (dynamic-extent stream))
     (setup-printer-state)
     (output-object object stream)
     (get-output-stream-string stream)))
