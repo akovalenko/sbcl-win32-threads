@@ -418,7 +418,6 @@ invoked. In that case it will store into PLACE and start over."
                  (progn ,@forms)
               (close ,var))))
       `(let ((,var (make-string-output-stream :element-type ,element-type)))
-         #-sb-xc-host
          (declare (dynamic-extent ,var))
          ,@decls
          (unwind-protect
