@@ -186,12 +186,16 @@ main(int argc, char *argv[])
 
     printf(";;; FormatMessage\n");
 
-    defconstant ("FORMAT_MESSAGE_ALLOCATE_BUFFER", FORMAT_MESSAGE_ALLOCATE_BUFFER);
-    defconstant ("FORMAT_MESSAGE_FROM_SYSTEM", FORMAT_MESSAGE_FROM_SYSTEM);
+    defconstant("FORMAT_MESSAGE_ALLOCATE_BUFFER", FORMAT_MESSAGE_ALLOCATE_BUFFER);
+    defconstant("FORMAT_MESSAGE_FROM_SYSTEM", FORMAT_MESSAGE_FROM_SYSTEM);
 
     printf(";;; Errors\n");
 
-    defconstant ("ERROR_ENVVAR_NOT_FOUND", ERROR_ENVVAR_NOT_FOUND);
+    defconstant("ERROR_ENVVAR_NOT_FOUND", ERROR_ENVVAR_NOT_FOUND);
+    defconstant("ERROR_ALREADY_EXISTS", ERROR_ALREADY_EXISTS);
+    defconstant("ERROR_FILE_EXISTS", ERROR_FILE_EXISTS);
+    defconstant("ERROR_FILE_NOT_FOUND", ERROR_FILE_NOT_FOUND);
+    defconstant("ERROR_ACCESS_DENIED", ERROR_ACCESS_DENIED);
 
     printf(";;; GetComputerName\n");
 
@@ -236,7 +240,6 @@ main(int argc, char *argv[])
     defconstant("STD_INPUT_HANDLE", STD_INPUT_HANDLE);
     defconstant("STD_OUTPUT_HANDLE", STD_OUTPUT_HANDLE);
     defconstant("STD_ERROR_HANDLE", STD_ERROR_HANDLE);
-
 
     /* FIXME: SB-UNIX and SB-WIN32 really need to be untangled. */
     printf("(in-package \"SB!UNIX\")\n\n");

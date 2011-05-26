@@ -1064,8 +1064,10 @@ UNIX epoch: January 1st 1970."
 
                   (let ((error-code (get-last-error)))
                     (case error-code
-                      (2 sb!unix:enoent)
-                      (183 sb!unix:eexist)
+                      (#.error_file_not_found
+                       sb!unix:enoent)
+                      ((#.error_already_exists #.error_file_exists)
+                       sb!unix:eexist)
                       (otherwise (- error-code)))))
           (progn
             (initialize-comm-timeouts handle)
