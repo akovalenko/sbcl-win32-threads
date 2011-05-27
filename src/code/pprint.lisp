@@ -34,7 +34,8 @@
 ;;; streams are eating too much heap. 
 
 #!-sb-fluid (declaim (inline make-pretty-stream
-                             make-custom-pretty-stream))
+                             make-custom-pretty-stream
+                             make-logical-block))
 
 (defstruct (pretty-stream (:include sb!kernel:ansi-stream
                                     (out #'pretty-out)
