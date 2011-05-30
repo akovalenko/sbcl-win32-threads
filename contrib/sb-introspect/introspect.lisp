@@ -192,7 +192,8 @@ If an unsupported TYPE is requested, the function will return NIL.
        ((:function :generic-function)
         (when (and (fboundp name)
                    (or (not (symbolp name))
-                       (not (macro-function name))))
+                       (not (macro-function name))
+                       (special-operator-p name)))
           (let ((fun (real-fdefinition name)))
             (when (eq (not (typep fun 'generic-function))
                       (not (eq type :generic-function)))
@@ -901,7 +902,7 @@ Experimental: interface subject to change."
                (funcall fun part))))
       (when ext
         (let ((table sb-pcl::*eql-specializer-table*))
-          (call (sb-ext:with-locked-hash-table (table)
+          (call (sb-int:with-locked-system-table (table)
                   (gethash object table)))))
       (etypecase object
         ((or bignum float sb-sys:system-area-pointer fixnum))
