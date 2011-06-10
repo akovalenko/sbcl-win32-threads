@@ -915,7 +915,7 @@ UNIX epoch: January 1st 1970."
     (buffer-length dword)
     (buffer system-area-pointer)
     (file-part system-area-pointer))
-  
+
   (define-alien-routine ("CreateFileW" %create-file)
       handle
     (name system-string)
@@ -925,7 +925,7 @@ UNIX epoch: January 1st 1970."
     (creation-disposition dword)
     (flags-and-attributes dword)
     (template-file handle))
-  
+
   (defun create-file (name desired-access share-mode
                       security-attributes creation-disposition
                       flags-and-attributes template-file)

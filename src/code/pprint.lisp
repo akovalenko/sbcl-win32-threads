@@ -31,7 +31,7 @@
 ;;; Inline constructor is normally required for dynamic-extent stack
 ;;; allocation. There is a way to achieve this without ubiquitous inlining (by
 ;;; passing thunks), but let's begin with an easy thing. For now, temporal
-;;; streams are eating too much heap. 
+;;; streams are eating too much heap.
 
 #!-sb-fluid (declaim (inline make-pretty-stream
                              make-custom-pretty-stream
