@@ -188,6 +188,7 @@ main(int argc, char *argv[])
 
     defconstant("FORMAT_MESSAGE_ALLOCATE_BUFFER", FORMAT_MESSAGE_ALLOCATE_BUFFER);
     defconstant("FORMAT_MESSAGE_FROM_SYSTEM", FORMAT_MESSAGE_FROM_SYSTEM);
+    defconstant("FORMAT_MESSAGE_MAX_WIDTH_MASK", FORMAT_MESSAGE_MAX_WIDTH_MASK);
 
     printf(";;; Errors\n");
 

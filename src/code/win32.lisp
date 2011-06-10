@@ -575,16 +575,11 @@
     (syscall (("FormatMessage" t)
               dword dword dword dword dword (* (* char)) dword dword)
              (cast-and-free amsg :free-function local-free)
-             (logior FORMAT_MESSAGE_ALLOCATE_BUFFER FORMAT_MESSAGE_FROM_SYSTEM)
+             (logior FORMAT_MESSAGE_ALLOCATE_BUFFER FORMAT_MESSAGE_FROM_SYSTEM
+                     FORMAT_MESSAGE_MAX_WIDTH_MASK)
                     0 err 0 (addr amsg) 0 0))))
     (and message
-         ;; KLUDGE: not string-trim, because #\Return character is
-         ;; unavailable while cross-compiling.
-         (subseq message 0
-                 (1+ (or (position-if-not
-                          (lambda (character)
-                            (member (char-code character) '(10 13 32)))
-                          message :from-end t) 0))))))
+         (string-right-trim '(#\Space) message))))
 
 (defmacro win32-error (func-name &optional err)
   `(let ((err-code ,(or err `(get-last-error))))
