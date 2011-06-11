@@ -1164,6 +1164,24 @@
           (signed-stack
            (inst movd res bits)))))))
 
+(define-vop (make-single-float-c)
+  (:results (res :scs (single-reg single-stack descriptor-reg)))
+  (:arg-types (:constant (signed-byte 32)))
+  (:result-types single-float)
+  (:info bits)
+  (:translate make-single-float)
+  (:policy :fast-safe)
+  (:vop-var vop)
+  (:generator 1
+    (sc-case res
+       (single-stack
+        (inst mov res bits))
+       (single-reg
+        (inst movss res (register-inline-constant :dword bits)))
+       (descriptor-reg
+        (inst mov res (logior (ash bits 32)
+                              single-float-widetag))))))
+
 (define-vop (make-double-float)
   (:args (hi-bits :scs (signed-reg))
          (lo-bits :scs (unsigned-reg)))
@@ -1180,35 +1198,37 @@
     (inst or temp lo-bits)
     (inst movd res temp)))
 
+(define-vop (make-double-float-c)
+  (:results (res :scs (double-reg)))
+  (:arg-types (:constant (signed-byte 32)) (:constant (unsigned-byte 32)))
+  (:result-types double-float)
+  (:info hi lo)
+  (:translate make-double-float)
+  (:policy :fast-safe)
+  (:vop-var vop)
+  (:generator 1
+    (inst movsd res (register-inline-constant :qword (logior (ash hi 32) lo)))))
+
 (define-vop (single-float-bits)
   (:args (float :scs (single-reg descriptor-reg)
                 :load-if (not (sc-is float single-stack))))
   (:results (bits :scs (signed-reg)))
-  (:temporary (:sc signed-stack :from :argument :to :result) stack-temp)
   (:arg-types single-float)
   (:result-types signed-num)
   (:translate single-float-bits)
   (:policy :fast-safe)
-  (:vop-var vop)
   (:generator 4
-    (sc-case bits
-      (signed-reg
-       (sc-case float
-         (single-reg
-          (inst movss stack-temp float)
-          (move bits stack-temp))
-         (single-stack
-          (move bits float))
-         (descriptor-reg
-          (move bits float)
-          (inst shr bits 32))))
-      (signed-stack
-       (sc-case float
-         (single-reg
-          (inst movss bits float)))))
-    ;; Sign-extend
-    (inst shl bits 32)
-    (inst sar bits 32)))
+     (sc-case float
+       (single-reg
+        (inst movd bits float)
+        (inst movsxd bits (reg-in-size bits :dword)))
+       (single-stack
+        (inst movsxd bits (make-ea :dword ; c.f. ea-for-sf-stack
+                                   :base rbp-tn
+                                   :disp (frame-byte-offset (tn-offset float)))))
+       (descriptor-reg
+        (move bits float)
+        (inst sar bits 32)))))
 
 (define-vop (double-float-high-bits)
   (:args (float :scs (double-reg descriptor-reg)

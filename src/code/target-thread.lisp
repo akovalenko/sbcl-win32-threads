@@ -1082,17 +1082,26 @@ have the foreground next."
 #!+sb-gc-safepoint
 (sb!alien:define-alien-routine ("do_nothing" gc-safepoint) sb!alien:void)
 
-(defun make-thread (function &key name ephemeral)
+(defun make-thread (function &key name arguments ephemeral)
   #!+sb-doc
-  "Create a new thread of NAME that runs FUNCTION. When the function
+  "Create a new thread of NAME that runs FUNCTION with the argument
+list designator provided (defaults to no argument). When the function
 returns the thread exits. The return values of FUNCTION are kept
 around and can be retrieved by JOIN-THREAD."
-  #!-sb-thread (declare (ignore function name))
+  #!-sb-thread (declare (ignore function name arguments))
   #!-sb-thread (error "Not supported in unithread builds.")
+  #!+sb-thread (assert (or (atom arguments)
+                           (null (cdr (last arguments))))
+                       (arguments)
+                       "Argument passed to ~S, ~S, is an improper list."
+                       'make-thread arguments)
   #!+sb-thread
   (let* ((thread (%make-thread :name name :%ephemeral-p ephemeral))
          (setup-sem (make-semaphore :name "Thread setup semaphore"))
          (real-function (coerce function 'function))
+         (arguments     (if (listp arguments)
+                            arguments
+                            (list arguments)))
          (initial-function
           (named-lambda initial-thread-function ()
             ;; In time we'll move some of the binding presently done in C
@@ -1156,12 +1165,10 @@ around and can be retrieved by JOIN-THREAD."
                                ;; automatically inherited. FIXME on
                                ;; other platforms?
                                (float-cold-init-or-reinit)
-                               (let ((r (cons t
+                               (setf (thread-result thread)
+                                     (cons t
                                            (multiple-value-list
-                                            (funcall real-function)))))
-                                  #!+win32
-                                  (gc-safepoint)
-                                  (setf (thread-result thread) r))
+                                            (apply real-function arguments))))
                                ;; Try to block deferrables. An
                                ;; interrupt may unwind it, but for a
                                ;; normal exit it prevents interrupt
