@@ -1075,13 +1075,6 @@ have the foreground next."
 
 ;;;; The beef
 
-;;; gc_safepoint is currently an epilogue of any foreign function
-;;; call; it is specifically designed to be called this way.  We call
-;;; gc_safepoint by defining an alien routine for "do_nothing" (no-op
-;;; C function).
-#!+sb-gc-safepoint
-(sb!alien:define-alien-routine ("do_nothing" gc-safepoint) sb!alien:void)
-
 (defun make-thread (function &key name arguments ephemeral)
   #!+sb-doc
   "Create a new thread of NAME that runs FUNCTION with the argument
