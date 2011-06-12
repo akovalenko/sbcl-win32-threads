@@ -22,7 +22,7 @@
 ;;; XXX XXX this should change to use run-compiler.sh, now that we have it
 (defun run-compiler ()
   (let ((proc (run-program "gcc" '("win32-stack-unwind.c"
-                                   "-mno-cygwin" "-shared"
+                                   "-shared"
                                    "-o" "win32-stack-unwind.dll")
                            :search t)))
     (unless (zerop (process-exit-code proc))

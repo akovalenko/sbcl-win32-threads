@@ -27,7 +27,7 @@ OS_SRC = win32-os.c x86-win32-os.c os-common.c pthreads_win32.c
 # interface, though.:-| As far as I (WHN 2002-05-19) know, no one is
 # working on one and it would be a nice thing to have.)
 
-LINKFLAGS = -Wl,-export-all-symbols -mno-cygwin -Wl,mswin.def -Wl,--large-address-aware
+LINKFLAGS = -Wl,-export-all-symbols -Wl,mswin.def -Wl,--large-address-aware
 
 
 OS_LIBS = -l ws2_32
@@ -36,7 +36,7 @@ GC_SRC = gencgc.c
 
 CFLAGS =  -g -W -Wall \
        -Wno-unused-variable -Wno-unused-function -Wno-unused-parameter \
-       -O5 -march=i686 -mtune=core2 -mno-cygwin -DWINVER=0x0501 \
+       -O5 -march=i686 -mtune=core2 -DWINVER=0x0501 \
        -D__W32API_USE_DLLIMPORT__
 
 # Don't use -fomit-frame-pointer; if C code calls back into Lisp, it
@@ -68,9 +68,9 @@ mangled-stuff.nm: mangled-stuff.exe
 OS_CLEAN_FILES = mangled-stuff.exe mangled-stuff.nm
 
 ifneq ($(findstring cygwin,$(shell $(CC) -dumpmachine)),)
-OS_LINK_FLAGS := $(OS_LINK_FLAGS) -Wl,-mno-cygwin
-OS_LIBS := $(OS_LIBS) -mno-cygwin
-CFLAGS := $(CFLAGS) -mno-cygwin
+OS_LINK_FLAGS := $(OS_LINK_FLAGS) -Wl
+OS_LIBS := $(OS_LIBS)
+CFLAGS := $(CFLAGS)
 endif
 
 # Nothing to do for after-grovel-headers.
