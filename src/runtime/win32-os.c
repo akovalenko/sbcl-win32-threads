@@ -1916,6 +1916,9 @@ static int os_supports_executable_mapping = 0;
 
 static char* non_external_self_name = "//////<SBCL executable>";
 
+WCHAR override_runtime_ucs2_name[32768];
+size_t override_runtime_ucs2_bytes = sizeof(override_runtime_ucs2_name);
+
 #ifdef LISP_FEATURE_FDS_ARE_WINDOWS_HANDLES
 #define maybe_open_osfhandle(handle,mode) (handle)
 #define maybe_get_osfhandle(fd) (fd)
@@ -1937,7 +1940,9 @@ int win32_open_for_mmap(const char* fileName)
                                  OPEN_EXISTING,0,NULL);
         } else {
             WCHAR mywpath[MAX_PATH+1];
-            DWORD gmfnResult = GetModuleFileNameW(NULL,mywpath,MAX_PATH+1);
+            BOOL override = !!override_runtime_ucs2_name[0];
+            LPWSTR wpath = override? override_runtime_ucs2_name : mywpath;
+            DWORD gmfnResult = override ? 1 : GetModuleFileNameW(NULL,mywpath,MAX_PATH+1);
             AVER(gmfnResult>0 && gmfnResult<(MAX_PATH+1));
             handle = CreateFileW(mywpath,FILE_GENERIC_READ|FILE_GENERIC_EXECUTE,
                                  FILE_SHARE_READ,NULL,
