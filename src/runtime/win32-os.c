@@ -1944,7 +1944,7 @@ int win32_open_for_mmap(const char* fileName)
             LPWSTR wpath = override? override_runtime_ucs2_name : mywpath;
             DWORD gmfnResult = override ? 1 : GetModuleFileNameW(NULL,mywpath,MAX_PATH+1);
             AVER(gmfnResult>0 && gmfnResult<(MAX_PATH+1));
-            handle = CreateFileW(mywpath,FILE_GENERIC_READ|FILE_GENERIC_EXECUTE,
+            handle = CreateFileW(wpath,FILE_GENERIC_READ|FILE_GENERIC_EXECUTE,
                                  FILE_SHARE_READ,NULL,
                                  OPEN_EXISTING,0,NULL);
 
