@@ -1140,6 +1140,14 @@
   ;; determine that this is a set closure variable, and is thus not a
   ;; good subject for flow analysis.
   (constraints nil :type (or null t #| FIXME: conset |#))
+  ;; Content-addressed indices for the CONSTRAINTs on this variable.
+  ;; These are solely used by FIND-CONSTRAINT
+  (ctype-constraints nil :type (or null hash-table))
+  (eq-constraints    nil :type (or null hash-table))
+  ;; sorted sets of constraints we like to iterate over
+  (eql-var-constraints     nil :type (or null (array t 1)))
+  (inheritable-constraints nil :type (or null (array t 1)))
+  (private-constraints     nil :type (or null (array t 1)))
   ;; Initial type of a LET variable as last seen by PROPAGATE-FROM-SETS.
   (last-initial-type *universal-type* :type ctype)
   ;; The FOP handle of the lexical variable represented by LAMBDA-VAR
