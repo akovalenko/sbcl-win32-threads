@@ -87,7 +87,9 @@
               (slot startup-info 'reserved3) nil
               (slot startup-info 'flags) (if inheritp +startf-use-std-handles+ 0))
         (without-interrupts
-          (if (create-process (or (and searchp (search-path program)) program)
+          ;; KLUDGE: pass null image file name when searchp is true.
+          ;; This way, file extension gets resolved by OS if omitted.
+          (if (create-process (if searchp nil program)
                               argv
                               nil nil
                               inheritp 0 nil nil

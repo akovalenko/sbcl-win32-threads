@@ -745,13 +745,7 @@ Users Manual for details about the PROCESS structure."#-win32"
           #-win32 *handlers-installed*
           ;; Establish PROC at this level so that we can return it.
           proc
-          #-win32
           (progname (native-namestring program))
-          #+win32
-          (progname (let ((native-namestring (native-namestring program)))
-                      (or (and search (null (pathname-directory program))
-                               (sb-win32::search-path native-namestring))
-                          native-namestring)))
           (simple-args (simplify-args (cons progname args)))
           ;; Gag.
           (cookie (list 0)))
@@ -827,7 +821,7 @@ Users Manual for details about the PROCESS structure."#-win32"
                                               (write-string arg argv)
                                               (write-char #\Space argv)))
                                           stdin stdout stderr
-                                          nil nil wait)
+                                          search nil wait)
                                          #-fds-are-windows-handles
                                          (without-gcing
                                            (spawn progname args-vec
