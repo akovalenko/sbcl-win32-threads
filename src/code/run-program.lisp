@@ -546,16 +546,16 @@ status slot."
 ;;; writing follows:
 ;;; http://msdn.microsoft.com/en-us/library/bb776391(VS.85).aspx
 #+win32
-(defun mswin-escape-command-argument (arg)
+(defun mswin-escape-command-argument (arg &optional force)
   (if (string= "" arg)
       "\"\""
       (flet ((white-space-p (character)
                (member character '(#\Return #\Newline #\Space #\Tab))))
-        (let ((has-spaces (find-if #'white-space-p arg))
+        (let ((quote (or force (find-if #'white-space-p arg)))
               (n-backslashes 0))
           (with-output-to-string (out)
             (flet ((maybe-double-quote ()
-                     (when has-spaces (write-char #\" out)))
+                     (when quote (write-char #\" out)))
                    (duplicate-backslashes (extra)
                      (loop repeat (+ extra n-backslashes)
                            do (write-char #\\ out))))
@@ -568,7 +568,7 @@ status slot."
                                (#\\ (1+ n-backslashes))
                                (t 0)))
                        (write-char character out)
-                    finally (when has-spaces (duplicate-backslashes 0)))
+                    finally (when quote (duplicate-backslashes 0)))
               (maybe-double-quote)))))))
 
 ;;; FIXME: There shouldn't be two semiredundant versions of the
@@ -729,13 +729,14 @@ Users Manual for details about the PROCESS structure."#-win32"
            ;; name... -- RMK
            (simplify-args (args)
              (loop for arg in args
-                   as escaped-arg = (escape-arg arg)
+                   as force = t then nil
+                   as escaped-arg = (escape-arg arg force)
                    collect (coerce escaped-arg 'simple-string)))
-           (escape-arg (arg)
+           (escape-arg (arg force)
              #-win32 arg
              ;; Apparently any spaces or double quotes in the arguments
              ;; need to be escaped on win32.
-             #+win32 (mswin-escape-command-argument arg)))
+             #+win32 (mswin-escape-command-argument arg force)))
     (let*(;; Clear various specials used by GET-DESCRIPTOR-FOR to
           ;; communicate cleanup info.
           *close-on-error*
