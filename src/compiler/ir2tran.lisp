@@ -134,7 +134,11 @@
           ((and indirect
                 (not (eq (node-physenv node)
                          (lambda-physenv (lambda-var-home leaf)))))
-           (vop ancestor-frame-ref node block tn (leaf-info leaf) res))
+           (let ((reffer (third (primitive-type-indirect-cell-type
+                                 (primitive-type (leaf-type leaf))))))
+             (if reffer
+                 (funcall reffer node block tn (leaf-info leaf) res)
+                 (vop ancestor-frame-ref node block tn (leaf-info leaf) res))))
           (t (emit-move node block tn res)))))
       (constant
        (emit-move node block (constant-tn leaf) res))
@@ -335,7 +339,11 @@
             ((and indirect
                   (not (eq (node-physenv node)
                            (lambda-physenv (lambda-var-home leaf)))))
-             (vop ancestor-frame-set node block tn val (leaf-info leaf)))
+             (let ((setter (fourth (primitive-type-indirect-cell-type
+                                    (primitive-type (leaf-type leaf))))))
+             (if setter
+                 (funcall setter node block tn val (leaf-info leaf))
+                 (vop ancestor-frame-set node block tn val (leaf-info leaf)))))
             (t (emit-move node block val tn))))))
       (global-var
        (aver (symbolp (leaf-source-name leaf)))
@@ -631,13 +639,15 @@
            (emit-template node block template args nil
                           (list* (block-label consequent) not-p
                                  info-args))
-           (unless (drop-thru-p if alternative)
-             (vop branch node block (block-label alternative))))
+           (if (drop-thru-p if alternative)
+               (register-drop-thru alternative)
+               (vop branch node block (block-label alternative))))
           (t
            (emit-template node block template args nil info-args)
            (vop branch-if node block (block-label consequent) flags not-p)
-           (unless (drop-thru-p if alternative)
-             (vop branch node block (block-label alternative)))))))
+           (if (drop-thru-p if alternative)
+               (register-drop-thru alternative)
+               (vop branch node block (block-label alternative)))))))
 
 ;;; Convert an IF that isn't the DEST of a conditional template.
 (defun ir2-convert-if (node block)
@@ -947,7 +957,7 @@
           ((node-tail-p node)
            (ir2-convert-tail-local-call node block fun))
           (t
-           (let ((start (block-label (lambda-block fun)))
+           (let ((start (block-trampoline (lambda-block fun)))
                  (returns (tail-set-info (lambda-tail-set fun)))
                  (lvar (node-lvar node)))
              (ecase (if returns
@@ -1827,7 +1837,9 @@
                                 (aver (not named))
                                 tn)))))))
               ((not (eq (ir2-block-next 2block) (block-info target)))
-               (vop branch last 2block (block-label target)))))))
+               (vop branch last 2block (block-label target)))
+              (t
+               (register-drop-thru target))))))
 
   (values))
 
