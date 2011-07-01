@@ -3575,7 +3575,9 @@ int win32_unix_read(FDTYPE fd, void * buf, int count)
             ok = GetOverlappedResult(handle,&overlapped,&read_bytes,waitInGOR);
             if (!ok) {
                 errorCode = GetLastError();
-                if (errorCode == ERROR_HANDLE_EOF) {
+                if (errorCode == ERROR_HANDLE_EOF ||
+                    errorCode == ERROR_BROKEN_PIPE ||
+                    errorCode == ERROR_NETNAME_DELETED) {
                     goto done_something;
                 } else {
                     if (errorCode == ERROR_OPERATION_ABORTED) {
