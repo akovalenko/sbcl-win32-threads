@@ -3557,6 +3557,7 @@ int win32_unix_read(FDTYPE fd, void * buf, int count)
         if (errorCode == ERROR_HANDLE_EOF ||
             errorCode == ERROR_BROKEN_PIPE ||
             errorCode == ERROR_NETNAME_DELETED) {
+            read_bytes = 0;
             goto done_something;
         }
         if (errorCode!=ERROR_IO_PENDING) {
@@ -3578,6 +3579,7 @@ int win32_unix_read(FDTYPE fd, void * buf, int count)
                 if (errorCode == ERROR_HANDLE_EOF ||
                     errorCode == ERROR_BROKEN_PIPE ||
                     errorCode == ERROR_NETNAME_DELETED) {
+                    read_bytes = 0;
                     goto done_something;
                 } else {
                     if (errorCode == ERROR_OPERATION_ABORTED) {
