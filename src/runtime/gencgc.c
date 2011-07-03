@@ -651,8 +651,7 @@ zero_dirty_pages(page_index_t start, page_index_t end) {
     for (i = start; i <= end; i++) {
         if (!page_table[i].need_to_zero) continue;
         for (j = i+1; (j <= end) && (page_table[j].need_to_zero); j++);
-        zero_pages_with_mmap(page_address(i), page_address(j-1));
-	os_validate_recommit(page_address(i),npage_bytes(j-i));
+        zero_pages(i,j-1);
         i = j;
     }
 
