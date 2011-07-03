@@ -660,7 +660,11 @@ zero_dirty_pages(page_index_t start, page_index_t end) {
     for (i = start; i <= end; i++) {
         if (!page_table[i].need_to_zero) continue;
         for (j = i+1; (j <= end) && (page_table[j].need_to_zero); j++);
+#ifdef LISP_FEATURE_WIN32
+        zero_pages_with_mmap(i,j-1);
+#else
         zero_pages(i,j-1);
+#endif
         i = j;
     }
 
