@@ -19,11 +19,7 @@
 #include "sbcl.h"
 #include <stdint.h>
 
-#ifdef LISP_FEATURE_GENCGC
-#define PAGE_BYTES GENCGC_PAGE_BYTES
-#else
 #define PAGE_BYTES BACKEND_PAGE_BYTES
-#endif
 
 typedef intptr_t page_index_t;
 typedef signed char generation_index_t;
