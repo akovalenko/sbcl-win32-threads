@@ -1001,7 +1001,7 @@
      :closed-flame
        (closed-flame stream)
      :read-error
-       (simple-stream-perror "couldn't read from ~S" (list stream (sb-win32:get-last-error)) errno)
+       (simple-stream-perror "couldn't read from ~S" (list stream (sb!win32:get-last-error)) errno)
      :wait-for-input
        ;; This tag is here so we can unwind outside the WITHOUT-INTERRUPTS
        ;; to wait for input if read tells us EWOULDBLOCK.
