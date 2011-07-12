@@ -240,6 +240,9 @@ search_for_core ()
                 strcpy(dotPointer,".core");
                 lookhere = exe_path;
                 core = copied_existing_filename_or_null(lookhere);
+                if (!core) {
+                    lose("can't find core file at %s\n", lookhere);
+                }
                 return core;
             }
         }
