@@ -238,9 +238,8 @@ search_for_core ()
             CHAR* dotPointer = strrchr(exe_path,'.');
             if (((dotPointer-exe_path)+5)<MAX_PATH) {
                 strcpy(dotPointer,".core");
-                lookhere = exe_path;
-                core = copied_existing_filename_or_null(lookhere);
-                return core;
+                lookhere = strdup(exe_path);
+                goto done_or_lose;
             }
         }
     }
@@ -252,6 +251,7 @@ search_for_core ()
                                1,
                                sizeof(char));
     sprintf(lookhere, "%s%s", sbcl_home, stem);
+ done_or_lose:
     core = copied_existing_filename_or_null(lookhere);
 
     if (!core) {
