@@ -1,3 +1,5 @@
+# -*- makefile -*- for the C-level run-time support for SBCL
+
 # This software is part of the SBCL system. See the README file for
 # more information.
 #
@@ -43,6 +45,13 @@ CFLAGS =  -g -W -Wall \
 # breaks backtraces to death. Understandable, though unfortunate.
 # There are some prospective workarounds to try, but for now - let EBP
 # be in place.
+
+# Anton Kovalenko:
+# The comment above is correct w.r.t. -fomit-frame-pointer. However,
+# we had to do something on it for Win64 anyway, and the solution
+# (custom frame-pointer chains) did work out. I'd prefer to stay without
+# frame pointers, to be hit by regression as much early as possibly if
+# I will merge some upstream code relying on them.
 
 OS_LINK_FLAGS = 
 
