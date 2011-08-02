@@ -29,7 +29,14 @@
        ;; never insert stepper conditions
        (sb!c:insert-step-conditions 0)
        ;; save FP and PC for alien calls -- or not
-       (sb!c:alien-funcall-saves-fp-and-pc #!+x86 3 #!-x86 0)))))
+       ;;
+       ;; (AAK) disabled saving for sb-gc-safepoint: here we got a frame chain
+       ;; independent on C's EBP, that is supposed to be good enough for
+       ;; debugging, at least until C-calling-C-directly is interesting in some
+       ;; way. If it turns out /not/ to be good enough, I hope to be among the
+       ;; first who will notice.
+       (sb!c:alien-funcall-saves-fp-and-pc #!+(and x86 (not sb-gc-safepoint)) 3
+                                           #!-(and x86 (not sb-gc-safepoint)) 0)))))
 (compile 'proclaim-target-optimization)
 
 (defun in-target-cross-compilation-mode (fun)
