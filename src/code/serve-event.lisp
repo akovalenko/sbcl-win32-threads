@@ -211,11 +211,11 @@ waiting."
              (loop for to-msec = (if (and to-sec to-usec)
                                      (+ (* 1000 to-sec) (truncate to-usec 1000))
                                      -1)
-                   when #!-win32
-                         (sb!unix:unix-simple-poll fd direction to-msec)
-                   #!+win32 (or (eq direction :output)
-                                (sb!win32:handle-listen
-                                 (sb!win32:get-osfhandle fd)))
+                   when (or #!+win32 (eq direction :output)
+                            #!+win32 (sb!win32:handle-listen
+                                      (sb!win32:get-osfhandle fd))
+                            #!-win32
+                            (sb!unix:unix-simple-poll fd direction to-msec))
                    do (return-from wait-until-fd-usable t)
                    else
                      do (when to-sec (maybe-update-timeout))
