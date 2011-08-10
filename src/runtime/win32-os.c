@@ -1808,20 +1808,20 @@ os_validate(os_vm_address_t addr, os_vm_size_t len)
         return 0;
 
     if ((mem_info.State == MEM_RESERVE) && (mem_info.RegionSize >=len)) {
-        /* It would be correct to return here. However, support for Wine
-           would be beneficial, and Wine has a strange behavior in this
-           department. It reports all memory below KERNEL32.DLL as
-           reserved, but disallows MEM_COMMIT.
-
-           Let's work around it: reserve the region we need for a second
-           time. Second reservation is documented to fail on normal NT
-           family, but it will succeed on Wine if this region is
-           actually free.
-        */
-        VirtualAlloc(addr, len, MEM_RESERVE|mwwFlag, PAGE_EXECUTE_READWRITE);
-        /* If it is wine, second call succeeds, and now the region is
-           really reserved. */
-        return addr;
+      /* It would be correct to return here. However, support for Wine
+       * is beneficial, and Wine has a strange behavior in this
+       * department. It reports all memory below KERNEL32.DLL as
+       * reserved, but disallows MEM_COMMIT.
+       *
+       * Let's work around it: reserve the region we need for a second
+       * time. The second reservation is documented to fail on normal NT
+       * family, but it will succeed on Wine if this region is
+       * actually free.
+       */
+      VirtualAlloc(addr, len, MEM_RESERVE|mwwFlag, PAGE_EXECUTE_READWRITE);
+      /* If it is wine, the second call has succeded, and now the region
+       * is really reserved. */
+      return addr;
     }
 
     if (mem_info.State == MEM_RESERVE) {
