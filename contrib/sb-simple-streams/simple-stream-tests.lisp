@@ -942,8 +942,8 @@ Nothing to see here, move along.")
                                                  :endian-swap :network-order)
                  (aref b 0))))
       (with-open-file (stream
-                       (merge-pathnames #P"lp491087.txt"
-                                        *test-path*) :class 'file-simple-stream)
+                       (merge-pathnames #P"lp491087.txt" *test-path*)
+                       :class 'file-simple-stream)
         (let* ((start (file-position stream))
                (integer (read-big-int stream))
                (end (file-position stream)))

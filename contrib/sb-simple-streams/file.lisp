@@ -152,18 +152,17 @@
 
 (defmethod device-close ((stream file-simple-stream) abort)
   (with-stream-class (file-simple-stream stream)
-    (let ((fd (or (sm input-handle stream) (sm output-handle stream))))
-      (block nil
+    (let ((fd (or (sm input-handle stream) (sm output-handle stream)))
+          (closed nil))
       (when (sb-int:fixnump fd)
         (cond (abort
                (when (any-stream-instance-flags stream :output)
-                   ;; can't delet open file on win32
-                   #+win32 (sb-unix:unix-close fd)
-                   (revert-file (sm filename stream) (sm original stream))
-                   #+win32 (return)))
+                 #+win32 (progn (sb-unix:unix-close fd) (setf closed t))
+                 (revert-file (sm filename stream) (sm original stream))))
               (t
                (when (sm delete-original stream)
                  (delete-original (sm filename stream) (sm original stream)))))
+        (unless closed
           (sb-unix:unix-close fd)))
       (when (sm buffer stream)
         (free-buffer (sm buffer stream))
@@ -228,15 +227,17 @@
           (let ((buffer
                  #-win32
                  (handler-case
-                  (sb-posix:mmap nil size prot sb-posix::MAP-SHARED fd 0)
-                  (sb-posix:syscall-error nil)
-                  (error nil))
+                     (sb-posix:mmap nil size prot sb-posix::MAP-SHARED fd 0)
+                   (sb-posix:syscall-error nil))
                  #+win32
-                 (let ((mapping (sb-win32::create-file-mapping fd nil 2 0 size nil)))
+                 (let ((mapping
+                        (sb-win32:create-file-mapping
+                         (sb-win32:get-osfhandle fd) nil 2 0 size nil)))
                    (typecase mapping
                      ((integer -1 0) nil)
-                     (t (let ((sap (prog1 (sb-win32::map-view-of-file mapping 4 0 0 size)
-                                     (sb-win32::close-handle mapping))))
+                     (t (let ((sap (prog1 (sb-win32:map-view-of-file
+                                           mapping 4 0 0 size)
+                                     (sb-win32:close-handle mapping))))
                           (and (not (zerop (sb-sys:sap-int sap))) sap)))))))
             (when (null buffer)
               (sb-unix:unix-close fd)
@@ -257,7 +258,7 @@
                (melding-stream stream) efmt 'mapped))
             (sb-ext:finalize stream
               (lambda ()
-                #+win32 (sb-win32::unmap-view-of-file buffer)
+                #+win32 (sb-win32:unmap-view-of-file buffer)
                 #-win32 (sb-posix:munmap buffer size)
                 (format *terminal-io* "~&;;; ** unmapped ~S" buffer))
               :dont-save t))))
@@ -267,7 +268,7 @@
 (defmethod device-close ((stream mapped-file-simple-stream) abort)
   (with-stream-class (mapped-file-simple-stream stream)
     (when (sm buffer stream)
-      #+win32 (sb-win32::unmap-view-of-file (sm buffer stream))
+      #+win32 (sb-win32:unmap-view-of-file (sm buffer stream))
       #-win32 (sb-posix:munmap (sm buffer stream) (sm buf-len stream))
       (setf (sm buffer stream) nil))
     (sb-unix:unix-close (or (sm input-handle stream) (sm output-handle stream))))
