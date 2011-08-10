@@ -827,12 +827,10 @@ UNIX epoch: January 1st 1970."
         (values to-place 0)
         (values -1 (- (get-last-error))))))
 
-;;; File mapping support routines
-
-;; CreateFileMapping + MapViewOfFile are like mmap() together.
-(define-alien-routine ( #!+sb-unicode "CreateFileMappingW" #!-sb-unicode
-                                      "CreateFileMappingA"
-                                      create-file-mapping)
+;; File mapping support routines
+(define-alien-routine (#!+sb-unicode "CreateFileMappingW"
+                       #!-sb-unicode "CreateFileMappingA"
+                       create-file-mapping)
     handle
   (handle handle)
   (security-attributes (* t))
@@ -849,12 +847,9 @@ UNIX epoch: January 1st 1970."
   (offset-low dword)
   (size dword))
 
-;; UnmapViewOfFile is like munmap(), but lacks length parameter.
-;; Therefore partial unmapping is not supported.
 (define-alien-routine ("UnmapViewOfFile" unmap-view-of-file) bool
   (address (* t)))
 
-;; FlushViewOfFile is like msync()
 (define-alien-routine ("FlushViewOfFile" flush-view-of-file) bool
   (address (* t))
   (length dword))
