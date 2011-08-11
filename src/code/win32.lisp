@@ -874,11 +874,14 @@ UNIX epoch: January 1st 1970."
 (defconstant file-share-read #x01)
 (defconstant file-share-write #x02)
 
-;; CreateFile (the real file-opening workhorse)
+;; CreateFile (the real file-opening workhorse).
+;; For unicode builds, see another variant of it, which is more complicated.
 #!-sb-unicode
-(define-alien-routine ("CreateFileA" create-file)
+(define-alien-routine (#!+sb-unicode "CreateFileW"
+                       #!-sb-unicode "CreateFileA"
+                       create-file)
     handle
-  (name system-string)
+  (name (c-string #!+sb-unicode #!+sb-unicode :external-format :ucs-2))
   (desired-access dword)
   (share-mode dword)
   (security-attributes (* t))
@@ -956,19 +959,7 @@ UNIX epoch: January 1st 1970."
 
 (defconstant file-flag-overlapped #x40000000)
 (defconstant file-flag-sequential-scan #x8000000)
-
-
-;; GetFileAttribute is like a tiny subset of fstat(),
-;; enough to distinguish directories from anything else.
 (defconstant invalid-file-attributes (mod -1 (ash 1 32)))
-
-(define-alien-routine ( #!+sb-unicode
-                        "GetFileAttributesW"
-                        #!-sb-unicode
-                        "GetFileAttributesA"
-                        get-file-attributes)
-    dword
-  (name (c-string #!+sb-unicode #!+sb-unicode :external-format :ucs-2)))
 
 ;; GetFileSizeEx doesn't work with block devices :[
 (define-alien-routine ("GetFileSizeEx" get-file-size-ex)
@@ -982,6 +973,14 @@ UNIX epoch: January 1st 1970."
 (defconstant file-type-pipe 3)
 (defconstant file-type-remote 4)
 (defconstant file-type-unknown 0)
+
+;; GetFileAttribute is like a tiny subset of fstat(),
+;; enough to distinguish directories from anything else.
+(define-alien-routine (#!+sb-unicode "GetFileAttributesW"
+                       #!-sb-unicode "GetFileAttributesA"
+                       get-file-attributes)
+    dword
+  (name (c-string #!+sb-unicode #!+sb-unicode :external-format :ucs-2)))
 
 (define-alien-routine ("GetFileType" get-file-type)
     dword

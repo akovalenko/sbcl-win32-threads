@@ -298,20 +298,20 @@
                            #!+win32 uid))
           #!+win32
           ;; On win32, stat regards UNC pathnames and device names as
-          ;; nonexisting, so we check once more with windows API.
+          ;; nonexisting, so we check once more with the native API.
           (unless existsp
-            (when (sb!win32:close-handle
-                   (sb!win32:create-file filename 0
-                                         (logior sb!win32::file-share-read
-                                                 sb!win32::file-share-write) nil
-                                                 sb!win32:file-open-existing
-                                                 0 0))
-              (setf existsp t)
-              (let* ((attributes (sb!win32:get-file-attributes filename))
-                     (valid-attributes
-                      (/= attributes sb!win32:invalid-file-attributes)))
-                (when valid-attributes
-                  (setf mode (if (logbitp 4 attributes) sb!unix:s-ifdir 0))))))
+            (setf existsp
+                  (let ((handle (sb!win32:create-file
+                                 filename 0 0 nil
+                                 sb!win32:file-open-existing
+                                 0 0)))
+                    (when (/= -1 handle)
+                      (setf mode
+                            (or mode
+                                (if (logbitp 4
+                                             (sb!win32:get-file-attributes filename))
+                                    sb!unix:s-ifdir 0)))
+                      (progn (sb!win32:close-handle handle) t)))))
           (if existsp
               (case query-for
                 (:existence (nth-value
