@@ -795,10 +795,12 @@ implementation it is ~S." *default-package-use-list*)
                  (values symbol where)
                  (let ((symbol-name
                          (if (or (base-string-p name) ; already a base-string
-                                 (find-if 'extended-char-p name
-                                          :end length)) ; /or/ can't be base-stringified
+                                 ; or can't become a base-string at all
+                                 (position-if-not 'base-char-p name
+                                                  :end length))
                              (subseq name 0 length)
-                             (replace (make-string length :element-type 'base-char) name))))
+                             (replace (make-string (or length (length name))
+                                                   :element-type 'base-char) name))))
                    (with-single-package-locked-error
                        (:package package "interning ~A" symbol-name)
                      (let ((symbol (make-symbol symbol-name)))
