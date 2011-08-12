@@ -794,6 +794,8 @@ implementation it is ~S." *default-package-use-list*)
              (if where
                  (values symbol where)
                  (let ((symbol-name (subseq name 0 length)))
+                   (when (every 'base-char-p symbol-name)
+                     (setf symbol-name (coerce symbol-name 'simple-base-string)))
                    (with-single-package-locked-error
                        (:package package "interning ~A" symbol-name)
                      (let ((symbol (make-symbol symbol-name)))
