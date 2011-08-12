@@ -793,11 +793,12 @@ implementation it is ~S." *default-package-use-list*)
              (setf (values symbol where) (find-symbol* name length package))
              (if where
                  (values symbol where)
-                 (let ((symbol-name (subseq name 0 length)))
-                   (when (every 'base-char-p symbol-name)
-                     (setf symbol-name
-                           (replace (make-string length :element-type 'base-char)
-                                    symbol-name)))
+                 (let ((symbol-name
+                         (if (or (base-string-p name) ; already a base-string
+                                 (find-if 'extended-char-p name
+                                          :end length)) ; /or/ can't be base-stringified
+                             (subseq name 0 length)
+                             (replace (make-string length :element-type 'base-char) name))))
                    (with-single-package-locked-error
                        (:package package "interning ~A" symbol-name)
                      (let ((symbol (make-symbol symbol-name)))
