@@ -21,14 +21,10 @@
                ;; "X:" style, saved as X
                (values (string (char namestr start)) (+ start 2)))
               ((and (member c0 '(#\/ #\\)) (eql c0 c1) (>= end (+ start 3)))
-               ;; "//UNC" style, saved as UNC
-               ;; FIXME: at unparsing time we tell these apart by length,
-               ;; which seems a bit lossy -- presumably one-letter UNC
-               ;; hosts can exist as well. That seems a less troublesome
-               ;; restriction than disallowing UNC hosts whose names match
-               ;; logical pathname hosts... Time will tell -- both LispWorks
-               ;; and ACL use the host component for UNC hosts, so maybe
-               ;; we will end up there as well.
+               ;; "//UNC" style, saved as :UNC device, with host and share
+               ;; becoming directory components.
+               (values :unc (+ start 1))
+               #-(and)
                (let ((p (or (position c0 namestr :start (+ start 3) :end end)
                             end)))
                  (values (subseq namestr (+ start 2) p) p)))
@@ -188,6 +184,8 @@
         (directory (pathname-directory pathname)))
     (cond ((or (null device) (eq device :unspecific))
            "")
+          ((eq device :unc)
+           (if native "\\" "/"))
           ((and (= 1 (length device)) (alpha-char-p (char device 0)))
            (concatenate 'simple-string device ":"))
           ((and (consp directory) (eq :relative (car directory)))
