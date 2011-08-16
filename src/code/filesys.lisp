@@ -581,7 +581,8 @@ system. HOST argument is ignored by SBCL."
    (parse-native-namestring
     (or (user-homedir-namestring)
         #!+win32
-        (sb!win32::get-folder-namestring sb!win32::csidl_profile))
+        (sb!win32::get-folder-namestring sb!win32::csidl_profile
+                                         :short t))
     #!-win32 sb!impl::*unix-host*
     #!+win32 sb!impl::*win32-host*
     *default-pathname-defaults*

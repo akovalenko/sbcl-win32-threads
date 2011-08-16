@@ -589,15 +589,30 @@
             err-code
             (get-last-error-message err-code))))
 
-(defun get-folder-namestring (csidl)
+;;; Until long file name are fully supported, use a workaround for
+;;; (user-homedir-pathname): return the 8.3 name of user profile directory, so
+;;; overstepping MAX_PATH is much less likely to occur in practice.
+;;;
+;;; When/if this kludge will go away because of LFN support, don't delete
+;;; get-short-file-name, as it is potentially useful by itself.
+
+(defun get-short-file-name (name)
+  (with-alien ((apath pathname-buffer))
+    (syscall (("GetShortPathName" t) dword system-string (* char) dword)
+             (decode-system-string apath) name (alien-sap apath) max_path)))
+
+(defun get-folder-namestring (csidl &key short)
   "http://msdn.microsoft.com/library/en-us/shellcc/platform/shell/reference/functions/shgetfolderpath.asp"
   (with-alien ((apath pathname-buffer))
     (syscall (("SHGetFolderPath" t) int handle int handle dword (* char))
-             (concatenate 'string (decode-system-string apath) "\\")
+             (let ((decoded (decode-system-string apath)))
+               (concatenate 'string (if short
+                                        (get-short-file-name decoded)
+                                        decoded) "\\"))
              0 csidl 0 0 (cast apath (* char)))))
 
-(defun get-folder-pathname (csidl)
-  (parse-native-namestring (get-folder-namestring csidl)))
+(defun get-folder-pathname (csidl &key short)
+  (parse-native-namestring (get-folder-namestring csidl :short short)))
 
 (defun sb!unix:posix-getcwd ()
   (with-alien ((apath pathname-buffer))
