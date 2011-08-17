@@ -28,6 +28,9 @@
                    #!-sb-unicode c-string
                    #!+sb-unicode (c-string :external-format :ucs-2))
 
+(define-alien-type tchar #!-sb-unicode char
+                         #!+sb-unicode (unsigned 16))
+
 (defconstant default-environment-length 1024)
 
 ;;; HANDLEs are actually pointers, but an invalid handle is -1 cast
@@ -524,8 +527,23 @@
 (defmacro make-system-buffer (x)
  `(make-alien char #!+sb-unicode (ash ,x 1) #!-sb-unicode ,x))
 
+(defmacro with-handle ((var initform
+                            &key (close-operator 'close-handle))
+                            &body body)
+  `(without-interrupts
+       (block nil
+         (let ((,var ,initform))
+           (unwind-protect
+                (with-local-interrupts
+                    ,@body)
+             (,close-operator ,var))))))
+
 (define-alien-type pathname-buffer
     (array char #.(ash (1+ max_path) #!+sb-unicode 1 #!-sb-unicode 0)))
+
+(define-alien-type long-pathname-buffer
+    #!+sb-unicode (array char 65536)
+    #!-sb-unicode pathname-buffer)
 
 (defmacro decode-system-string (alien)
   `(cast (cast ,alien (* char)) system-string))
@@ -655,6 +673,15 @@
 ;; http://msdn.microsoft.com/library/en-us/sysinfo/base/filetime_str.asp?
 (define-alien-type FILETIME (sb!alien:unsigned 64))
 
+;; FILETIME definition above is almost correct (on little-endian systems),
+;; except for the wrong alignment if used in another structure: the real
+;; definition is a struct of two dwords.
+;; Let's define FILETIME-MEMBER for that purpose; it will be useful with
+;; GetFileAttributesEx and FindFirstFileExW.
+
+(define-alien-type FILETIME-MEMBER
+    (struct nil (low dword) (high dword)))
+
 (defmacro with-process-times ((creation-time exit-time kernel-time user-time)
                               &body forms)
   `(with-alien ((,creation-time filetime)
@@ -719,6 +746,9 @@
 ;;            (addr epoch)
 ;;            (addr filetime)))
 (defconstant +unix-epoch-filetime+ 116444736000000000)
+(defconstant +filetime-unit+ (* 100ns-per-internal-time-unit
+                                internal-time-units-per-second))
+(defconstant +common-lisp-epoch-filetime-seconds+ 9435484800)
 
 #!-sb-fluid
 (declaim (inline get-time-of-day))
@@ -729,10 +759,121 @@ UNIX epoch: January 1st 1970."
     (syscall ("GetSystemTimeAsFileTime" void (* filetime))
              (multiple-value-bind (sec 100ns)
                  (floor (- system-time +unix-epoch-filetime+)
-                        (* 100ns-per-internal-time-unit
-                           internal-time-units-per-second))
+                        +filetime-unit+)
                (values sec (floor 100ns 10)))
              (addr system-time))))
+
+(declaim (inline filetime-to-universal-time))
+(defun filetime-to-universal-time (filetime)
+  (+ 2208988800
+     (floor (- filetime +unix-epoch-filetime+)
+            (* 100ns-per-internal-time-unit
+               internal-time-units-per-second))))
+
+;; Data for FindFirstFileExW and GetFileAttributesEx
+(define-alien-type find-data
+    (struct nil
+            (attributes dword)
+            (ctime filetime-member)
+            (atime filetime-member)
+            (mtime filetime-member)
+            (size-low dword)
+            (size-high dword)
+            (reserved0 dword)
+            (reserved1 dword)
+            (long-name (array tchar #.max_path))
+            (short-name (array tchar 14))))
+
+(define-alien-type file-attributes
+    (struct nil
+            (attributes dword)
+            (ctime filetime-member)
+            (atime filetime-member)
+            (mtime filetime-member)
+            (size-low dword)
+            (size-high dword)))
+
+(define-alien-routine ("FindClose" find-close) lispbool
+  (handle handle))
+
+(defun attribute-file-kind (dword)
+  (if (logtest file-attribute-directory dword)
+      :directory :file))
+
+(defun native-file-write-date (native-namestring)
+  "Return file write date, represented as CL universal time."
+  (with-alien ((file-attributes file-attributes))
+    (syscall (("GetFileAttributesEx" t) lispbool
+              system-string int file-attributes)
+             (and result
+                  (- (floor (deref (cast (slot file-attributes 'mtime)
+                                         (* filetime)))
+                            +filetime-unit+)
+                     +common-lisp-epoch-filetime-seconds+))
+             native-namestring 0 file-attributes)))
+
+(defun native-probe-file-name (native-namestring)
+  "Return truename \(using GetLongPathName\) as primary value,
+File kind as secondary.
+
+Unless kind is false, null truename shouldn't be interpreted as error or file
+absense."
+  (with-alien ((file-attributes file-attributes)
+               (buffer long-pathname-buffer))
+    (syscall (("GetFileAttributesEx" t) lispbool
+              system-string int file-attributes)
+             (values
+              (syscall (("GetLongPathName" t) dword
+                        system-string long-pathname-buffer dword)
+                       (and (plusp result) (decode-system-string buffer))
+                       native-namestring buffer 32768)
+              (and result
+                   (attribute-file-kind
+                    (slot file-attributes 'attributes))))
+             native-namestring 0 file-attributes)))
+
+(defun native-delete-file (native-namestring)
+  (syscall* (("DeleteFile" t) system-string) t native-namestring))
+
+(defun native-delete-directory (native-namestring)
+  (syscall* (("RemoveDirectory" t) system-string) t native-namestring))
+
+(defun native-call-with-directory-iterator (function namestring errorp)
+  (declare (type (or null string) namestring)
+           (function function))
+  (when namestring
+    (with-alien ((find-data find-data))
+      (with-handle (handle (syscall (("FindFirstFile" t) handle
+                                     system-string find-data)
+                                    (if (eql result invalid-handle)
+                                        (if errorp
+                                            (win32-error "FindFirstFile")
+                                            (return))
+                                        result)
+                                    (concatenate 'string
+                                                 namestring "*.*")
+                                    find-data)
+                    :close-operator find-close)
+        (let ((more t))
+          (dx-flet ((one-iter ()
+                      (tagbody
+                       :next
+                         (when more
+                           (let ((name (decode-system-string
+                                        (slot find-data 'long-name)))
+                                 (attributes (slot find-data 'attributes)))
+                             (setf more
+                                   (syscall (("FindNextFile" t) lispbool
+                                             handle find-data) result
+                                             handle find-data))
+                             (cond ((equal name ".") (go :next))
+                                   ((equal name "..") (go :next))
+                                   (t
+                                    (return-from one-iter
+                                      (values name
+                                              (attribute-file-kind
+                                               attributes))))))))))
+            (funcall function #'one-iter)))))))
 
 ;; SETENV
 ;; The SetEnvironmentVariable function sets the contents of the specified
@@ -875,8 +1016,6 @@ UNIX epoch: January 1st 1970."
 (defconstant file-share-write #x02)
 
 ;; CreateFile (the real file-opening workhorse).
-;; For unicode builds, see another variant of it, which is more complicated.
-#!-sb-unicode
 (define-alien-routine (#!+sb-unicode "CreateFileW"
                        #!-sb-unicode "CreateFileA"
                        create-file)
@@ -888,59 +1027,6 @@ UNIX epoch: January 1st 1970."
   (creation-disposition dword)
   (flags-and-attributes dword)
   (template-file handle))
-
-#!+sb-unicode
-(progn
-  ;; Unicode API supports file names longer than MAX_PATH, which are
-  ;; distinguished by "\\\\?\\" prefix.
-
-  ;; CreateFileW passes such paths directly to a kernel call; if we allow it to
-  ;; work on the prefixed file name directly, components like ".." and "." would
-  ;; not be interpreted. There is a separate function, GetFullPathNameW, that
-  ;; parses pathname components and returns a "raw" pathname.
-
-  ;; Hence on Unicode builds we define create-file as a wrapper calling
-  ;; GetFullPathNameW for any long file name before actually opening it.
-
-  ;; See "Naming Files, Paths, and Namespaces":
-  ;; http://msdn.microsoft.com/en-us/library/aa365247(v=vs.85).aspx
-
-  (declaim (inline get-full-path-name %create-file))
-
-  (define-alien-routine ("GetFullPathNameW" get-full-path-name)
-      dword
-    (name system-string)
-    (buffer-length dword)
-    (buffer system-area-pointer)
-    (file-part system-area-pointer))
-
-  (define-alien-routine ("CreateFileW" %create-file)
-      handle
-    (name system-string)
-    (desired-access dword)
-    (share-mode dword)
-    (security-attributes (* t))
-    (creation-disposition dword)
-    (flags-and-attributes dword)
-    (template-file handle))
-
-  (defun create-file (name desired-access share-mode
-                      security-attributes creation-disposition
-                      flags-and-attributes template-file)
-    (unless (< (length name) max_path)
-      (setf name
-            (with-alien ((full-name-buffer (array char 65536)))
-              (case (get-full-path-name
-                     (concatenate 'string "\\\\?\\" name)
-                     32768 (alien-sap full-name-buffer) (int-sap 0))
-                (0 (return-from create-file invalid-handle))
-                (otherwise
-                   ;; When source file name is prefixed, GetFullPathNameW
-                   ;; prepends the same prefix to its result.
-                   (cast full-name-buffer system-string))))))
-    (%create-file name desired-access share-mode
-                  security-attributes creation-disposition
-                  flags-and-attributes template-file)))
 
 (defconstant file-attribute-readonly #x1)
 (defconstant file-attribute-hidden #x2)
