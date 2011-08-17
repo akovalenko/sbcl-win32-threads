@@ -154,6 +154,7 @@ corresponds to NAME, or NIL if there is none."
 ;;; If the O_CREAT flag is specified, then the file is created with a
 ;;; permission of argument MODE if the file doesn't exist. An integer
 ;;; file descriptor is returned by UNIX-OPEN.
+#!-win32
 (defun unix-open (path flags mode)
   (declare (type unix-pathname path)
            (type fixnum flags)

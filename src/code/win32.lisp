@@ -890,3 +890,16 @@ absense."
 
 (define-alien-routine ("CloseHandle" close-handle) bool
   (handle handle))
+
+(define-alien-routine (#!+sb-unicode "_wopen"
+                       #!-sb-unicode "_open"
+                       msvcrt-open) int
+  (name system-string)
+  (flags int)
+  (mode int))
+
+(defun sb!unix:unix-open (path flags mode)
+  (let ((fd (msvcrt-open path flags mode)))
+    (if (minusp fd)
+        (values nil (get-errno))
+        (values fd 0))))
