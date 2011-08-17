@@ -25,6 +25,9 @@
                    #!-sb-unicode c-string
                    #!+sb-unicode (c-string :external-format :ucs-2))
 
+(define-alien-type tchar #!-sb-unicode char
+                         #!+sb-unicode (unsigned 16))
+
 (defconstant default-environment-length 1024)
 
 ;;; HANDLEs are actually pointers, but an invalid handle is -1 cast
@@ -377,6 +380,16 @@
 (defmacro make-system-buffer (x)
  `(make-alien char #!+sb-unicode (ash ,x 1) #!-sb-unicode ,x))
 
+(define-alien-type pathname-buffer
+    (array char #.(ash (1+ max_path) #!+sb-unicode 1 #!-sb-unicode 0)))
+
+(define-alien-type long-pathname-buffer
+    #!+sb-unicode (array char 65536)
+    #!-sb-unicode pathname-buffer)
+
+(defmacro decode-system-string (alien)
+  `(cast (cast ,alien (* char)) system-string))
+
 ;;; FIXME: The various FOO-SYSCALL-BAR macros, and perhaps some other
 ;;; macros in this file, are only used in this file, and could be
 ;;; implemented using SB!XC:DEFMACRO wrapped in EVAL-WHEN.
@@ -571,6 +584,9 @@
 ;;            (addr epoch)
 ;;            (addr filetime)))
 (defconstant +unix-epoch-filetime+ 116444736000000000)
+(defconstant +filetime-unit+ (* 100ns-per-internal-time-unit
+                                internal-time-units-per-second))
+(defconstant +common-lisp-epoch-filetime-seconds+ 9435484800)
 
 #!-sb-fluid
 (declaim (inline get-time-of-day))
@@ -581,10 +597,79 @@ UNIX epoch: January 1st 1970."
     (syscall (("GetSystemTimeAsFileTime" 4) void (* filetime))
              (multiple-value-bind (sec 100ns)
                  (floor (- system-time +unix-epoch-filetime+)
-                        (* 100ns-per-internal-time-unit
-                           internal-time-units-per-second))
+                        +filetime-unit+)
                (values sec (floor 100ns 10)))
              (addr system-time))))
+
+(declaim (inline filetime-to-universal-time))
+(defun filetime-to-universal-time (filetime)
+  (+ 2208988800
+     (floor (- filetime +unix-epoch-filetime+)
+            (* 100ns-per-internal-time-unit
+               internal-time-units-per-second))))
+
+;; Data for FindFirstFileExW and GetFileAttributesEx
+(define-alien-type find-data
+    (struct nil
+            (attributes dword)
+            (ctime filetime-member)
+            (atime filetime-member)
+            (mtime filetime-member)
+            (size-low dword)
+            (size-high dword)
+            (reserved0 dword)
+            (reserved1 dword)
+            (long-name (array tchar #.max_path))
+            (short-name (array tchar 14))))
+
+(define-alien-type file-attributes
+    (struct nil
+            (attributes dword)
+            (ctime filetime-member)
+            (atime filetime-member)
+            (mtime filetime-member)
+            (size-low dword)
+            (size-high dword)))
+
+(defun attribute-file-kind (dword)
+  (if (logtest file-attribute-directory dword)
+      :directory :file))
+
+(defun native-file-write-date (native-namestring)
+  "Return file write date, represented as CL universal time."
+  (with-alien ((file-attributes file-attributes))
+    (syscall (("GetFileAttributesEx" t) bool
+              system-string int file-attributes)
+             (- (floor
+                 (deref
+                  (cast (slot file-attributes 'mtime) (* filetime)))
+                 +filetime-unit+)
+                +common-lisp-epoch-filetime-seconds+)
+             native-namestring 0 file-attributes)))
+
+(defun native-probe-file-name (native-namestring)
+  "Return truename \(using GetLongPathName\) as primary value,
+File kind as secondary.
+
+Unless kind is false, null truename shouldn't be interpreted as error or file
+absense."
+  (with-alien ((file-attributes file-attributes)
+               (buffer long-pathname-buffer))
+    (syscall (("GetFileAttributesEx" t) bool
+              system-string int file-attributes)
+             (values
+              (syscall (("GetLongPathName" t) dword
+                        system-string long-pathname-buffer dword)
+                       (decode-system-string buffer)
+                       native-namestring buffer 32768)
+              (attribute-file-kind (slot file-attributes 'attributes)))
+             native-namestring 0 file-attributes)))
+
+(defun native-delete-file (native-namestring)
+  (syscall* (("DeleteFile" t) system-string) t native-namestring))
+
+(defun native-delete-directory (native-namestring)
+  (syscall* (("RemoveDirectory" t) system-string) t native-namestring))
 
 ;; SETENV
 ;; The SetEnvironmentVariable function sets the contents of the specified
