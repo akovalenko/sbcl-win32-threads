@@ -37,6 +37,27 @@
 ;;; to a pointer.
 (defconstant invalid-handle -1)
 
+;;; Various constants (maybe all of them should be moved here)
+(defconstant file-attribute-readonly #x1)
+(defconstant file-attribute-hidden #x2)
+(defconstant file-attribute-system #x4)
+(defconstant file-attribute-directory #x10)
+(defconstant file-attribute-archive #x20)
+(defconstant file-attribute-device #x40)
+(defconstant file-attribute-normal #x80)
+(defconstant file-attribute-temporary #x100)
+(defconstant file-attribute-sparse #x200)
+(defconstant file-attribute-reparse-point #x400)
+(defconstant file-attribute-reparse-compressed #x800)
+(defconstant file-attribute-reparse-offline #x1000)
+(defconstant file-attribute-not-content-indexed #x2000)
+(defconstant file-attribute-encrypted #x4000)
+
+(defconstant file-flag-overlapped #x40000000)
+(defconstant file-flag-sequential-scan #x8000000)
+
+(defconstant invalid-file-attributes (mod -1 (ash 1 32)))
+
 ;;;; Error Handling
 
 ;;; Retrieve the calling thread's last-error code value.  The
@@ -1029,25 +1050,6 @@ absense."
   (creation-disposition dword)
   (flags-and-attributes dword)
   (template-file handle))
-
-(defconstant file-attribute-readonly #x1)
-(defconstant file-attribute-hidden #x2)
-(defconstant file-attribute-system #x4)
-(defconstant file-attribute-directory #x10)
-(defconstant file-attribute-archive #x20)
-(defconstant file-attribute-device #x40)
-(defconstant file-attribute-normal #x80)
-(defconstant file-attribute-temporary #x100)
-(defconstant file-attribute-sparse #x200)
-(defconstant file-attribute-reparse-point #x400)
-(defconstant file-attribute-reparse-compressed #x800)
-(defconstant file-attribute-reparse-offline #x1000)
-(defconstant file-attribute-not-content-indexed #x2000)
-(defconstant file-attribute-encrypted #x4000)
-
-(defconstant file-flag-overlapped #x40000000)
-(defconstant file-flag-sequential-scan #x8000000)
-(defconstant invalid-file-attributes (mod -1 (ash 1 32)))
 
 ;; GetFileSizeEx doesn't work with block devices :[
 (define-alien-routine ("GetFileSizeEx" get-file-size-ex)
