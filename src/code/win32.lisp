@@ -682,10 +682,12 @@ absense."
              native-namestring 0 file-attributes)))
 
 (defun native-delete-file (native-namestring)
-  (syscall* (("DeleteFile" t) system-string) t native-namestring))
+  (syscall (("DeleteFile" t) lispbool system-string)
+           result native-namestring))
 
 (defun native-delete-directory (native-namestring)
-  (syscall* (("RemoveDirectory" t) system-string) t native-namestring))
+  (syscall (("RemoveDirectory" t) lispbool system-string)
+           result native-namestring))
 
 (defun native-call-with-directory-iterator (function namestring errorp)
   (declare (type (or null string) namestring)

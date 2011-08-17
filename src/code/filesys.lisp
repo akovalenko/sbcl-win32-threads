@@ -291,27 +291,31 @@
                  (simple-file-perror note-format pathname errno)
                  (return-from query-file-system nil))))
       (let ((filename (native-namestring pathname :as-file t)))
+        #!+win32
+        (case query-for
+          ((:existence :truename)
+           (multiple-value-bind (file kind)
+               (sb!win32::native-probe-file-name filename)
+             (when (and (not file) kind)
+               (setf file filename))
+             (if file
+                 (values
+                  (parse-native-namestring
+                   file
+                   (pathname-host pathname)
+                   (sane-default-pathname-defaults)
+                   :as-directory (eq :directory kind)))
+                 (fail "couldn't resolve ~A" filename
+                       (- (sb!win32:get-last-error))))))
+          (:file-write-date
+           (or (sb!win32::native-file-write-date filename)
+               (fail "couldn't query write date of ~A" filename
+                     (- (sb!win32:get-last-error))))))
+        #!-win32
         (multiple-value-bind (existsp errno ino mode nlink uid gid rdev size
                                       atime mtime)
             (sb!unix:unix-stat filename)
-          (declare (ignore ino nlink gid rdev size atime
-                           #!+win32 uid))
-          #!+win32
-          ;; On win32, stat regards UNC pathnames and device names as
-          ;; nonexisting, so we check once more with the native API.
-          (unless existsp
-            (setf existsp
-                  (let ((handle (sb!win32:create-file
-                                 filename 0 0 nil
-                                 sb!win32:file-open-existing
-                                 0 0)))
-                    (when (/= -1 handle)
-                      (setf mode
-                            (or mode
-                                (if (logbitp 4
-                                             (sb!win32:get-file-attributes filename))
-                                    sb!unix:s-ifdir 0)))
-                      (progn (sb!win32:close-handle handle) t)))))
+          (declare (ignore ino nlink gid rdev size atime uid))
           (values
            (if existsp
                (case query-for
@@ -340,9 +344,7 @@
                    :as-directory (and mode
                                       (eql (logand  mode sb!unix:s-ifmt)
                                            sb!unix:s-ifdir))))
-                 (:author
-                  #!-win32
-                  (sb!unix:uid-username uid))
+                 (:author (sb!unix:uid-username uid))
                  (:write-date (+ unix-to-universal-time mtime)))
                (progn
                  ;; SBCL has for many years had a policy that a pathname
@@ -352,7 +354,6 @@
                  ;; we must distinguish cases where the symlink exists
                  ;; from ones where there's a loop in the apparent
                  ;; containing directory.
-                 #!-win32
                  (multiple-value-bind (linkp ignore ino mode nlink uid gid rdev
                                        size atime mtime)
                      (sb!unix:unix-lstat filename)
@@ -493,15 +494,21 @@ If FILE is a stream, on Windows the stream is closed immediately. On Unix
 plaforms the stream remains open, allowing IO to continue: the OS resources
 associated with the deleted file remain available till the stream is closed as
 per standard Unix unlink() behaviour."
-  (let* ((pathname (translate-logical-pathname file))
+  (let* ((pathname
+           (translate-logical-pathname
+            (merge-pathnames file (sane-default-pathname-defaults))))
          (namestring (native-namestring pathname :as-file t)))
+    #!-win32
     (truename file) ; for error-checking side-effect
     #!+win32
     (when (streamp file)
       (close file))
-    (multiple-value-bind (res err) (sb!unix:unix-unlink namestring)
-      (unless res
-        (simple-file-perror "couldn't delete ~A" namestring err))))
+    (multiple-value-bind (res err)
+        #!-win32 (sb!unix:unix-unlink namestring)
+        #!+win32 (values (sb!win32::native-delete-file namestring)
+                         (- (sb!win32:get-last-error)))
+        (unless res
+          (simple-file-perror "couldn't delete ~A" namestring err))))
   t)
 
 (defun delete-directory (pathspec &key recursive)
@@ -523,7 +530,10 @@ exist or is a file.
 Experimental: interface subject to change."
   (declare (type pathname-designator pathspec))
   (with-pathname (pathname pathspec)
-    (let ((truename (truename (translate-logical-pathname pathname))))
+    (let ((truename (truename
+                     (translate-logical-pathname
+                      (merge-pathnames pathname
+                                       (sane-default-pathname-defaults))))))
       (labels ((recurse (dir)
                  (map-directory #'recurse dir
                                 :files nil
@@ -535,15 +545,24 @@ Experimental: interface subject to change."
                                 :classify-symlinks nil)
                  (delete-dir dir))
                (delete-dir (dir)
-                 (let* ((namestring (native-namestring dir :as-file t))
-                        (res (alien-funcall (extern-alien #!-win32 "rmdir"
-                                                          #!+win32 "_rmdir"
-                                                          (function int c-string))
-                                            namestring)))
-                   (if (minusp res)
-                       (simple-file-perror "Could not delete directory ~A:~%  ~A"
-                                           namestring (get-errno))
-                       dir))))
+                 (let ((namestring (native-namestring dir :as-file t)))
+                   (multiple-value-bind (res errno)
+                       #!+win32
+                       (values
+                        (sb!win32::native-delete-directory namestring)
+                        (- (sb!win32:get-last-error)))
+                       #!-win32
+                       (values
+                        (not (minusp (alien-funcall
+                                      (extern-alien "rmdir"
+                                                    (function int c-string))
+                                      namestring)))
+                        (get-errno))
+                       (if res
+                           dir
+                           (simple-file-perror
+                            "Could not delete directory ~A"
+                            namestring errno))))))
         (if recursive
             (recurse truename)
             (delete-dir truename))))))
@@ -707,6 +726,10 @@ matching filenames."
             (macrolet ((,iterator ()
                          `(funcall ,',one-iter)))
               ,@body)))
+       #!+win32
+       (sb!win32::native-call-with-directory-iterator #'iterate ,namestring
+                                                      ,errorp)
+       #!-win32
        (call-with-native-directory-iterator #'iterate ,namestring ,errorp))))
 
 (defun call-with-native-directory-iterator (function namestring errorp)
@@ -791,7 +814,10 @@ Experimental: interface subject to change."
           ;; on Windows: file kind is known instantly there, so we'll have it
           ;; returned by (next) soon.
           (multiple-value-bind (name kind) (next)
-            (setf kind (native-file-kind (concatenate 'string dirname name)))
+            (unless (or name kind) (return))
+            (unless kind
+              (setf kind (native-file-kind
+                          (concatenate 'string dirname name))))
             (when kind
               (case kind
                 (:directory
