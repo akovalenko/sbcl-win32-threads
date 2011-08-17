@@ -298,7 +298,7 @@
                (sb!win32::native-probe-file-name filename)
              (when (and (not file) kind)
                (setf file filename))
-             (if file
+             (if (and file kind)
                  (values
                   (parse-native-namestring
                    file
