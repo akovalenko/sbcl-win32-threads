@@ -11,6 +11,9 @@
 
 (in-package "SB!IMPL")
 
+(define-symbol-macro +long-file-name-prefix+ (quote "\\\\?\\"))
+(define-symbol-macro +unc-file-name-prefix+ (quote "\\\\?\\UNC"))
+
 (defun extract-device (namestr start end)
   (declare (type simple-string namestr)
            (type index start end))
@@ -137,7 +140,17 @@
            (type index start end))
   (setf namestring (coerce namestring 'simple-string))
   (multiple-value-bind (device new-start)
-      (extract-device namestring start end)
+      (cond ((= (length +unc-file-name-prefix+)
+                (mismatch +unc-file-name-prefix+ namestring
+                          :start2 start))
+             (values :unc (+ start (length +unc-file-name-prefix+))))
+            ((= (length +long-file-name-prefix+)
+                (mismatch +long-file-name-prefix+ namestring
+                          :start2 start))
+             (extract-device namestring
+                             (+ start (length +long-file-name-prefix+))
+                             end))
+            (t (extract-device namestring start end)))
     (multiple-value-bind (absolute ranges)
         (split-at-slashes-and-backslashes namestring new-start end)
       (let* ((components (loop for ((start . end) . rest) on ranges
@@ -150,19 +163,19 @@
                             components
                             (butlast components)))
              (name-and-type
-              (unless as-directory
-                (let* ((end (first (last components)))
-                       (dot (position #\. end :from-end t)))
-                  ;; FIXME: can we get this dot-interpretation knowledge
-                  ;; from existing code?  EXTRACT-NAME-TYPE-AND-VERSION
-                  ;; does slightly more work than that.
-                  (cond
-                    ((string= end "")
-                     (list nil nil))
-                    ((and dot (> dot 0))
-                     (list (subseq end 0 dot) (subseq end (1+ dot))))
-                    (t
-                     (list end nil)))))))
+               (unless as-directory
+                 (let* ((end (first (last components)))
+                        (dot (position #\. end :from-end t)))
+                   ;; FIXME: can we get this dot-interpretation knowledge
+                   ;; from existing code?  EXTRACT-NAME-TYPE-AND-VERSION
+                   ;; does slightly more work than that.
+                   (cond
+                     ((string= end "")
+                      (list nil nil))
+                     ((and dot (> dot 0))
+                      (list (subseq end 0 dot) (subseq end (1+ dot))))
+                     (t
+                      (list end nil)))))))
         (values nil
                 device
                 (cons (if absolute :absolute :relative) directory)
@@ -240,12 +253,24 @@
          (name-string (if name-present-p name ""))
          (type (pathname-type pathname))
          (type-present-p (typep type '(not (member nil :unspecific))))
-         (type-string (if type-present-p type "")))
+         (type-string (if type-present-p type ""))
+         (absolutep (and device (eql :absolute (car directory)))))
     (when name-present-p
       (setf as-file nil))
+    (when absolutep
+      (setf directory
+            (pathname-directory
+             (merge-pathnames
+              (make-pathname :defaults pathname
+                             :directory (substitute :back :up directory))
+              #P""))))
     (coerce
      (with-output-to-string (s)
-       (when device
+       (when absolutep
+         (write-string (case device
+                         (:unc +unc-file-name-prefix+)
+                         (otherwise +long-file-name-prefix+))))
+       (when (or (not absolutep) (not (member device '(:unc nil))))
          (write-string (unparse-win32-device pathname t) s))
        (when directory
          (ecase (pop directory)
@@ -257,22 +282,23 @@
                      (let ((where (user-homedir-namestring (second next))))
                        (if where
                            (write-string where s)
-                           (error "User homedir unknown for: ~S" (second next)))))
+                           (error "User homedir unknown for: ~S"
+                                  (second next)))))
                     (next
                      (push next directory)))
               (write-char #\\ s)))
            (:relative)))
        (loop for (piece . subdirs) on directory
-          do (typecase piece
-               ((member :up) (write-string ".." s))
-               (string (write-string piece s))
-               (t (error "ungood directory segment in NATIVE-NAMESTRING: ~S"
-                         piece)))
-          if (or subdirs (stringp name))
-          do (write-char #\\ s)
-          else
-          do (unless as-file
-               (write-char #\\ s)))
+             do (typecase piece
+                  ((member :up) (write-string ".." s))
+                  (string (write-string piece s))
+                  (t (error "ungood directory segment in NATIVE-NAMESTRING: ~S"
+                            piece)))
+             if (or subdirs (stringp name))
+             do (write-char #\\ s)
+             else
+             do (unless as-file
+                  (write-char #\\ s)))
        (if name-present-p
            (progn
              (unless (stringp name-string) ;some kind of wild field
@@ -286,7 +312,17 @@
            (when type-present-p ;
              (error
               "type component without a name component in NATIVE-NAMESTRING: ~S"
-              type))))
+              type)))
+       (when absolutep
+         (let ((string (get-output-stream-string s)))
+           (return-from unparse-native-win32-namestring
+             (cond ((< sb-win32::max_path (length string))
+                    (coerce string 'simple-string))
+                   ((eq :unc device)
+                    (replace
+                     (subseq string (1- (length +unc-file-name-prefix+)))
+                     "\\"))
+                   (t (subseq string (length +long-file-name-prefix+))))))))
      'simple-string)))
 
 ;;; FIXME.
