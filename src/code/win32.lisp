@@ -498,6 +498,15 @@
 ;; http://msdn.microsoft.com/library/en-us/sysinfo/base/filetime_str.asp?
 (define-alien-type FILETIME (sb!alien:unsigned 64))
 
+;; FILETIME definition above is almost correct (on little-endian systems),
+;; except for the wrong alignment if used in another structure: the real
+;; definition is a struct of two dwords.
+;; Let's define FILETIME-MEMBER for that purpose; it will be useful with
+;; GetFileAttributesEx and FindFirstFileExW.
+
+(define-alien-type FILETIME-MEMBER
+    (struct nil (low dword) (high dword)))
+
 (defmacro with-process-times ((creation-time exit-time kernel-time user-time)
                               &body forms)
   `(with-alien ((,creation-time filetime)
