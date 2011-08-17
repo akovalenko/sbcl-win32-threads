@@ -386,7 +386,6 @@
                           ;; re-merge against *DEFAULT-PATHNAME-DEFAULTS*,
                           ;; since PATHNAME may be a relative pathname.
                           (merge-pathnames
->>>>>>> 3d1c9ec... * src/code/filesys.lisp (query-file-system): use top-level VALUES to get rid of extra return values, instead of repeated nth-value 0
                            (parse-native-namestring
                             (multiple-value-bind (realpath errno)
                                 (sb!unix:unix-realpath
@@ -404,6 +403,7 @@
                                   (fail "couldn't resolve ~A" filename errno)))
                             (pathname-host pathname)
                             (sane-default-pathname-defaults)
+<<<<<<< HEAD
                             :as-directory t))
                           pathname))
                         (:author (sb!unix:uid-username uid))
