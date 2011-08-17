@@ -786,34 +786,36 @@ Experimental: interface subject to change."
                                         :as-directory (and dirp (not as-files)))
                                        physical))))
       (with-native-directory-iterator (next dirname :errorp errorp)
-       (loop for name = (next)
-             while name
-             do (let* ((full (concatenate 'string dirname name))
-                       (kind (native-file-kind full)))
-                  (when kind
-                    (case kind
-                      (:directory
-                       (when directories
-                         (map-it name t)))
-                      (:symlink
-                       (if classify-symlinks
-                           (let* ((tmpname (merge-pathnames
-                                            (parse-native-namestring
-                                             name nil physical :as-directory nil)
-                                            physical))
-                                  (truename (query-file-system tmpname :truename nil)))
-                             (if (or (not truename)
-                                     (or (pathname-name truename) (pathname-type truename)))
-                                 (when files
-                                   (funcall fun tmpname))
-                                 (when directories
-                                   (map-it name t))))
+        (loop
+          ;; provision for FindFirstFileExW-based iterator that should be used
+          ;; on Windows: file kind is known instantly there, so we'll have it
+          ;; returned by (next) soon.
+          (multiple-value-bind (name kind) (next)
+            (setf kind (native-file-kind (concatenate 'string dirname name)))
+            (when kind
+              (case kind
+                (:directory
+                 (when directories
+                   (map-it name t)))
+                (:symlink
+                 (if classify-symlinks
+                     (let* ((tmpname (merge-pathnames
+                                      (parse-native-namestring
+                                       name nil physical :as-directory nil)
+                                      physical))
+                            (truename (query-file-system tmpname :truename nil)))
+                       (if (or (not truename)
+                               (or (pathname-name truename) (pathname-type truename)))
                            (when files
-                             (map-it name nil))))
-                      (t
-                       ;; Anything else parses as a file.
-                       (when files
-                         (map-it name nil)))))))))))
+                             (funcall fun tmpname))
+                           (when directories
+                             (map-it name t))))
+                     (when files
+                       (map-it name nil))))
+                (t
+                 ;; Anything else parses as a file.
+                 (when files
+                   (map-it name nil)))))))))))
 
 ;;; Part of DIRECTORY: implements matching the directory spec. Calls FUNCTION
 ;;; with all DIRECTORIES that match the directory portion of PATHSPEC.
