@@ -527,6 +527,17 @@
 (defmacro make-system-buffer (x)
  `(make-alien char #!+sb-unicode (ash ,x 1) #!-sb-unicode ,x))
 
+(defmacro with-handle ((var initform
+                            &key (close-operator 'close-handle))
+                            &body body)
+  `(without-interrupts
+       (block nil
+         (let ((,var ,initform))
+           (unwind-protect
+                (with-local-interrupts
+                    ,@body)
+             (,close-operator ,var))))))
+
 (define-alien-type pathname-buffer
     (array char #.(ash (1+ max_path) #!+sb-unicode 1 #!-sb-unicode 0)))
 
@@ -782,6 +793,9 @@ UNIX epoch: January 1st 1970."
             (size-low dword)
             (size-high dword)))
 
+(define-alien-routine ("FindClose" find-close) lispbool
+  (handle handle))
+
 (defun attribute-file-kind (dword)
   (if (logtest file-attribute-directory dword)
       :directory :file))
@@ -789,13 +803,13 @@ UNIX epoch: January 1st 1970."
 (defun native-file-write-date (native-namestring)
   "Return file write date, represented as CL universal time."
   (with-alien ((file-attributes file-attributes))
-    (syscall (("GetFileAttributesEx" t) bool
+    (syscall (("GetFileAttributesEx" t) lispbool
               system-string int file-attributes)
-             (- (floor
-                 (deref
-                  (cast (slot file-attributes 'mtime) (* filetime)))
-                 +filetime-unit+)
-                +common-lisp-epoch-filetime-seconds+)
+             (and result
+                  (- (floor (deref (cast (slot file-attributes 'mtime)
+                                         (* filetime)))
+                            +filetime-unit+)
+                     +common-lisp-epoch-filetime-seconds+))
              native-namestring 0 file-attributes)))
 
 (defun native-probe-file-name (native-namestring)
@@ -806,14 +820,16 @@ Unless kind is false, null truename shouldn't be interpreted as error or file
 absense."
   (with-alien ((file-attributes file-attributes)
                (buffer long-pathname-buffer))
-    (syscall (("GetFileAttributesEx" t) bool
+    (syscall (("GetFileAttributesEx" t) lispbool
               system-string int file-attributes)
              (values
               (syscall (("GetLongPathName" t) dword
                         system-string long-pathname-buffer dword)
-                       (decode-system-string buffer)
+                       (and (plusp result) (decode-system-string buffer))
                        native-namestring buffer 32768)
-              (attribute-file-kind (slot file-attributes 'attributes)))
+              (and result
+                   (attribute-file-kind
+                    (slot file-attributes 'attributes))))
              native-namestring 0 file-attributes)))
 
 (defun native-delete-file (native-namestring)
@@ -821,6 +837,43 @@ absense."
 
 (defun native-delete-directory (native-namestring)
   (syscall* (("RemoveDirectory" t) system-string) t native-namestring))
+
+(defun native-call-with-directory-iterator (function namestring errorp)
+  (declare (type (or null string) namestring)
+           (function function))
+  (when namestring
+    (with-alien ((find-data find-data))
+      (with-handle (handle (syscall (("FindFirstFile" t) handle
+                                     system-string find-data)
+                                    (if (eql result invalid-handle)
+                                        (if errorp
+                                            (win32-error "FindFirstFile")
+                                            (return))
+                                        result)
+                                    (concatenate 'string
+                                                 namestring "*.*")
+                                    find-data)
+                    :close-operator find-close)
+        (let ((more t))
+          (dx-flet ((one-iter ()
+                      (tagbody
+                       :next
+                         (when more
+                           (let ((name (decode-system-string
+                                        (slot find-data 'long-name)))
+                                 (attributes (slot find-data 'attributes)))
+                             (setf more
+                                   (syscall (("FindNextFile" t) lispbool
+                                             handle find-data) result
+                                             handle find-data))
+                             (cond ((equal name ".") (go :next))
+                                   ((equal name "..") (go :next))
+                                   (t
+                                    (return-from one-iter
+                                      (values name
+                                              (attribute-file-kind
+                                               attributes))))))))))
+            (funcall function #'one-iter)))))))
 
 ;; SETENV
 ;; The SetEnvironmentVariable function sets the contents of the specified
