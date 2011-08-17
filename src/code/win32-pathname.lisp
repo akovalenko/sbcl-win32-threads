@@ -256,13 +256,14 @@
          (absolutep (and device (eql :absolute (car directory)))))
     (when name-present-p
       (setf as-file nil))
-    (when absolutep
+    (when (and absolutep (member :up directory))
+      ;; employ merge-pathnames to parse :BACKs into which we turn :UPs
       (setf directory
             (pathname-directory
              (merge-pathnames
+              (make-pathname :defaults pathname :directory '(:relative))
               (make-pathname :defaults pathname
-                             :directory (substitute :back :up directory))
-              pathname))))
+                             :directory (substitute :back :up directory))))))
     (coerce
      (with-output-to-string (s)
        (when absolutep
