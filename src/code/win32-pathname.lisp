@@ -315,7 +315,7 @@
        (when absolutep
          (let ((string (get-output-stream-string s)))
            (return-from unparse-native-win32-namestring
-             (cond ((< sb-win32::max_path (length string))
+             (cond ((< sb!win32::max_path (length string))
                     (coerce string 'simple-string))
                    ((eq :unc device)
                     (replace
