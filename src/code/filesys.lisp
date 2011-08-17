@@ -307,7 +307,7 @@
                    :as-directory (eq :directory kind)))
                  (fail "couldn't resolve ~A" filename
                        (- (sb!win32:get-last-error))))))
-          (:file-write-date
+          (:write-date
            (or (sb!win32::native-file-write-date filename)
                (fail "couldn't query write date of ~A" filename
                      (- (sb!win32:get-last-error))))))
