@@ -262,7 +262,7 @@
              (merge-pathnames
               (make-pathname :defaults pathname
                              :directory (substitute :back :up directory))
-              #P""))))
+              pathname))))
     (coerce
      (with-output-to-string (s)
        (when absolutep
