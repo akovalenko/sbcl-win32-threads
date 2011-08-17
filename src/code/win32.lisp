@@ -875,8 +875,6 @@ UNIX epoch: January 1st 1970."
 (defconstant file-share-write #x02)
 
 ;; CreateFile (the real file-opening workhorse).
-;; For unicode builds, see another variant of it, which is more complicated.
-#!-sb-unicode
 (define-alien-routine (#!+sb-unicode "CreateFileW"
                        #!-sb-unicode "CreateFileA"
                        create-file)
@@ -888,59 +886,6 @@ UNIX epoch: January 1st 1970."
   (creation-disposition dword)
   (flags-and-attributes dword)
   (template-file handle))
-
-#!+sb-unicode
-(progn
-  ;; Unicode API supports file names longer than MAX_PATH, which are
-  ;; distinguished by "\\\\?\\" prefix.
-
-  ;; CreateFileW passes such paths directly to a kernel call; if we allow it to
-  ;; work on the prefixed file name directly, components like ".." and "." would
-  ;; not be interpreted. There is a separate function, GetFullPathNameW, that
-  ;; parses pathname components and returns a "raw" pathname.
-
-  ;; Hence on Unicode builds we define create-file as a wrapper calling
-  ;; GetFullPathNameW for any long file name before actually opening it.
-
-  ;; See "Naming Files, Paths, and Namespaces":
-  ;; http://msdn.microsoft.com/en-us/library/aa365247(v=vs.85).aspx
-
-  (declaim (inline get-full-path-name %create-file))
-
-  (define-alien-routine ("GetFullPathNameW" get-full-path-name)
-      dword
-    (name system-string)
-    (buffer-length dword)
-    (buffer system-area-pointer)
-    (file-part system-area-pointer))
-
-  (define-alien-routine ("CreateFileW" %create-file)
-      handle
-    (name system-string)
-    (desired-access dword)
-    (share-mode dword)
-    (security-attributes (* t))
-    (creation-disposition dword)
-    (flags-and-attributes dword)
-    (template-file handle))
-
-  (defun create-file (name desired-access share-mode
-                      security-attributes creation-disposition
-                      flags-and-attributes template-file)
-    (unless (< (length name) max_path)
-      (setf name
-            (with-alien ((full-name-buffer (array char 65536)))
-              (case (get-full-path-name
-                     (concatenate 'string "\\\\?\\" name)
-                     32768 (alien-sap full-name-buffer) (int-sap 0))
-                (0 (return-from create-file invalid-handle))
-                (otherwise
-                   ;; When source file name is prefixed, GetFullPathNameW
-                   ;; prepends the same prefix to its result.
-                   (cast full-name-buffer system-string))))))
-    (%create-file name desired-access share-mode
-                  security-attributes creation-disposition
-                  flags-and-attributes template-file)))
 
 (defconstant file-attribute-readonly #x1)
 (defconstant file-attribute-hidden #x2)
