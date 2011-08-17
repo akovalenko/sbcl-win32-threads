@@ -771,9 +771,7 @@ Experimental: interface subject to change."
   (let* ((fun (%coerce-callable-to-fun function))
          (as-files (eq :as-files directories))
          (physical (physicalize-pathname directory))
-         ;; Not QUERY-FILE-SYSTEM :EXISTENCE, since it doesn't work on Windows
-         ;; network shares.
-         (realname (sb!unix:unix-realpath (native-namestring physical :as-file t)))
+         (realname (query-file-system physical :existence nil))
          (canonical (if realname
                         (parse-native-namestring realname
                                                  (pathname-host physical)
