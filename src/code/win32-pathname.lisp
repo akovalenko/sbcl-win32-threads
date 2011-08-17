@@ -184,7 +184,6 @@
                 nil)))))
 
 
-
 (defun unparse-win32-host (pathname)
   (declare (type pathname pathname)
            (ignore pathname))
@@ -269,7 +268,7 @@
        (when absolutep
          (write-string (case device
                          (:unc +unc-file-name-prefix+)
-                         (otherwise +long-file-name-prefix+))))
+                         (otherwise +long-file-name-prefix+)) s))
        (when (or (not absolutep) (not (member device '(:unc nil))))
          (write-string (unparse-win32-device pathname t) s))
        (when directory
