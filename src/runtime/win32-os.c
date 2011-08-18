@@ -543,6 +543,8 @@ void __stdcall RtlUnwind(void *, void *, void *, void *); /* I don't have winter
 void scratch(void)
 {
     CloseHandle(0);
+    DeleteFile(0);
+    RemoveDirectory(0);
     FlushConsoleInputBuffer(0);
     FormatMessageA(0, 0, 0, 0, 0, 0, 0);
     FreeLibrary(0);
@@ -552,6 +554,11 @@ void scratch(void)
     GetCurrentProcess();
     GetExitCodeProcess(0, 0);
     GetLastError();
+    GetLongPathName(0,0,0);
+    GetFullPathName(0,0,0,0);
+    FindFirstFile(0,0);
+    FindNextFile(0,0);
+    FindClose(0);
     GetOEMCP();
     GetProcAddress(0, 0);
     GetProcessTimes(0, 0, 0, 0, 0);
@@ -566,6 +573,8 @@ void scratch(void)
     _get_osfhandle(0);
     _rmdir(0);
     _pipe(0,0,0);
+    _wopen(0,0,0);
+    _open(0,0,0);
     access(0,0);
     close(0);
     dup(0);
