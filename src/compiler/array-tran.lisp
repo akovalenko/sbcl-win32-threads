@@ -98,6 +98,10 @@
        (values element-type
                (when (eq *wild-type* element-type)
                  (apply #'type-union element-supertypes)))))
+    (member-type
+     ;; Convert member-type to an union-type.
+     (array-type-upgraded-element-type
+      (apply #'type-union (mapcar #'ctype-of (member-type-members type)))))
     (t
      ;; KLUDGE: there is no good answer here, but at least
      ;; *wild-type* won't cause HAIRY-DATA-VECTOR-{REF,SET} to be
@@ -174,9 +178,12 @@
         ;; we can already decide on the result of the optimization without
         ;; even taking a look at the dimensions.
         (flet ((subscript-bounds (subscript)
-                 (let* ((type (lvar-type subscript))
-                        (low (numeric-type-low type))
-                        (high (numeric-type-high type)))
+                 (let* ((type1 (lvar-type subscript))
+                        (type2 (if (csubtypep type1 (specifier-type 'integer))
+                                   (weaken-integer-type type1)
+                                   (give-up)))
+                        (low (numeric-type-low type2))
+                        (high (numeric-type-high type2)))
                    (cond
                      ((and (or (not (bound-known-p low)) (minusp low))
                            (or (not (bound-known-p high)) (not (minusp high))))
