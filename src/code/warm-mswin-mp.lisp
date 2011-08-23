@@ -10,13 +10,18 @@
   (case event-code
     (0
      (flet ((interrupt-it ()
-              (with-interrupts
-                (let ((int (make-condition
-                            'interactive-interrupt
-                            :address "...<sorry, don't know the address>")))
-                  ;; First SIGNAL, so that handlers can run.
-                  (signal int)
-                  (%break 'sigint int)))))
+              (let* ((context
+                       (sb-di::nth-interrupt-context
+                        (1- sb-kernel:*free-interrupt-context-index*)))
+                     (pc (sb-vm:context-pc context)))
+                (with-interrupts
+                  (let ((int (make-condition
+                              'interactive-interrupt
+                              :context context
+                              :address pc)))
+                    ;; First SIGNAL, so that handlers can run.
+                    (signal int)
+                    (%break 'sigint int))))))
        (sb-thread:interrupt-thread (foreground-thread) #'interrupt-it)
        t))))
 
