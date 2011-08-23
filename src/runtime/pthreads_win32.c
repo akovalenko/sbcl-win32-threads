@@ -293,6 +293,7 @@ static void thread_or_fiber_function(pthread_t self)
   pthread_mutex_destroy(&self->fiber_lock);
   pthread_cond_destroy(&self->cond);
   tls_call_destructors();
+  tls_impersonate(NULL);
 }
 
 /* Thread function for [pthread_create]d threads. Thread may become a
@@ -338,8 +339,7 @@ VOID CALLBACK Fiber_Function(LPVOID param)
     /* pthread_np_run_in_fiber (see below) normally switches back to
        caller. Nullify our identity, so it knows there is nothing to
        switch to, and continues running instead. */
-    tls_impersonate(NULL);
-    if (group) {
+    if (group && (group!=self)) {
       /* Every running [pthread_create]d fiber runs in some thread
          that has its own pthread_self identity (that was created as
          thread and later converted to fiber). `group' field of
