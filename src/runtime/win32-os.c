@@ -3306,6 +3306,12 @@ static int tty_read_line_client(HANDLE handle, void* buf, int count)
                 }
                 pthread_cond_wait(&ttyinput.cond_has_data, &ttyinput.lock);
                 io_end_interruptible(ttyinput.handle);
+                if (WaitForSingleObject(this_thread->private_events.events[1],
+                                        0)!=WAIT_TIMEOUT) {
+                    result= -1;
+                    errno = EINTR;
+                    goto unlock;
+                }
             }
         }
         result = sizeof(WCHAR)*(ttyinput.tail-ttyinput.head);
