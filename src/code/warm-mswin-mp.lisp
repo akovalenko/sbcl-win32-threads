@@ -18,7 +18,7 @@
                   (let ((int (make-condition
                               'interactive-interrupt
                               :context context
-                              :address pc)))
+                              :address (sb-sys:sap-int pc))))
                     ;; First SIGNAL, so that handlers can run.
                     (signal int)
                     (%break 'sigint int))))))
