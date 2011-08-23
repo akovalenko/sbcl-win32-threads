@@ -78,6 +78,9 @@
                (case arg (-1 default) (otherwise (setf inheritp t) arg)))))
       (with-alien ((process-information process-information)
                    (startup-info startup-info))
+        (sb-kernel:system-area-ub8-fill
+         0 (alien-sap startup-info)
+         0 (alien-size startup-info :bytes))
         (setf (slot startup-info 'cb) (alien-size startup-info :bytes)
               (slot startup-info 'stdin) (maybe-std-handle stdin)
               (slot startup-info 'stdout) (maybe-std-handle stdout)
@@ -99,7 +102,7 @@
                 (close-handle (slot process-information 'thread-handle))
                 (if waitp
                     (do () ((/= 1 (with-local-interrupts (wait-object-or-signal child)))
-                              (multiple-value-bind (got code) (get-exit-code-process child)
-                                (if got code -1))))
+                            (multiple-value-bind (got code) (get-exit-code-process child)
+                              (if got code -1))))
                     child))
               -1))))))
