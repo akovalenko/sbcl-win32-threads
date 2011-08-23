@@ -55,4 +55,5 @@ true to stop searching)." *console-control-spec*)
             'windows-console-control-handler
             (console-control-handler))))
 
+(initialize-console-control-handler t)
 (pushnew 'initialize-console-control-handler sb-ext:*init-hooks*)
