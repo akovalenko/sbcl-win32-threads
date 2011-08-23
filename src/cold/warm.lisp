@@ -162,6 +162,8 @@
                 "SRC;CODE;WARM-LIB"
                 #+win32
                 "SRC;CODE;WARM-MSWIN"
+                #+(and win32 sb-thread)
+                "SRC;CODE;WARM-MSWIN-MP"
                 "SRC;CODE;RUN-PROGRAM"
                 #+sb-foreign-thread
                 "SRC;CODE;FIBER"))
