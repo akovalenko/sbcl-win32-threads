@@ -533,6 +533,30 @@ main(int argc, char *argv[], char *envp[])
         fflush(stdout);
     }
 
+    /* Allow embedded_core_offset to be nonzero for an explicitly given image
+     * that is distinct from our executable `self'. */
+    if (embedded_core_offset == 0) {
+        /* Here we have a last attempt of looking up embedded core offset,
+         * intended to ensure that any file with embedded core is a valid
+         * argument for --core option. Giving one executable as a --core to
+         * another is atypical; however, there are some use cases in the area of
+         * image-based development that become easier (and require less memory)
+         * if this possibility is provided.
+         * 
+         * Some decisions depending on core/executable relations are made
+         * /before/ this block is reached; it's intended to avoid any observable
+         * difference of "embedded" and "bare" images given to --core.
+         *
+         * Everywhere but the guts of load_core_file() and its callees, there is
+         * no discrimination of --core arguments; specifically, neither
+         * *runtime-pathname* and *core-pathname* values, nor the presence of
+         * initial SBCL banner output is affected by the "embeddedness" of a
+         * specified image.
+         */
+
+        embedded_core_offset = search_for_embedded_core(core);
+    }
+
 #if defined(SVR4) || defined(__linux__) || defined(__NetBSD__)
     tzset();
 #endif
