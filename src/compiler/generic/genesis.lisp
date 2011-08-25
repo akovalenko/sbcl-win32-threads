@@ -3260,7 +3260,23 @@ initially undefined function references:~2%")
 
       ;; Write the End entry.
       (write-word end-core-entry-type-code)
-      (write-word 2)))
+      (write-word 2)
+      ;; With executable names as valid arguments for --core, initial image
+      ;; becomes a problem: search_for_embedded_core is not going to return zero
+      ;; offset without a trailer pointing at that position.
+      ;;
+      ;; A trailer good enough for search_for_embedded_core() must have two
+      ;; words, with SBCL/LCBS magic in the latter, and the file position of
+      ;; image start in the former.
+      ;;
+      ;; Instead of FILE-POSITIONing to the :END, we follow the pattern of
+      ;; output-gspace, writing at the next free page: 
+      (file-position *core-file*
+                     (* sb!c:*backend-page-bytes* (1+ *data-page*)))
+      ;; Initial core starts at 0
+      (write-word 0)
+      ;; Wrap up the image at the end, so it's surrounded by magic everywhere.
+      (write-word core-magic)))
 
   (format t "done]~%")
   (force-output)
