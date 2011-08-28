@@ -148,7 +148,7 @@ static long
 write_and_compress_bytes(FILE *file, char *addr, long bytes, os_vm_offset_t file_offset,
                          int compression)
 {
-    long here, data;
+    long here, data, count, pad_bytes;
 
     bytes = ALIGN_UP(bytes,os_vm_page_size);
 #ifdef LISP_FEATURE_WIN32
