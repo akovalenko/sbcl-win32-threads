@@ -54,6 +54,9 @@ CFLAGS =  -g -W -Wall \
 # I will merge some upstream code relying on them.
 
 OS_LINK_FLAGS = 
+ifdef LISP_FEATURE_SB_CORE_COMPRESSION
+  OS_LIBS += -lz
+endif
 
 GC_SRC = gencgc.c
 
