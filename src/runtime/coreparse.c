@@ -26,7 +26,9 @@
 /* For madvise */
 # define _BSD_SOURCE
 #endif
+#ifndef LISP_FEATURE_WIN32
 #include <sys/mman.h>
+#endif
 
 #include "sbcl.h"
 #include "os.h"
