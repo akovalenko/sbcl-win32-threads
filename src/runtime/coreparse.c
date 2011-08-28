@@ -26,9 +26,6 @@
 /* For madvise */
 # define _BSD_SOURCE
 #endif
-#ifndef LISP_FEATURE_WIN32
-#include <sys/mman.h>
-#endif
 
 #include "sbcl.h"
 #include "os.h"
@@ -41,6 +38,10 @@
 
 #include "validate.h"
 #include "gc-internal.h"
+
+#ifndef LISP_FEATURE_WIN32
+#include <sys/mman.h>
+#endif
 
 /* lutex stuff */
 #if defined(LISP_FEATURE_SB_THREAD) && defined(LISP_FEATURE_SB_LUTEX)
