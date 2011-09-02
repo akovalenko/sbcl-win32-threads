@@ -56,8 +56,19 @@
 (defconstant file-flag-overlapped #x40000000)
 (defconstant file-flag-sequential-scan #x8000000)
 
+;; Possible results of GetFileType.
+(defconstant file-type-disk 1)
+(defconstant file-type-char 2)
+(defconstant file-type-pipe 3)
+(defconstant file-type-remote 4)
+(defconstant file-type-unknown 0)
+
 (defconstant invalid-file-attributes (mod -1 (ash 1 32)))
 
+;;;; File Type Introspection by handle
+(define-alien-routine ("GetFileType" get-file-type) dword
+  (handle handle))
+ 
 ;;;; Error Handling
 
 ;;; Retrieve the calling thread's last-error code value.  The
@@ -250,17 +261,19 @@
       (return-from handle-listen
         (alien-funcall (extern-alien "win32_tty_listen" (function boolean handle))
                        handle)))
+    ;; wine workaround: regular file handle may seem
+    ;; eternally unusable after EOF, because socket-specific
+    ;; calls aren't rejected. Detect it explicitly:
+    (when (= file-type-disk (get-file-type handle))
+      (return-from handle-listen t))
     (unless (zerop (peek-named-pipe handle nil 0 nil (addr avail) nil))
       (return-from handle-listen (plusp avail)))
     (let ((res (comm-input-available handle)))
       (unless (zerop res)
         (return-from handle-listen (= res 1))))
-
-
     (let ((res (socket-input-available handle)))
       (unless (zerop res)
         (return-from handle-listen (= res 1))))
-
     t))
 
 ;;; Listen for input on a C runtime file handle.  Returns true if
@@ -1056,14 +1069,6 @@ absense."
     bool
   (handle handle) (file-size (signed 64) :in-out))
 
-
-;; Possible results of GetFileType.
-(defconstant file-type-disk 1)
-(defconstant file-type-char 2)
-(defconstant file-type-pipe 3)
-(defconstant file-type-remote 4)
-(defconstant file-type-unknown 0)
-
 ;; GetFileAttribute is like a tiny subset of fstat(),
 ;; enough to distinguish directories from anything else.
 (define-alien-routine (#!+sb-unicode "GetFileAttributesW"
@@ -1071,10 +1076,6 @@ absense."
                        get-file-attributes)
     dword
   (name (c-string #!+sb-unicode #!+sb-unicode :external-format :ucs-2)))
-
-(define-alien-routine ("GetFileType" get-file-type)
-    dword
-  (handle handle))
 
 #!+fds-are-windows-handles
 (declaim (inline open-osfhandle))
@@ -1292,8 +1293,7 @@ format for such streams."
         (win32-error 'create-pipe))))
 
 (defun windows-isatty (handle)
-  (if (eql sb!win32::file-type-char
-           (sb!win32:get-file-type handle))
+  (if (= file-type-char (get-file-type handle))
       1 0))
 
 (defun inheritable-handle-p (handle)
