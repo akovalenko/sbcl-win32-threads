@@ -2657,25 +2657,18 @@ handle_exception(EXCEPTION_RECORD *exception_record,
     ctx.win32_context = context;
     ctx.sigmask = self ? self->os_thread->blocked_signal_set : 0;
 
-    /* For EXCEPTION_ACCESS_VIOLATION only. */
-/*
-    odprintf("handle exception, EIP = 0x%p, code = 0x%p (addr = 0x%p)",
-             context->Eip, exception_record->ExceptionCode, fault_address);
-
-*/
-
-#if defined(LISP_FEATURE_X86)
-    if (single_stepping &&
-        exception_record->ExceptionCode == EXCEPTION_SINGLE_STEP) {
+    if (exception_record->ExceptionCode == EXCEPTION_SINGLE_STEP) {
         /* We are doing a displaced instruction. At least function
          * end breakpoints uses this. */
-
-        BEGIN_GC_UNSAFE_CODE;   /* todo is it really gc-unsafe? */
-        restore_breakpoint_from_single_step(&ctx);
-        END_GC_UNSAFE_CODE;
+        if (single_stepping) {
+#ifdef LISP_FEATURE_X86_64
+            sigtrap_handler(0,NULL,&ctx);
+#else
+            restore_breakpoint_from_single_step(&ctx);
+#endif
+        }
         goto finish;
     }
-#endif
 
     if (IS_TRAP_EXCEPTION(exception_record, ctx)) {
         unsigned trap;

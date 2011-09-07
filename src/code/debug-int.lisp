@@ -3122,9 +3122,11 @@ register."
   (without-gcing
    ;; These are really code labels, not variables: but this way we get
    ;; their addresses.
-   (let* ((src-start (foreign-symbol-sap "fun_end_breakpoint_guts"))
-          (src-end (foreign-symbol-sap "fun_end_breakpoint_end"))
-          (trap-loc (foreign-symbol-sap "fun_end_breakpoint_trap"))
+   ;; But these are really data, not code, and datap is required when
+   ;; runtime dynamic linking is enabled.
+   (let* ((src-start (foreign-symbol-sap "fun_end_breakpoint_guts" t))
+          (src-end (foreign-symbol-sap "fun_end_breakpoint_end" t))
+          (trap-loc (foreign-symbol-sap "fun_end_breakpoint_trap" t))
           (length (sap- src-end src-start))
           (code-object
            (sb!c:allocate-code-object (1+ bogus-lra-constants) length))

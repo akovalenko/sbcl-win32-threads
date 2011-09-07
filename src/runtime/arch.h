@@ -45,9 +45,10 @@ extern lispobj *component_ptr_from_pc(lispobj *pc);
 extern void fpu_save(void *);
 extern void fpu_restore(void *);
 
-#ifdef LISP_FEATURE_X86
+#if defined(LISP_FEATURE_X86)||defined(LISP_FEATURE_WIN32)
 extern unsigned int * single_stepping;
 extern void restore_breakpoint_from_single_step(os_context_t * context);
+void sigtrap_handler(int signal, siginfo_t *info, os_context_t *context);
 #endif
 
 extern void arch_handle_breakpoint(os_context_t* context);
