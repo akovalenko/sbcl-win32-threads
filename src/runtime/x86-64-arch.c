@@ -251,30 +251,38 @@ arch_handle_single_step_trap(os_context_t *context, int trap)
 
 
 void
+restore_breakpoint_from_single_step(os_context_t * context)
+{
+    /* fprintf(stderr,"* single step trap %x\n", single_stepping); */
+#ifdef CANNOT_GET_TO_SINGLE_STEP_FLAG
+    /* Un-install single step helper instructions. */
+    *(single_stepping-3) = single_step_save1;
+    *(single_stepping-2) = single_step_save2;
+    *(single_stepping-1) = single_step_save3;
+#else
+    *context_eflags_addr(context) &= ~0x100;
+#endif
+    /* Re-install the breakpoint if possible. */
+    if (((char *)*os_context_pc_addr(context) >
+         (char *)single_stepping) &&
+        ((char *)*os_context_pc_addr(context) <=
+         (char *)single_stepping + BREAKPOINT_WIDTH)) {
+        fprintf(stderr, "warning: couldn't reinstall breakpoint\n");
+    } else {
+        arch_install_breakpoint(single_stepping);
+    }
+
+    single_stepping = NULL;
+    return;
+}
+
+void
 sigtrap_handler(int signal, siginfo_t *info, os_context_t *context)
 {
     unsigned int trap;
 
     if (single_stepping) {
-#ifdef CANNOT_GET_TO_SINGLE_STEP_FLAG
-        /* Un-install single step helper instructions. */
-        *(single_stepping-3) = single_step_save1;
-        *(single_stepping-2) = single_step_save2;
-        *(single_stepping-1) = single_step_save3;
-#else
-        *context_eflags_addr(context) ^= 0x100;
-#endif
-        /* Re-install the breakpoint if possible. */
-        if (((char *)*os_context_pc_addr(context) >
-             (char *)single_stepping) &&
-            ((char *)*os_context_pc_addr(context) <=
-             (char *)single_stepping + BREAKPOINT_WIDTH)) {
-            fprintf(stderr, "warning: couldn't reinstall breakpoint\n");
-        } else {
-            arch_install_breakpoint(single_stepping);
-        }
-
-        single_stepping = NULL;
+        restore_breakpoint_from_single_step(context);
         return;
     }
 

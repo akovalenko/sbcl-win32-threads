@@ -2661,11 +2661,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         /* We are doing a displaced instruction. At least function
          * end breakpoints uses this. */
         if (single_stepping) {
-#ifdef LISP_FEATURE_X86_64
-            sigtrap_handler(0,NULL,&ctx);
-#else
             restore_breakpoint_from_single_step(&ctx);
-#endif
         }
         goto finish;
     }
