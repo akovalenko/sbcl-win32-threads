@@ -1143,20 +1143,6 @@ void fff_foreign_callback( void *v_info_ptr)
     CONTEXT w32ctx;
     os_context_t cbctx;
 
-#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
-    self->in_lisp_fpu_mode = 0;
-    /* While foreign callback is running, :INVALID trap should be
-     * unmasked (should!=must, but we may get inferior FP
-     * performance due to masked exceptions). */
-
-    unsigned short fpu_cw = x87_fnstcw();
-    x87_fwait();
-    /* If :INVALID is masked, reload CW.  From SEH p.o.v, we are now
-       in "C" mode; after :INVALID is unmasked here, it will be saved
-       and restored, if needed, as a C context FPU control word. */
-    if (fpu_cw & 1) x87_fldcw(fpu_cw & ~1);
-#endif
-
     cbctx.win32_context = &w32ctx;
     self->gc_safepoint_context = &cbctx;
     *os_context_fp_addr(&cbctx) = *(((void**)args[2])-1);
@@ -1165,15 +1151,6 @@ void fff_foreign_callback( void *v_info_ptr)
     funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,self),
              LISPOBJ(args[0]),LISPOBJ(args[1]),LISPOBJ(args[2]));
     END_GC_UNSAFE_CODE;
-
-#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
-
-    /* If stack was full, empty it. */
-    establish_c_fpu_world();
-
-    /* If :INVALID was masked, restore original CW value */
-    if (fpu_cw & 1) x87_fldcw(fpu_cw);
-#endif
 
     info_ptr->done = 1;
     return;
@@ -1291,13 +1268,6 @@ static void restore_lisp_tls()
     struct thread *self = pthread_getspecific(save_lisp_tls_key);
     struct thread *prev = TlsGetValue(OUR_TLS_INDEX);
     TlsSetValue(OUR_TLS_INDEX, self);
-#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
-    /* Two goals of this function: (1) retain current-thread-sap for
-     * the same fiber across threads, (2) retain FPU mode record for
-     * the same thread across fibers.  */
-    if (self)
-        self->in_lisp_fpu_mode = prev ? prev->in_lisp_fpu_mode : 0;
-#endif
 #endif /* LISP_FEATURE_X86 */
 }
 
@@ -2153,330 +2123,26 @@ extern boolean internal_errors_enabled;
 #endif
 extern void exception_handler_wrapper();
 
-#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
+void c_level_backtrace(const char* header, int depth)
+{
+#ifndef LISP_FEATURE_X86_64
+    void* frame;
+    int n = 0;
+    void** lastseh;
 
- static inline
- int fpu_world_cruel_p()
- {
-     struct thread* th = arch_os_get_current_thread();
-     return th && ((th->in_lisp_fpu_mode)&0xFF00);
- }
+    for (lastseh = get_seh_frame(); lastseh && (lastseh!=(void*)-1);
+         lastseh = *lastseh);
 
- static inline
- int fpu_world_lispy_p()
- {
-     struct thread* th = arch_os_get_current_thread();
-     return th && (th->in_lisp_fpu_mode&0xFF);
- }
-
- /* In SBCL code, Lisp may fldenv or something, so he will own FPU
-  * but never enter our SEH handler... */
- static inline
- int fpu_world_unknown_p()
- {
-     struct thread* th = arch_os_get_current_thread();
-     return th && dyndebug_lazy_fpu_careful && (th->in_lisp_fpu_mode&0xFF0000);
- }
-
-#define USE_MMX
-
- void establish_c_fpu_world()
- {
-     struct thread* th = arch_os_get_current_thread();
-     if (fpu_world_unknown_p()) {
-         x87_fldcw(th->saved_c_fpu_mode);
-#ifndef USE_MMX
-         asm("ffree %st(7);");
-         asm("ffree %st(6);");
-         asm("ffree %st(5);");
-         asm("ffree %st(4);");
-         asm("ffree %st(3);");
-         asm("ffree %st(2);");
-         asm("ffree %st(1);");
-         asm("ffree %st(0);");
-#else
-         asm("emms");
-#endif
-         th->in_lisp_fpu_mode = 0;
-     }
-     if (fpu_world_lispy_p()) {
-         unsigned int mode;
-         asm("fnstcw %0": "=m"(mode));
-         th->saved_lisp_fpu_mode = mode;
-         x87_fldcw(th->saved_c_fpu_mode);
-#ifndef USE_MMX
-         asm("fstp %st(0); fstp %st(0)");
-         asm("fstp %st(0); fstp %st(0)");
-         asm("fstp %st(0); fstp %st(0)");
-         asm("fstp %st(0); fstp %st(0)");
-#else
-         asm("emms");
-#endif
-         th->in_lisp_fpu_mode = 0;
-     }
-     AVERLAX(!fpu_world_unknown_p());
-     AVERLAX(!fpu_world_lispy_p());
- }
-
-#else
-
-int fpu_world_lispy_p() { return 0; }
-void establish_c_fpu_world() { }
-
-#endif
-
- void c_level_backtrace(const char* header, int depth)
- {
-     void* frame;
-     int n = 0;
-     void** lastseh;
-
-     for (lastseh = get_seh_frame(); lastseh && (lastseh!=(void*)-1);
-          lastseh = *lastseh);
-
-     fprintf(dyndebug_output, "Backtrace: %s (thread %p)\n", header, this_thread);
-     for (frame = __builtin_frame_address(0); frame; frame=*(void**)frame)
-     {
-         if ((n++)>depth)
-             return;
-         fprintf(dyndebug_output, "[#%02d]: ebp = 0x%p, ret = 0x%p\n",n,
-                 frame, ((void**)frame)[1]);
-     }
- }
-
- /* Called when FPU world is in indefinite state (in exception handler,
-    for instance), to establish safely one of the definite ones.
-
-    While a lot of C code is neutral to FPU, Lisp definitely shouldn't
-    run with half-full stack.
-
-    To recover lazily (when we enter Lisp) we introduce a special bit
-    in in_lisp_fpu_mode.
-
-    Target FPU world of recover is always the world that was current
-    before it was broken. */
-
-#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
-
- static inline
- void recover_fpu_world()
- {
-     if (fpu_world_cruel_p()) {
-         int lispyp = fpu_world_lispy_p();
-         x87_env nice_fpu_environment = {
-             .control = (lispyp ?
-                         this_thread->saved_lisp_fpu_mode :
-                         this_thread->saved_c_fpu_mode),
-             .status = 0,
-             .tags = (lispyp ? 0x5555 : 0xFFFF)
-         };
-
-         if (dyndebug_lazy_fpu) {
-             fprintf(dyndebug_output,
-                     "Recovering indeterminate FPU state to lispyp=%d\n",
-                     lispyp);
-             c_level_backtrace("Recovering FPU state..",15);
-         }
-         asm("fnclex;fldenv %0;fwait" : :"m"(nice_fpu_environment));
-         (arch_os_get_current_thread())->in_lisp_fpu_mode &= 0xFF;
-     }
- }
-
- static
- void check_fpu_state(const char* format,...)
- {
-     if (dyndebug_lazy_fpu && !fpu_world_cruel_p()) {
-         boolean lispyp = fpu_world_lispy_p();
-         x87_env fpu_environment = x87_fnstenv();
-         boolean have_valid_regs = (fpu_environment.tags!=0xFFFFu);
-         boolean have_empty_regs =
-             (0!=((fpu_environment.tags & 0x5555u) &
-                  ((fpu_environment.tags & 0xAAAAu)>>1)));
-         if ((lispyp && have_empty_regs)||
-             (!lispyp && have_valid_regs)) {
-             if (format) {
-                 va_list header;
-                 va_start(header,format);
-                 vfprintf(dyndebug_output,format,header);
-             }
-             fprintf(dyndebug_output,"\n"
-                     "Strange FPU state detected:\n"
-                     "Expected %s\n"
-                     "Actual tag word is %04x\n",
-                     lispyp? "Lisp mode (no empty regs)" : "C mode (all regs empty)",
-                     fpu_environment.tags);
-             c_level_backtrace("Unexpected FPU state", 10);
-         }
-         x87_fldenv(fpu_environment);
-     }
- }
-
-#endif
-
- boolean sb_control_fpu_normally_untouched_by_non_float_calls = 1;
- boolean sb_control_update_sb_stat_counters = 1;
- LONG sb_stat_fpu_modeswitch_cycling_counter = 0L;
-
-#ifdef LISP_FEATURE_X86
-
- #define WCTX_PUSH(wctx,value)                                           \
-     do { wctx->Esp-=4;                                                  \
-         *((intptr_t*)(intptr_t) wctx->Esp)=(intptr_t)value; } while(0)
-
- #define WCTX_PUSHA(wctx)                        \
-     do {                                        \
-     intptr_t orig_esp = wctx->Esp;              \
-     WCTX_PUSH(wctx,wctx->Eax);                  \
-     WCTX_PUSH(wctx,wctx->Ecx);                  \
-     WCTX_PUSH(wctx,wctx->Edx);                  \
-     WCTX_PUSH(wctx,wctx->Ebx);                  \
-     WCTX_PUSH(wctx,orig_esp);                   \
-     WCTX_PUSH(wctx,wctx->Ebp);                  \
-     WCTX_PUSH(wctx,wctx->Esi);                  \
-     WCTX_PUSH(wctx,wctx->Edi);                  \
-     } while(0)
-
-
-
- typedef void (*callback_pointer)();
-
- /**
-  * Modify context in order to make it run run_function after the
-  * signal or exception handler returns. After run_function is
-  * complete, it returns to original code.
-  *
-  * @param context CONTEXT of a thread where the call should be
-  * injected
-  *
-  * @param run_function function whose call should be injected
-  *
-  * @param frame_data_size size of a data block allocated for the
-  * duration of function call (dynamic extent).
-  *
-  * @param arg1
-  * @param arg2
-  *
-  * `run-function' can receive up to 3 parameters. The first one is
-  * (automagically) a pointer to frame_data_size-sized memory block.
-  * The rest two parameters are arbitrary; `run_function' can be
-  * declared without them and work flawlessly, but the caller of
-  * inject_function_call should better give some values for arg1 and
-  * arg2 anyway.
-  *
-  * Temporary memory block is allocated below inject_function_call
-  * frame on the same stack, which is a very dangerous technique: not
-  * only the frame data may become trash if somebody uses the stack up
-  * to this size, but an execution sequence of the function could be
-  * broken as well.
-  *
-  * @return pointer to a memory block of size `frame_data_size', that
-  * will be deallocated after `run_function' returns.
-  */
- static inline
- void* inject_function_call(CONTEXT *context,
-                            callback_pointer run_function,
-                            size_t frame_data_size,
-                            void* arg1, void* arg2)
- {
-     void* frame_data = ((void*)&context) -
-         (0x2000 + frame_data_size);
-
-     WCTX_PUSH(context, context->Eip); /* call ZZZZZ */
-     WCTX_PUSH(context, context->Ebp); /* push %ebp */
-     context->Ebp = context->Esp;      /* mov %esp, %ebp */
-     context->Esp = (DWORD)frame_data;
-     WCTX_PUSH(context, context->EFlags);
-     WCTX_PUSHA(context);
-     WCTX_PUSH(context,arg2);
-     WCTX_PUSH(context,arg1);
-     WCTX_PUSH(context,frame_data); /* FloatSave copy */
-     extern void post_signal_tramp();
-     WCTX_PUSH(context,post_signal_tramp); /* "return" address */
-     context->Eip = (intptr_t)run_function;
-     return frame_data;
- }
-
- static inline
- void inject_npx_recovery(CONTEXT* context)
- {
-     const size_t data_size = sizeof(context->FloatSave);
-
-     memcpy(inject_function_call(context, fpu_restore, data_size, 0, 0),
-            &context->FloatSave, data_size);
- }
-
- extern void fpu_insns_modrm(), fpu_insns_high();
-
- static inline
- void maybe_inject_fpu_instruction_restart(CONTEXT* context)
- {
-     /* if (!(context->FloatSave.StatusWord & 0x4000)) */
-     /*         return ; */
-     uint8_t* fpu_eip = (void*)(uintptr_t)context->FloatSave.ErrorOffset;
-
-     DWORD* temp_data = get_thread_alien_reserve(this_thread);
-
-     uint8_t fpu_prefix_D8toDF = (0xFFu & (context->FloatSave.ErrorSelector>>24))|0xD8;
-     uint8_t fpu_next_byte = 0xFFu & (context->FloatSave.ErrorSelector>>16);
-     uint8_t fpu_prefix_offset = fpu_prefix_D8toDF ^ 0xD8;
-     void* fpu_insn_base;
-     uint16_t fpu_insn_index;
-
-     if (!(context->FloatSave.ErrorSelector &0xFFFF0000)) {
-         if (context->ExtendedRegisters[7] ||
-             context->ExtendedRegisters[6]) {
-             fpu_prefix_D8toDF = context->ExtendedRegisters[7]^0xD8;
-             fpu_next_byte = context->ExtendedRegisters[6];
-         } else {
-             fpu_prefix_D8toDF = fpu_eip[0];
-             fpu_next_byte = fpu_eip[1];
-         }
-         fpu_prefix_offset = fpu_prefix_D8toDF ^ 0xD8;
-     }
-
-
-     AVER(fpu_prefix_offset<8);
-     context->FloatSave.ErrorSelector = 0xFFFF0000;
-
-     switch (fpu_next_byte & 0xC0) {
-     case 0xC0:
-         /* no memory operand; 64 instructions per prefix, 8 bytes
-          * per instruction, starting at fpu_insns_high. */
-         fpu_insn_base = &fpu_insns_high;
-         fpu_insn_index = (fpu_prefix_offset * 64) + (fpu_next_byte ^ 0xC0);
-         break;
-     default:
-         fpu_insn_base = &fpu_insns_modrm;
-         fpu_insn_index = (fpu_prefix_offset * 8) + ((fpu_next_byte & 070)>>3);
-         break;
-     }
-     temp_data[0] = context->Ebp;
-     temp_data[1] = context->Eax;
-     temp_data[2] = context->Eip;
-
-     context->Eax = context->FloatSave.DataOffset;
-     context->Eip = (DWORD)(uintptr_t)(fpu_insn_base + 8*fpu_insn_index);
-     context->Ebp = (DWORD)(uintptr_t)temp_data;
-
- }
-
- static inline
- void maybe_set_xmm_state(CONTEXT* context, boolean for_lisp_p)
- {
-     unsigned short tags_x87 = context->FloatSave.TagWord & 0xFFFFu;
-     unsigned short control_x87 = context->FloatSave.ControlWord & 0xFFFFu;
-     unsigned short status_x87 = context->FloatSave.StatusWord & 0xFFFFu;
-
-     if (context->ContextFlags & CONTEXT_EXTENDED_REGISTERS) {
-         context->ExtendedRegisters[4] = for_lisp_p ? 0xFF : 0x00;
-         context->ExtendedRegisters[0] = control_x87 & 0xFFu;
-         context->ExtendedRegisters[1] = control_x87>>8;
-         context->ExtendedRegisters[2] = status_x87 & 0xFFu;
-         context->ExtendedRegisters[3] = status_x87>>8;
-     }
- }
-
-#endif  /* LISP_FEATURE_X86 */
+    fprintf(dyndebug_output, "Backtrace: %s (thread %p)\n", header, this_thread);
+    for (frame = __builtin_frame_address(0); frame; frame=*(void**)frame)
+    {
+        if ((n++)>depth)
+            return;
+        fprintf(dyndebug_output, "[#%02d]: ebp = 0x%p, ret = 0x%p\n",n,
+                frame, ((void**)frame)[1]);
+    }
+#endif    
+}
 
 #ifdef LISP_FEATURE_X86
 #define voidreg(ctxptr,name) ((void*)((ctxptr)->E##name))
@@ -2519,140 +2185,6 @@ handle_exception(EXCEPTION_RECORD *exception_record,
              (void*)(intptr_t)code,
              myreg(cx),
              context->FloatSave.TagWord);
-
-#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
-    int contextual_fpu_state = self ? self->in_lisp_fpu_mode : 0;
-
-    if (dyndebug_lazy_fpu)
-    {
-        DWORD tags = context->FloatSave.TagWord;
-        if (!fpu_world_lispy_p() && ((tags&0xFFFF)!=0xFFFF)) {
-            fprintf(dyndebug_output,
-                    "Exception handler/ strange NPX for C world\n"
-                    "....with tags 0x%04lx, status 0x%04lx, control 0x%04lx\n",
-                    context->FloatSave.TagWord,
-                    context->FloatSave.StatusWord,
-                    context->FloatSave.ControlWord);
-            c_level_backtrace("Exception handler: strange NPX state",10);
-        }
-        if (fpu_world_lispy_p() && ((tags&0x5555) & ((tags&0xAAAA)>>1)))
-        {
-            fprintf(dyndebug_output,
-                    "Exception handler/ strange NPX for Lisp world\n"
-                    "....with tags 0x%04lx, status 0x%04lx, control 0x%04lx\n",
-                    context->FloatSave.TagWord,
-                    context->FloatSave.StatusWord,
-                    context->FloatSave.ControlWord);
-            c_level_backtrace("Exception handler: strange NPX state",10);
-        }
-    }
-
-    if (code == EXCEPTION_FLT_STACK_CHECK) {
-        int stack_empty = (!(context->FloatSave.StatusWord &(1<<9)));
-
-        /* We used to expect such exceptions in non-lispy and
-         * ambigious states only. With FPU insn restart support,
-         * exceptions originating in C may be handled too. */
-
-        AVERLAX(!fpu_world_cruel_p()); /* Let's complain if a Lisp
-                                        * code was exposed to
-                                        * interrupt at ambigious
-                                        * time */
-        if (stack_empty && fpu_world_lispy_p()) {
-            fprintf(dyndebug_output,
-                    "Exception handler: stack EMPTY while it should be FULL.\n"
-                    "....tags 0x%04lx, status 0x%04lx, control 0x%04lx\n",
-                    context->FloatSave.TagWord,
-                    context->FloatSave.StatusWord,
-                    context->FloatSave.ControlWord);
-            c_level_backtrace("Exception handler: strange NPX state",10);
-
-
-
-            /* FPU stack must be in SBCL-compliant state, having no
-             * empty regs, but somehow it became empty! BAD thing. */
-            goto complain;
-        }
-
-        if (!stack_empty && !fpu_world_lispy_p()) {
-            /* FPU stack must be in C-compliant state, having no
-             * valid regs, but somehow it has overflown! BAD thing. */
-
-
-            fprintf(dyndebug_output,
-                    "Exception handler: stack FULL while it should be EMPTY.\n"
-                    "....tags 0x%04lx, status 0x%04lx, control 0x%04lx\n",
-                    context->FloatSave.TagWord,
-                    context->FloatSave.StatusWord,
-                    context->FloatSave.ControlWord);
-            c_level_backtrace("Exception handler: strange NPX state",10);
-
-            goto complain;
-        }
-
-        /* We have legitimate FPU stack exception that is to be
-         * handled silently.  */
-        if (dyndebug_lazy_fpu) {
-            fprintf(dyndebug_output,
-                    "Exception handler: FPU stack %s (%s compliance expected).\n"
-                    "....tags 0x%04lx, status 0x%04lx, control 0x%04lx\n"
-                    "....DataOffset %08lx, ErrorOffset %08lx\n"
-                    "....DataSelector %08lx, ErrorSelector %08lx\n"
-                    "....Cr0Npx %08lx, XMM opcode [6]=%02x, [7]=%02x\n"
-                    "....Main CPU EIP %08lx, ESP %08lx\n",
-                    stack_empty ? "EMPTY" : "FULL",
-                    fpu_world_lispy_p() ? "Lisp" : "C",
-                    context->FloatSave.TagWord,
-                    context->FloatSave.StatusWord,
-                    context->FloatSave.ControlWord,
-                    context->FloatSave.DataOffset,
-                    context->FloatSave.ErrorOffset,
-                    context->FloatSave.DataSelector,
-                    context->FloatSave.ErrorSelector,
-                    context->FloatSave.Cr0NpxState,
-                    context->ExtendedRegisters[6],
-                    context->ExtendedRegisters[7],
-                    context->Eip, context->Esp);
-            c_level_backtrace("....see where it happened.",10);
-        }
-        if (sb_control_update_sb_stat_counters) {
-            InterlockedIncrement(&sb_stat_fpu_modeswitch_cycling_counter);
-        }
-
-        *((contextual_fpu_state ?
-           &self->saved_lisp_fpu_mode :
-           &self->saved_c_fpu_mode)) = (context->FloatSave.ControlWord & 0xFFFF);
-
-        contextual_fpu_state = contextual_fpu_state^4; /* inverted */
-
-        context->FloatSave.ControlWord =
-            *(contextual_fpu_state ?
-              &self->saved_lisp_fpu_mode :
-              &self->saved_c_fpu_mode);
-
-
-        context->FloatSave.StatusWord &= ~(0x3941);
-
-        context->FloatSave.TagWord = contextual_fpu_state ? 0x5555 : 0xFFFF;
-        memset(context->FloatSave.RegisterArea,0,
-               sizeof(context->FloatSave.RegisterArea));
-        maybe_set_xmm_state(context,contextual_fpu_state);
-        maybe_inject_fpu_instruction_restart(context);
-        goto finish;
-    }
-
-    /* If FPU world is not marked as cruel, we mark it (we don't
-     * really know where we interrupted). */
-
-    if (self&&((self->in_lisp_fpu_mode &&
-                ((context->FloatSave.TagWord & 0x5555)&
-                 ((context->FloatSave.TagWord & 0xAAAA)>>1)))
-               ||(!self->in_lisp_fpu_mode &&
-                  ((context->FloatSave.TagWord & 0xFFFF)!=0xFFFF)))) {
-        self->in_lisp_fpu_mode |= 0xFF00; /* Hello cruel world */
-    }
-
-#endif /* LISP_FEATURE_SB_AUTO_FPU_SWITCH */
 
     ctx.win32_context = context;
     ctx.sigmask = self ? self->os_thread->blocked_signal_set : 0;
@@ -2893,9 +2425,6 @@ complain:
 finish:
     if (self) {
         self->gc_safepoint_context = oldctx;
-#if defined(LISP_FEATURE_SB_AUTO_FPU_SWITCH)
-        self->in_lisp_fpu_mode = contextual_fpu_state;
-#endif
     }
     errno = lastErrno;
     SetLastError(lastError);

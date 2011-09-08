@@ -378,9 +378,6 @@ new_thread_trampoline(struct thread *th)
     struct lisp_exception_frame exception_frame;
     wos_install_interrupt_handlers(&exception_frame);
 #endif
-#if defined(LISP_FEATURE_SB_AUTO_FPU_SWITCH)
-    x87_fldcw(th->saved_c_fpu_mode);
-#endif
     FSHOW((stderr,"/creating thread %lu\n", thread_self()));
 #ifndef LISP_FEATURE_WIN32
     check_deferrables_blocked_or_lose(0);
@@ -865,20 +862,6 @@ create_thread_struct(lispobj initial_function) {
            sizeof(th->private_events.events[0]); ++i) {
       th->private_events.events[i] = CreateEvent(NULL,FALSE,FALSE,NULL);
     }
-#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
-    th->in_lisp_fpu_mode = 0;
-    {
-        struct thread* parent = arch_os_get_current_thread();
-        if (parent) {
-            th->saved_c_fpu_mode = parent->saved_c_fpu_mode;
-            th->saved_lisp_fpu_mode = parent->saved_lisp_fpu_mode;
-        } else {
-            th->saved_c_fpu_mode = (x87_fnstcw() & ~1);
-            th->saved_lisp_fpu_mode =
-                ((th->saved_c_fpu_mode & 0xf2ff) | 0x0200);
-        }
-    }
-#endif
     th->gc_safepoint_context = 0;
     th->csp_around_foreign_call = 0;
     th->pc_around_foreign_call = 0;

@@ -315,7 +315,6 @@
 (define-vop (set-fpu-word-for-c)
   (:node-var node)
   (:generator 0 (policy node (= debug 0))
-    #!-sb-auto-fpu-switch
     (when (policy node (= sb!c::float-accuracy 3))
       (inst sub esp-tn 4)
       (inst fnstcw (make-ea :word :base esp-tn))
@@ -327,7 +326,6 @@
 (define-vop (set-fpu-word-for-lisp)
   (:node-var node)
   (:generator 0 (policy node (= debug 0))
-    #!-sb-auto-fpu-switch
     (when (policy node (= sb!c::float-accuracy 3))
       (inst fnstcw (make-ea :word :base esp-tn))
       (inst wait)

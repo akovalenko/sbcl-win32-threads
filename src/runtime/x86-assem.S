@@ -103,17 +103,12 @@
 #define TRAP int3
 #endif
 	
-#if !defined(LISP_FEATURE_SB_AUTO_FPU_SWITCH)
 #define CLEAR_FPU_STACK \
 	;fstp %st(0);fstp %st(0);fstp %st(0);fstp %st(0); \
 	fstp %st(0);fstp %st(0);fstp %st(0);fstp %st(0);
 	
 #define FILL_FPU_STACK	\
 	;fldz;fldz;fldz;fldz;fldz;fldz;fldz;fldz;
-#else
-#define CLEAR_FPU_STACK
-#define FILL_FPU_STACK	
-#endif
 
 #define THREAD_SAVED_CSP_OFFSET (TLS_SIZE*N_WORD_BYTES + 32768)
 	
@@ -202,26 +197,12 @@ GNAME(call_into_c):
    Variation of call_into_c for calling functions with floating-point
    result (in %st(0), a.k.a FR0-TN).
 	
-   Why have both? call_into_c used to have a smart code managing to
-   check FP result presence by asking FPU directly.  The reason for
-   replacing it with a separate wrapper was, frankly, :SB-AUTO-FPU-SWITCH
-   support (which is a questionable feature by itself, of course).
-	
-   Current implementation of :SB-AUTO-FPU-SWITCH (win32-only)
-   reacts on "floating stack check" exception, switching transparently between
-   "Lisp mode" (no registers empty + some control word settings) and "C mode"
-   (all registers empty on call-out + some other control word settings).
-
-   It works for normal C code, but, as of auto-detection of return
-   type, it would require to distinguish between "1 register used" and
-   "all registers used", which is more complicated than empty/non-empty check
-   that used to be in call_into_c. And it would completely defeat the purpose
-   of :SB-AUTO-FPU-SWITCH, as the point is not to save time on 7
-   fldz's here and there, but to be able to run with TS bit in CR0 for
-   some measurable intervals. Modern OSes switch FPU context lazily,
-   and each event of "using FPU after not using it for a long time"
-   costs more like a syscall (with user/kernel/user mode switching) than
-   like a seven non-privileged assembler instructions. */
+   Why have both? Originally, the split occured to enable exception-based
+   FPU stack fixup on Win32. That feature was rejected for its uselessness,
+   but two separate foreign call trampolines were retained: it's more simple
+   and less error-prone than an universal trampoline for FP and non-FP calling
+   calls.
+*/
 	.text
 	.align	align_16byte,0x90
 	.globl GNAME(call_into_c_fp_result)
@@ -241,11 +222,6 @@ GNAME(call_into_c_fp_result):
 	movl	%ecx,THREAD_PC_AROUND_FOREIGN_CALL_OFFSET(%edi)
 	fldz;fldz;fldz;fldz;fldz;fldz;fldz; /* 7 elements */
 	fxch	%st(7)			    /* and topmost one */
-#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
-	movl	SBCL_THREAD_BASE_EA, %esi
-	fldcw	THREAD_SAVED_LISP_FPU_MODE_OFFSET(%esi)
-	or	$4, THREAD_IN_LISP_FPU_MODE_OFFSET(%esi)
-#endif	
 	jmp	*%ebx	/* without stack adjustment (esp overwrite allowed) */
 #else	
 /* Save the return Lisp address in ebx. */
@@ -253,11 +229,6 @@ GNAME(call_into_c_fp_result):
 	call	*%eax		  # normal callout using Lisp stack
 	fldz;fldz;fldz;fldz;fldz;fldz;fldz;
 	fxch	%st(7)
-#ifdef LISP_FEATURE_SB_AUTO_FPU_SWITCH
-	movl	SBCL_THREAD_BASE_EA,%eax
-	fldcw	THREAD_SAVED_LISP_FPU_MODE_OFFSET(%eax)
-	or	$4, THREAD_IN_LISP_FPU_MODE_OFFSET(%eax)
-#endif	
 /* Return. */
 	jmp	*%ebx
 #endif /* LISP_FEATURE_SB_GC_SAFEPOINT */	
@@ -302,7 +273,6 @@ GNAME(call_into_lisp):
 	popl	%eax
 Lstack:
 	
-#ifndef LISP_FEATURE_SB_AUTO_FPU_SWITCH
 	fwait
 	subl	$112,%esp
 	fnsave	(%esp)
@@ -313,7 +283,6 @@ Lstack:
 	fldcw	(%esp)
 	popl	%eax
 	FILL_FPU_STACK
-#endif
 	
 /* Save C regs: ebx esi edi. */
 	pushl	%ebx
@@ -405,10 +374,8 @@ LsingleValue:
 	popl	%ebx
 	
 /* Restore the NPX state. */
-#ifndef LISP_FEATURE_SB_AUTO_FPU_SWITCH
 	frstor	(%esp)
 	addl	$112,%esp
-#endif
 	popl	%ebp		# c-sp
 	movl	%edx,%eax	# c-val
 	addl	$4,%esp
