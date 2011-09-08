@@ -1047,7 +1047,5 @@ Lunwinding:
 	
 	SIZE(GNAME(uwp_seh_handler_gate))
 #endif	
-
-	#include "x86-fpu-insn.S"
 	
         END()
