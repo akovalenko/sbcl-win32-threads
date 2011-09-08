@@ -988,7 +988,6 @@ os_thread_t create_thread(lispobj initial_function) {
        create_thread is the only place I know that is definitely NOT
        floatless. */
 
-    establish_c_fpu_world();
 #endif  /* LISP_FEATURE_SB_GC_SAFEPOINT */
     /* Must defend against async unwinds. */
     if (SymbolValue(INTERRUPTS_ENABLED, thread) != NIL)
