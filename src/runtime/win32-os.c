@@ -2325,29 +2325,10 @@ handle_exception(EXCEPTION_RECORD *exception_record,
             goto complain;
 
     try_recommit:
-#if defined(LISP_FEATURE_X86)
         AVER(VirtualAlloc(PTR_ALIGN_DOWN(fault_address,os_vm_page_size),
                           commit_size,
-                          MEM_COMMIT, PAGE_EXECUTE_READWRITE)
-             ||(fprintf(stderr,"Unable to recommit addr %p eip 0x%08lx\n",
-                        fault_address, context->Eip) &&
-                (c_level_backtrace("BT",5),
-                 fake_foreign_function_call(&ctx),
-                 lose("Lispy backtrace"),
-                 0)));
-#else
-        AVER(VirtualAlloc(PTR_ALIGN_DOWN(fault_address,os_vm_page_size),
-                          commit_size,
-                          MEM_COMMIT, PAGE_EXECUTE_READWRITE)
-             ||(fprintf(stderr,"Unable to recommit addr %p eip 0x%p\n",
-                        fault_address, (void*)context->Rip) &&
-                (c_level_backtrace("BT",5),
-                 fake_foreign_function_call(&ctx),
-                 lose("Lispy backtrace"),
-                 0)));
-#endif
+                          MEM_COMMIT, PAGE_EXECUTE_READWRITE));
         goto finish;
-
     }
 complain:
     /* All else failed, drop through to the lisp-side exception handler. */
