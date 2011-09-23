@@ -1168,13 +1168,14 @@ around and can be retrieved by JOIN-THREAD."
                                                 (apply real-function arguments)))
                                        #!+win32
                                        (sb!kernel::control-stack-exhausted ()
-                                         (sb!kernel::reset-control-stack-guard-page)
-                                         (invoke-restart 'terminate-thread))))
+                                         (throw 'sb!impl::%toplevel-catcher nil))))
                                ;; Try to block deferrables. An
                                ;; interrupt may unwind it, but for a
                                ;; normal exit it prevents interrupt
                                ;; loss.
                                (block-deferrable-signals))
+                          #!+win32
+                          (sb!kernel::reset-control-stack-guard-page)
                           ;; We're going down, can't handle interrupts
                           ;; sanely anymore. GC remains enabled.
                           (block-deferrable-signals)
