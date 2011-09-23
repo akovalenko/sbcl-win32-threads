@@ -1562,8 +1562,14 @@ void reset_thread_control_stack_guard_page(struct thread *th)
 void reset_control_stack_guard_page(void)
 {
     struct thread *th=arch_os_get_current_thread();
+
     if (th->control_stack_guard_page_protected == NIL) {
+#ifdef LISP_FEATURE_WIN32
+        _resetstkoflw();
+        th->control_stack_guard_page_protected = T;
+#else
         reset_thread_control_stack_guard_page(th);
+#endif
     }
 }
 

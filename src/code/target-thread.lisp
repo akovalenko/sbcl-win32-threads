@@ -1159,9 +1159,16 @@ around and can be retrieved by JOIN-THREAD."
                                ;; other platforms?
                                (float-cold-init-or-reinit)
                                (setf (thread-result thread)
-                                     (cons t
-                                           (multiple-value-list
-                                            (apply real-function arguments))))
+                                     ;; Too hard to recover after stack overflow
+                                     ;; on windows.  Terminating thread by default
+                                     ;; makes debugging feasible, at least.
+                                     (handler-case 
+                                         (cons t
+                                               (multiple-value-list
+                                                (apply real-function arguments)))
+                                       #!+win32
+                                       (sb!kernel::control-stack-exhausted
+                                         (invoke-restart 'terminate-thread))))
                                ;; Try to block deferrables. An
                                ;; interrupt may unwind it, but for a
                                ;; normal exit it prevents interrupt

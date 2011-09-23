@@ -2189,7 +2189,14 @@ handle_exception(EXCEPTION_RECORD *exception_record,
     ctx.win32_context = context;
     ctx.sigmask = self ? self->os_thread->blocked_signal_set : 0;
 
-    if (exception_record->ExceptionCode == EXCEPTION_SINGLE_STEP) {
+    if (code == EXCEPTION_STACK_OVERFLOW && self) {
+        self->control_stack_guard_page_protected = NIL;
+        BEGIN_GC_UNSAFE_CODE;
+        funcall0(StaticSymbolFunction(CONTROL_STACK_EXHAUSTED_ERROR));
+        END_GC_UNSAFE_CODE;
+        goto finish;
+    }
+    if (code == EXCEPTION_SINGLE_STEP) {
         /* We are doing a displaced instruction. At least function
          * end breakpoints uses this. */
         if (single_stepping) {
