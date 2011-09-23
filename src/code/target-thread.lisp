@@ -1167,7 +1167,7 @@ around and can be retrieved by JOIN-THREAD."
                                                (multiple-value-list
                                                 (apply real-function arguments)))
                                        #!+win32
-                                       (sb!kernel::control-stack-exhausted
+                                       (sb!kernel::control-stack-exhausted ()
                                          (invoke-restart 'terminate-thread))))
                                ;; Try to block deferrables. An
                                ;; interrupt may unwind it, but for a

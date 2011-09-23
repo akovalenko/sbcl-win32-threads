@@ -555,6 +555,7 @@ that provides the REPL for the system. Assumes that *STANDARD-INPUT* and
                          #!+win32
                          (sb!kernel::control-stack-exhausted
                            (lambda (condition)
+                             (declare (ignore condition))
                              (throw 'toplevel-catcher nil))))
             (loop
                (/show0 "about to set up restarts in TOPLEVEL-REPL")
