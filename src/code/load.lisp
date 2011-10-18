@@ -103,19 +103,19 @@
 
 (declaim (inline read-byte-arg read-halfword-arg read-word-arg))
 (defun read-byte-arg ()
-  (declare (optimize (speed 0)))
+  (declare (optimize (speed 3)))
   (read-arg 1))
 
 (defun read-halfword-arg ()
-  (declare (optimize (speed 0)))
+  (declare (optimize (speed 3)))
   (read-arg #.(/ sb!vm:n-word-bytes 2)))
 
 (defun read-word-arg ()
-  (declare (optimize (speed 0)))
+  (declare (optimize (speed 3)))
   (read-arg #.sb!vm:n-word-bytes))
 
 (defun read-unsigned-byte-32-arg ()
-  (declare (optimize (speed 0)))
+  (declare (optimize (speed 3)))
   (read-arg 4))
 
 
