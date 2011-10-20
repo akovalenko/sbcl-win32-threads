@@ -104,8 +104,18 @@ static void newline(char *label)
 }
 
 
+static void print_unknown(lispobj obj)
+{
+  printf("unknown object: %p", (void *)obj);
+}
+
 static void brief_fixnum(lispobj obj)
 {
+    /* KLUDGE: Rather than update the tables in print_obj(), we
+       declare all fixnum-or-unknown tags to be fixnums and sort it
+       out here with a guard clause. */
+    if (!fixnump(obj)) return print_unknown(obj);
+
 #ifndef LISP_FEATURE_ALPHA
     printf("%ld", ((long)obj)>>2);
 #else
@@ -115,6 +125,11 @@ static void brief_fixnum(lispobj obj)
 
 static void print_fixnum(lispobj obj)
 {
+    /* KLUDGE: Rather than update the tables in print_obj(), we
+       declare all fixnum-or-unknown tags to be fixnums and sort it
+       out here with a guard clause. */
+    if (!fixnump(obj)) return print_unknown(obj);
+
 #ifndef LISP_FEATURE_ALPHA
     printf(": %ld", ((long)obj)>>2);
 #else
@@ -223,13 +238,6 @@ static void brief_list(lispobj obj)
         putchar(')');
     }
 }
-
-#ifdef LISP_FEATURE_X86_64
-static void print_unknown(lispobj obj)
-{
-  printf("unknown object: %p", (void *)obj);
-}
-#endif
 
 static void print_list(lispobj obj)
 {
@@ -499,14 +507,11 @@ static void print_otherptr(lispobj obj)
             case SIMPLE_ARRAY_UNSIGNED_BYTE_8_WIDETAG:
             case SIMPLE_ARRAY_UNSIGNED_BYTE_15_WIDETAG:
             case SIMPLE_ARRAY_UNSIGNED_BYTE_16_WIDETAG:
-#ifdef SIMPLE_ARRAY_UNSIGNED_BYTE_29_WIDETAG
-            case SIMPLE_ARRAY_UNSIGNED_BYTE_29_WIDETAG:
-#endif
+
+            case SIMPLE_ARRAY_UNSIGNED_FIXNUM_WIDETAG:
+
             case SIMPLE_ARRAY_UNSIGNED_BYTE_31_WIDETAG:
             case SIMPLE_ARRAY_UNSIGNED_BYTE_32_WIDETAG:
-#ifdef SIMPLE_ARRAY_UNSIGNED_BYTE_60_WIDETAG
-            case SIMPLE_ARRAY_UNSIGNED_BYTE_60_WIDETAG:
-#endif
 #ifdef SIMPLE_ARRAY_UNSIGNED_BYTE_63_WIDETAG
             case SIMPLE_ARRAY_UNSIGNED_BYTE_63_WIDETAG:
 #endif
@@ -519,14 +524,11 @@ static void print_otherptr(lispobj obj)
 #ifdef SIMPLE_ARRAY_SIGNED_BYTE_16_WIDETAG
             case SIMPLE_ARRAY_SIGNED_BYTE_16_WIDETAG:
 #endif
-#ifdef SIMPLE_ARRAY_SIGNED_BYTE_30_WIDETAG
-            case SIMPLE_ARRAY_SIGNED_BYTE_30_WIDETAG:
-#endif
+
+            case SIMPLE_ARRAY_FIXNUM_WIDETAG:
+
 #ifdef SIMPLE_ARRAY_SIGNED_BYTE_32_WIDETAG
             case SIMPLE_ARRAY_SIGNED_BYTE_32_WIDETAG:
-#endif
-#ifdef SIMPLE_ARRAY_SIGNED_BYTE_61_WIDETAG
-            case SIMPLE_ARRAY_SIGNED_BYTE_61_WIDETAG:
 #endif
 #ifdef SIMPLE_ARRAY_SIGNED_BYTE_64_WIDETAG
             case SIMPLE_ARRAY_SIGNED_BYTE_64_WIDETAG:
@@ -614,15 +616,15 @@ static void print_obj(char *prefix, lispobj obj)
 {
 #ifdef LISP_FEATURE_X86_64
     static void (*verbose_fns[])(lispobj obj)
-        = {print_fixnum, print_struct, print_otherimm, print_unknown,
-           print_unknown, print_unknown, print_otherimm, print_list,
-           print_fixnum, print_otherptr, print_otherimm, print_unknown,
-           print_unknown, print_unknown, print_otherimm, print_otherptr};
+        = {print_fixnum, print_otherimm, print_fixnum, print_struct,
+           print_fixnum, print_otherimm, print_fixnum, print_list,
+           print_fixnum, print_otherimm, print_fixnum, print_otherptr,
+           print_fixnum, print_otherimm, print_fixnum, print_otherptr};
     static void (*brief_fns[])(lispobj obj)
-        = {brief_fixnum, brief_struct, brief_otherimm, print_unknown,
-           print_unknown,  print_unknown, brief_otherimm, brief_list,
-           brief_fixnum, brief_otherptr, brief_otherimm, print_unknown,
-           print_unknown,  print_unknown,brief_otherimm, brief_otherptr};
+        = {brief_fixnum, brief_otherimm, brief_fixnum, brief_struct,
+           brief_fixnum, brief_otherimm, brief_fixnum, brief_list,
+           brief_fixnum, brief_otherimm, brief_fixnum, brief_otherptr,
+           brief_fixnum, brief_otherimm, brief_fixnum, brief_otherptr};
 #else
     static void (*verbose_fns[])(lispobj obj)
         = {print_fixnum, print_struct, print_otherimm, print_list,

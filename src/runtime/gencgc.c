@@ -2527,14 +2527,11 @@ looks_like_valid_lisp_pointer_p(lispobj *pointer, lispobj *start_addr)
         case SIMPLE_ARRAY_UNSIGNED_BYTE_8_WIDETAG:
         case SIMPLE_ARRAY_UNSIGNED_BYTE_15_WIDETAG:
         case SIMPLE_ARRAY_UNSIGNED_BYTE_16_WIDETAG:
-#ifdef  SIMPLE_ARRAY_UNSIGNED_BYTE_29_WIDETAG
-        case SIMPLE_ARRAY_UNSIGNED_BYTE_29_WIDETAG:
-#endif
+
+        case SIMPLE_ARRAY_UNSIGNED_FIXNUM_WIDETAG:
+
         case SIMPLE_ARRAY_UNSIGNED_BYTE_31_WIDETAG:
         case SIMPLE_ARRAY_UNSIGNED_BYTE_32_WIDETAG:
-#ifdef  SIMPLE_ARRAY_UNSIGNED_BYTE_60_WIDETAG
-        case SIMPLE_ARRAY_UNSIGNED_BYTE_60_WIDETAG:
-#endif
 #ifdef  SIMPLE_ARRAY_UNSIGNED_BYTE_63_WIDETAG
         case SIMPLE_ARRAY_UNSIGNED_BYTE_63_WIDETAG:
 #endif
@@ -2547,14 +2544,11 @@ looks_like_valid_lisp_pointer_p(lispobj *pointer, lispobj *start_addr)
 #ifdef SIMPLE_ARRAY_SIGNED_BYTE_16_WIDETAG
         case SIMPLE_ARRAY_SIGNED_BYTE_16_WIDETAG:
 #endif
-#ifdef SIMPLE_ARRAY_SIGNED_BYTE_30_WIDETAG
-        case SIMPLE_ARRAY_SIGNED_BYTE_30_WIDETAG:
-#endif
+
+        case SIMPLE_ARRAY_FIXNUM_WIDETAG:
+
 #ifdef SIMPLE_ARRAY_SIGNED_BYTE_32_WIDETAG
         case SIMPLE_ARRAY_SIGNED_BYTE_32_WIDETAG:
-#endif
-#ifdef SIMPLE_ARRAY_SIGNED_BYTE_61_WIDETAG
-        case SIMPLE_ARRAY_SIGNED_BYTE_61_WIDETAG:
 #endif
 #ifdef SIMPLE_ARRAY_SIGNED_BYTE_64_WIDETAG
         case SIMPLE_ARRAY_SIGNED_BYTE_64_WIDETAG:
@@ -2685,14 +2679,11 @@ maybe_adjust_large_object(lispobj *where)
     case SIMPLE_ARRAY_UNSIGNED_BYTE_8_WIDETAG:
     case SIMPLE_ARRAY_UNSIGNED_BYTE_15_WIDETAG:
     case SIMPLE_ARRAY_UNSIGNED_BYTE_16_WIDETAG:
-#ifdef  SIMPLE_ARRAY_UNSIGNED_BYTE_29_WIDETAG
-    case SIMPLE_ARRAY_UNSIGNED_BYTE_29_WIDETAG:
-#endif
+
+    case SIMPLE_ARRAY_UNSIGNED_FIXNUM_WIDETAG:
+
     case SIMPLE_ARRAY_UNSIGNED_BYTE_31_WIDETAG:
     case SIMPLE_ARRAY_UNSIGNED_BYTE_32_WIDETAG:
-#ifdef SIMPLE_ARRAY_UNSIGNED_BYTE_60_WIDETAG
-    case SIMPLE_ARRAY_UNSIGNED_BYTE_60_WIDETAG:
-#endif
 #ifdef SIMPLE_ARRAY_UNSIGNED_BYTE_63_WIDETAG
     case SIMPLE_ARRAY_UNSIGNED_BYTE_63_WIDETAG:
 #endif
@@ -2705,14 +2696,11 @@ maybe_adjust_large_object(lispobj *where)
 #ifdef SIMPLE_ARRAY_SIGNED_BYTE_16_WIDETAG
     case SIMPLE_ARRAY_SIGNED_BYTE_16_WIDETAG:
 #endif
-#ifdef SIMPLE_ARRAY_SIGNED_BYTE_30_WIDETAG
-    case SIMPLE_ARRAY_SIGNED_BYTE_30_WIDETAG:
-#endif
+
+    case SIMPLE_ARRAY_FIXNUM_WIDETAG:
+
 #ifdef SIMPLE_ARRAY_SIGNED_BYTE_32_WIDETAG
     case SIMPLE_ARRAY_SIGNED_BYTE_32_WIDETAG:
-#endif
-#ifdef SIMPLE_ARRAY_SIGNED_BYTE_61_WIDETAG
-    case SIMPLE_ARRAY_SIGNED_BYTE_61_WIDETAG:
 #endif
 #ifdef SIMPLE_ARRAY_SIGNED_BYTE_64_WIDETAG
     case SIMPLE_ARRAY_SIGNED_BYTE_64_WIDETAG:
@@ -3706,14 +3694,11 @@ verify_space(lispobj *start, size_t words)
                 case SIMPLE_ARRAY_UNSIGNED_BYTE_8_WIDETAG:
                 case SIMPLE_ARRAY_UNSIGNED_BYTE_15_WIDETAG:
                 case SIMPLE_ARRAY_UNSIGNED_BYTE_16_WIDETAG:
-#ifdef SIMPLE_ARRAY_UNSIGNED_BYTE_29_WIDETAG
-                case SIMPLE_ARRAY_UNSIGNED_BYTE_29_WIDETAG:
-#endif
+
+                case SIMPLE_ARRAY_UNSIGNED_FIXNUM_WIDETAG:
+
                 case SIMPLE_ARRAY_UNSIGNED_BYTE_31_WIDETAG:
                 case SIMPLE_ARRAY_UNSIGNED_BYTE_32_WIDETAG:
-#ifdef SIMPLE_ARRAY_UNSIGNED_BYTE_60_WIDETAG
-                case SIMPLE_ARRAY_UNSIGNED_BYTE_60_WIDETAG:
-#endif
 #ifdef SIMPLE_ARRAY_UNSIGNED_BYTE_63_WIDETAG
                 case SIMPLE_ARRAY_UNSIGNED_BYTE_63_WIDETAG:
 #endif
@@ -3726,14 +3711,11 @@ verify_space(lispobj *start, size_t words)
 #ifdef SIMPLE_ARRAY_SIGNED_BYTE_16_WIDETAG
                 case SIMPLE_ARRAY_SIGNED_BYTE_16_WIDETAG:
 #endif
-#ifdef SIMPLE_ARRAY_SIGNED_BYTE_30_WIDETAG
-                case SIMPLE_ARRAY_SIGNED_BYTE_30_WIDETAG:
-#endif
+
+                case SIMPLE_ARRAY_FIXNUM_WIDETAG:
+
 #ifdef SIMPLE_ARRAY_SIGNED_BYTE_32_WIDETAG
                 case SIMPLE_ARRAY_SIGNED_BYTE_32_WIDETAG:
-#endif
-#ifdef SIMPLE_ARRAY_SIGNED_BYTE_61_WIDETAG
-                case SIMPLE_ARRAY_SIGNED_BYTE_61_WIDETAG:
 #endif
 #ifdef SIMPLE_ARRAY_SIGNED_BYTE_64_WIDETAG
                 case SIMPLE_ARRAY_SIGNED_BYTE_64_WIDETAG:
@@ -4203,7 +4185,7 @@ garbage_collect_generation(generation_index_t generation, int raise)
             scavenge((lispobj *) th->binding_stack_start,len);
 #ifdef LISP_FEATURE_SB_THREAD
             /* do the tls as well */
-            len=fixnum_value(SymbolValue(FREE_TLS_INDEX,0)) -
+            len=(SymbolValue(FREE_TLS_INDEX,0) >> WORD_SHIFT) -
                 (sizeof (struct thread))/(sizeof (lispobj));
             scavenge((lispobj *) (th+1),len);
 #endif

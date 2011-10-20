@@ -1889,7 +1889,7 @@ scav_lose(lispobj *where, lispobj object)
 {
     lose("no scavenge function for object 0x%08x (widetag 0x%x)\n",
          (uword_t)object,
-         widetag_of(object));
+         widetag_of(*where));
 
     return 0; /* bogus return value to satisfy static type checking */
 }
@@ -1908,7 +1908,7 @@ size_lose(lispobj *where)
 {
     lose("no size function for object at 0x%08x (widetag 0x%x)\n",
          (uword_t)where,
-         widetag_of(LOW_WORD(where)));
+         widetag_of(*where));
     return 1; /* bogus return value to satisfy static type checking */
 }
 
@@ -1920,7 +1920,7 @@ size_lose(lispobj *where)
 void
 gc_init_tables(void)
 {
-    uword_t i;
+    uword_t i, j;
 
     /* Set default value in all slots of scavenge table.  FIXME
      * replace this gnarly sizeof with something based on
@@ -1935,11 +1935,14 @@ gc_init_tables(void)
      */
 
     for (i = 0; i < (1<<(N_WIDETAG_BITS-N_LOWTAG_BITS)); i++) {
-        scavtab[EVEN_FIXNUM_LOWTAG|(i<<N_LOWTAG_BITS)] = scav_immediate;
+        for (j = 0; j < (1<<N_LOWTAG_BITS); j++) {
+            if (fixnump(j)) {
+                scavtab[j|(i<<N_LOWTAG_BITS)] = scav_immediate;
+            }
+        }
         scavtab[FUN_POINTER_LOWTAG|(i<<N_LOWTAG_BITS)] = scav_fun_pointer;
         /* skipping OTHER_IMMEDIATE_0_LOWTAG */
         scavtab[LIST_POINTER_LOWTAG|(i<<N_LOWTAG_BITS)] = scav_list_pointer;
-        scavtab[ODD_FIXNUM_LOWTAG|(i<<N_LOWTAG_BITS)] = scav_immediate;
         scavtab[INSTANCE_POINTER_LOWTAG|(i<<N_LOWTAG_BITS)] =
             scav_instance_pointer;
         /* skipping OTHER_IMMEDIATE_1_LOWTAG */
@@ -1988,16 +1991,16 @@ gc_init_tables(void)
         scav_vector_unsigned_byte_16;
     scavtab[SIMPLE_ARRAY_UNSIGNED_BYTE_16_WIDETAG] =
         scav_vector_unsigned_byte_16;
-#ifdef SIMPLE_ARRAY_UNSIGNED_BYTE_29_WIDETAG
-    scavtab[SIMPLE_ARRAY_UNSIGNED_BYTE_29_WIDETAG] =
+#if (N_WORD_BITS == 32)
+    scavtab[SIMPLE_ARRAY_UNSIGNED_FIXNUM_WIDETAG] =
         scav_vector_unsigned_byte_32;
 #endif
     scavtab[SIMPLE_ARRAY_UNSIGNED_BYTE_31_WIDETAG] =
         scav_vector_unsigned_byte_32;
     scavtab[SIMPLE_ARRAY_UNSIGNED_BYTE_32_WIDETAG] =
         scav_vector_unsigned_byte_32;
-#ifdef SIMPLE_ARRAY_UNSIGNED_BYTE_60_WIDETAG
-    scavtab[SIMPLE_ARRAY_UNSIGNED_BYTE_60_WIDETAG] =
+#if (N_WORD_BITS == 64)
+    scavtab[SIMPLE_ARRAY_UNSIGNED_FIXNUM_WIDETAG] =
         scav_vector_unsigned_byte_64;
 #endif
 #ifdef SIMPLE_ARRAY_UNSIGNED_BYTE_63_WIDETAG
@@ -2015,16 +2018,16 @@ gc_init_tables(void)
     scavtab[SIMPLE_ARRAY_SIGNED_BYTE_16_WIDETAG] =
         scav_vector_unsigned_byte_16;
 #endif
-#ifdef SIMPLE_ARRAY_SIGNED_BYTE_30_WIDETAG
-    scavtab[SIMPLE_ARRAY_SIGNED_BYTE_30_WIDETAG] =
+#if (N_WORD_BITS == 32)
+    scavtab[SIMPLE_ARRAY_FIXNUM_WIDETAG] =
         scav_vector_unsigned_byte_32;
 #endif
 #ifdef SIMPLE_ARRAY_SIGNED_BYTE_32_WIDETAG
     scavtab[SIMPLE_ARRAY_SIGNED_BYTE_32_WIDETAG] =
         scav_vector_unsigned_byte_32;
 #endif
-#ifdef SIMPLE_ARRAY_SIGNED_BYTE_61_WIDETAG
-    scavtab[SIMPLE_ARRAY_SIGNED_BYTE_61_WIDETAG] =
+#if (N_WORD_BITS == 64)
+    scavtab[SIMPLE_ARRAY_FIXNUM_WIDETAG] =
         scav_vector_unsigned_byte_64;
 #endif
 #ifdef SIMPLE_ARRAY_SIGNED_BYTE_64_WIDETAG
@@ -2126,16 +2129,16 @@ gc_init_tables(void)
         trans_vector_unsigned_byte_16;
     transother[SIMPLE_ARRAY_UNSIGNED_BYTE_16_WIDETAG] =
         trans_vector_unsigned_byte_16;
-#ifdef SIMPLE_ARRAY_UNSIGNED_BYTE_29_WIDETAG
-    transother[SIMPLE_ARRAY_UNSIGNED_BYTE_29_WIDETAG] =
+#if (N_WORD_BITS == 32)
+    transother[SIMPLE_ARRAY_UNSIGNED_FIXNUM_WIDETAG] =
         trans_vector_unsigned_byte_32;
 #endif
     transother[SIMPLE_ARRAY_UNSIGNED_BYTE_31_WIDETAG] =
         trans_vector_unsigned_byte_32;
     transother[SIMPLE_ARRAY_UNSIGNED_BYTE_32_WIDETAG] =
         trans_vector_unsigned_byte_32;
-#ifdef SIMPLE_ARRAY_UNSIGNED_BYTE_60_WIDETAG
-    transother[SIMPLE_ARRAY_UNSIGNED_BYTE_60_WIDETAG] =
+#if (N_WORD_BITS == 64)
+    transother[SIMPLE_ARRAY_UNSIGNED_FIXNUM_WIDETAG] =
         trans_vector_unsigned_byte_64;
 #endif
 #ifdef SIMPLE_ARRAY_UNSIGNED_BYTE_63_WIDETAG
@@ -2154,16 +2157,16 @@ gc_init_tables(void)
     transother[SIMPLE_ARRAY_SIGNED_BYTE_16_WIDETAG] =
         trans_vector_unsigned_byte_16;
 #endif
-#ifdef SIMPLE_ARRAY_SIGNED_BYTE_30_WIDETAG
-    transother[SIMPLE_ARRAY_SIGNED_BYTE_30_WIDETAG] =
+#if (N_WORD_BITS == 32)
+    transother[SIMPLE_ARRAY_FIXNUM_WIDETAG] =
         trans_vector_unsigned_byte_32;
 #endif
 #ifdef SIMPLE_ARRAY_SIGNED_BYTE_32_WIDETAG
     transother[SIMPLE_ARRAY_SIGNED_BYTE_32_WIDETAG] =
         trans_vector_unsigned_byte_32;
 #endif
-#ifdef SIMPLE_ARRAY_SIGNED_BYTE_61_WIDETAG
-    transother[SIMPLE_ARRAY_SIGNED_BYTE_61_WIDETAG] =
+#if (N_WORD_BITS == 64)
+    transother[SIMPLE_ARRAY_FIXNUM_WIDETAG] =
         trans_vector_unsigned_byte_64;
 #endif
 #ifdef SIMPLE_ARRAY_SIGNED_BYTE_64_WIDETAG
@@ -2217,11 +2220,14 @@ gc_init_tables(void)
     for (i = 0; i < ((sizeof sizetab)/(sizeof sizetab[0])); i++)
         sizetab[i] = size_lose;
     for (i = 0; i < (1<<(N_WIDETAG_BITS-N_LOWTAG_BITS)); i++) {
-        sizetab[EVEN_FIXNUM_LOWTAG|(i<<N_LOWTAG_BITS)] = size_immediate;
+        for (j = 0; j < (1<<N_LOWTAG_BITS); j++) {
+            if (fixnump(j)) {
+                sizetab[j|(i<<N_LOWTAG_BITS)] = size_immediate;
+            }
+        }
         sizetab[FUN_POINTER_LOWTAG|(i<<N_LOWTAG_BITS)] = size_pointer;
         /* skipping OTHER_IMMEDIATE_0_LOWTAG */
         sizetab[LIST_POINTER_LOWTAG|(i<<N_LOWTAG_BITS)] = size_pointer;
-        sizetab[ODD_FIXNUM_LOWTAG|(i<<N_LOWTAG_BITS)] = size_immediate;
         sizetab[INSTANCE_POINTER_LOWTAG|(i<<N_LOWTAG_BITS)] = size_pointer;
         /* skipping OTHER_IMMEDIATE_1_LOWTAG */
         sizetab[OTHER_POINTER_LOWTAG|(i<<N_LOWTAG_BITS)] = size_pointer;
@@ -2267,16 +2273,16 @@ gc_init_tables(void)
         size_vector_unsigned_byte_16;
     sizetab[SIMPLE_ARRAY_UNSIGNED_BYTE_16_WIDETAG] =
         size_vector_unsigned_byte_16;
-#ifdef SIMPLE_ARRAY_UNSIGNED_BYTE_29_WIDETAG
-    sizetab[SIMPLE_ARRAY_UNSIGNED_BYTE_29_WIDETAG] =
+#if (N_WORD_BITS == 32)
+    sizetab[SIMPLE_ARRAY_UNSIGNED_FIXNUM_WIDETAG] =
         size_vector_unsigned_byte_32;
 #endif
     sizetab[SIMPLE_ARRAY_UNSIGNED_BYTE_31_WIDETAG] =
         size_vector_unsigned_byte_32;
     sizetab[SIMPLE_ARRAY_UNSIGNED_BYTE_32_WIDETAG] =
         size_vector_unsigned_byte_32;
-#ifdef SIMPLE_ARRAY_UNSIGNED_BYTE_60_WIDETAG
-    sizetab[SIMPLE_ARRAY_UNSIGNED_BYTE_60_WIDETAG] =
+#if (N_WORD_BITS == 64)
+    sizetab[SIMPLE_ARRAY_UNSIGNED_FIXNUM_WIDETAG] =
         size_vector_unsigned_byte_64;
 #endif
 #ifdef SIMPLE_ARRAY_UNSIGNED_BYTE_63_WIDETAG
@@ -2294,16 +2300,16 @@ gc_init_tables(void)
     sizetab[SIMPLE_ARRAY_SIGNED_BYTE_16_WIDETAG] =
         size_vector_unsigned_byte_16;
 #endif
-#ifdef SIMPLE_ARRAY_SIGNED_BYTE_30_WIDETAG
-    sizetab[SIMPLE_ARRAY_SIGNED_BYTE_30_WIDETAG] =
+#if (N_WORD_BITS == 32)
+    sizetab[SIMPLE_ARRAY_FIXNUM_WIDETAG] =
         size_vector_unsigned_byte_32;
 #endif
 #ifdef SIMPLE_ARRAY_SIGNED_BYTE_32_WIDETAG
     sizetab[SIMPLE_ARRAY_SIGNED_BYTE_32_WIDETAG] =
         size_vector_unsigned_byte_32;
 #endif
-#ifdef SIMPLE_ARRAY_SIGNED_BYTE_61_WIDETAG
-    sizetab[SIMPLE_ARRAY_SIGNED_BYTE_61_WIDETAG] =
+#if (N_WORD_BITS == 64)
+    sizetab[SIMPLE_ARRAY_FIXNUM_WIDETAG] =
         size_vector_unsigned_byte_64;
 #endif
 #ifdef SIMPLE_ARRAY_SIGNED_BYTE_64_WIDETAG

@@ -33,6 +33,25 @@
 ;;; might easily be more, since these values have stayed highly
 ;;; constrained for more than a decade, an inviting target for
 ;;; inventive abstraction-phobic maintainers.:-)
+;;;
+;;; Another way to look at lowtags is that there is no one lowtag
+;;; length.  On 32-bit platforms, fixnums and other-immediates have a
+;;; lowtag length of two bits, and pointers have a lowtag length of
+;;; three bits.  On 64-bit platforms, fixnums and pointers gain an
+;;; extra bit, and six "pad" lowtags waste the extra encoding space so
+;;; obtained.
+;;;
+;;;  x00 -- fixnum
+;;;  x10 -- other-immediate
+;;;  001 -- instance-pointer
+;;;  011 -- list-pointer
+;;;  101 -- fun-pointer
+;;;  111 -- other-pointer
+;;;
+;;; If you change the tag layout, check the various functions in
+;;; src/runtime/runtime.h to see if they need to be updated, along
+;;; with print_obj() in src/runtime/print.c, possibly gc_init_tables()
+;;; in src/runtime/gc-common-c and possibly the code in src/code/room.
 (eval-when (:compile-toplevel :load-toplevel :execute)
   ;; The EVAL-WHEN is necessary (at least for Lispworks), because the
   ;; second DEFENUM uses the value of OTHER-IMMEDIATE-0-LOWTAG, which is
@@ -40,19 +59,20 @@
   #!+#.(cl:if (cl:= 64 sb!vm:n-word-bits) '(and) '(or))
   (defenum ()
     even-fixnum-lowtag
-    instance-pointer-lowtag
     other-immediate-0-lowtag
     pad0-lowtag
-    pad1-lowtag pad2-lowtag
+    instance-pointer-lowtag
+    pad1-lowtag
     other-immediate-1-lowtag
+    pad2-lowtag
     list-pointer-lowtag
     odd-fixnum-lowtag
-    fun-pointer-lowtag
     other-immediate-2-lowtag
     pad3-lowtag
+    fun-pointer-lowtag
     pad4-lowtag
-    pad5-lowtag
     other-immediate-3-lowtag
+    pad5-lowtag
     other-pointer-lowtag)
   #!+#.(cl:if (cl:= 32 sb!vm:n-word-bits) '(and) '(or))
   (defenum ()
@@ -67,6 +87,20 @@
 
 (def!constant nil-value
     (+ static-space-start n-word-bytes other-pointer-lowtag))
+
+(defconstant-eqx fixnum-lowtags
+    #.(let ((fixtags nil))
+        (do-external-symbols (sym "SB!VM")
+          (let* ((name (symbol-name sym))
+                 (len (length name)))
+            (when (and (boundp sym)
+                       (integerp (symbol-value sym))
+                       (> len 7)
+                       (string= name "-LOWTAG" :start1 (- len 7))
+                       (zerop (logand (symbol-value sym) fixnum-tag-mask)))
+              (push sym fixtags))))
+        `',fixtags)
+  #'equal)
 
 ;;; the heap types, stored in 8 bits of the header of an object on the
 ;;; heap, to identify the type of the heap object (which'll be at
@@ -172,11 +206,11 @@
   simple-bit-vector-widetag                 ; 10101010
   simple-vector-widetag                     ; 10101110
   #!+#.(cl:if (cl:= 32 sb!vm:n-word-bits) '(and) '(or))
-  simple-array-unsigned-byte-29-widetag     ; 10110010
+  simple-array-unsigned-fixnum-widetag     ; 10110010
   simple-array-unsigned-byte-31-widetag     ; 10110110
   simple-array-unsigned-byte-32-widetag     ; 10111010
   #!+#.(cl:if (cl:= 64 sb!vm:n-word-bits) '(and) '(or))
-  simple-array-unsigned-byte-60-widetag
+  simple-array-unsigned-fixnum-widetag
   #!+#.(cl:if (cl:= 64 sb!vm:n-word-bits) '(and) '(or))
   simple-array-unsigned-byte-63-widetag
   #!+#.(cl:if (cl:= 64 sb!vm:n-word-bits) '(and) '(or))
@@ -184,10 +218,10 @@
   simple-array-signed-byte-8-widetag        ; 10111110
   simple-array-signed-byte-16-widetag       ; 11000010
   #!+#.(cl:if (cl:= 32 sb!vm:n-word-bits) '(and) '(or))
-  simple-array-signed-byte-30-widetag       ; 11000110
+  simple-array-fixnum-widetag       ; 11000110
   simple-array-signed-byte-32-widetag       ; 11001010
   #!+#.(cl:if (cl:= 64 sb!vm:n-word-bits) '(and) '(or))
-  simple-array-signed-byte-61-widetag
+  simple-array-fixnum-widetag
   #!+#.(cl:if (cl:= 64 sb!vm:n-word-bits) '(and) '(or))
   simple-array-signed-byte-64-widetag
   simple-array-single-float-widetag         ; 11001110
