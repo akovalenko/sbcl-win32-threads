@@ -536,7 +536,7 @@ new_thread_trampoline(struct thread *th)
 
     fast_aligned_fill_words(&dynamic_values[FIRST_TLS_INDEX],
                             ALIGN_UP(sizeof(lispobj)*
-                                     (fixnum_value(SymbolValue(FREE_TLS_INDEX,0))
+                                     ((SymbolValue(FREE_TLS_INDEX,0)>>WORD_SHIFT)
                                       - FIRST_TLS_INDEX),64),
                             NO_TLS_VALUE_MARKER_WIDETAG);
 
