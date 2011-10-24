@@ -273,8 +273,8 @@ void signal_emulation_wrapper(x86_thread_state32_t *thread_state,
     os_invalidate((os_vm_address_t)regs, sizeof(mcontext_t));
 
     /* Trap to restore the signal context. */
-    asm volatile ("movl %0, %%eax; movl %1, %%ebx; .long 0xffff0b0f"
-                  : : "r" (thread_state), "r" (float_state));
+    asm volatile (".long 0xffff0b0f"
+                  : : "a" (thread_state), "b" (float_state));
 }
 
 /* Convenience wrapper for the above */
@@ -507,6 +507,18 @@ catch_exception_raise(mach_port_t exception_port,
     }
 
     return ret;
+}
+
+void
+os_restore_fp_control(os_context_t *context)
+{
+    /* KLUDGE: The x87 FPU control word is some nasty bitfield struct
+     * thing.  Rather than deal with that, just grab it as a 16-bit
+     * integer. */
+    unsigned short fpu_control_word =
+        *((unsigned short *)&context->uc_mcontext->FS.FPU_FCW);
+    /* reset exception flags and restore control flags on x87 FPU */
+    asm ("fldcw %0" : : "m" (fpu_control_word));
 }
 
 #endif
