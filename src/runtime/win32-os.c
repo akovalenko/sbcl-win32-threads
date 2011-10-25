@@ -1145,7 +1145,7 @@ void fff_foreign_callback( void *v_info_ptr)
 
     cbctx.win32_context = &w32ctx;
     self->gc_safepoint_context = &cbctx;
-    *os_context_fp_addr(&cbctx) = *(((void**)args[2])-1);
+    *os_context_fp_addr(&cbctx) = *(((os_context_register_t*)args[2])-1);
 
     BEGIN_GC_UNSAFE_CODE;
     funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,self),
@@ -1171,7 +1171,7 @@ void fff_generic_callback(lispobj arg0,lispobj arg1, lispobj arg2)
     if (th) {
         cbctx.win32_context = &w32ctx;
         th->gc_safepoint_context = &cbctx;
-        *os_context_fp_addr(&cbctx) = *(((void**)arg2)-1);
+        *os_context_fp_addr(&cbctx) = *(((os_context_register_t*)arg2)-1);
 
         BEGIN_GC_UNSAFE_CODE;
         funcall3(SymbolValue(ENTER_ALIEN_CALLBACK,th),arg0,arg1,arg2);
