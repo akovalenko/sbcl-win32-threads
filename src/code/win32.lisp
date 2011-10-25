@@ -68,7 +68,7 @@
 ;;;; File Type Introspection by handle
 (define-alien-routine ("GetFileType" get-file-type) dword
   (handle handle))
- 
+
 ;;;; Error Handling
 
 ;;; Retrieve the calling thread's last-error code value.  The

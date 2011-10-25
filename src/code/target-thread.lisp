@@ -1162,7 +1162,7 @@ around and can be retrieved by JOIN-THREAD."
                                      ;; Too hard to recover after stack overflow
                                      ;; on windows.  Terminating thread by default
                                      ;; makes debugging feasible, at least.
-                                     (handler-case 
+                                     (handler-case
                                          (cons t
                                                (multiple-value-list
                                                 (apply real-function arguments)))

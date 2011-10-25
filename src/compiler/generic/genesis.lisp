@@ -3274,7 +3274,7 @@ initially undefined function references:~2%")
       ;; image start in the former.
       ;;
       ;; Instead of FILE-POSITIONing to the :END, we follow the pattern of
-      ;; output-gspace, writing at the next free page: 
+      ;; output-gspace, writing at the next free page:
       (file-position *core-file*
                      (* sb!c:*backend-page-bytes* (1+ *data-page*)))
       ;; Initial core starts at 0

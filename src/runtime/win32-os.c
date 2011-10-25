@@ -2141,7 +2141,7 @@ void c_level_backtrace(const char* header, int depth)
         fprintf(dyndebug_output, "[#%02d]: ebp = 0x%p, ret = 0x%p\n",n,
                 frame, ((void**)frame)[1]);
     }
-#endif    
+#endif
 }
 
 #ifdef LISP_FEATURE_X86
