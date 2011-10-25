@@ -31,6 +31,9 @@ LINKFLAGS = -Wl,-export-all-symbols -Wl,mswin64.def -Wl,mswin.def
 
 
 OS_LIBS = -l ws2_32
+ifdef LISP_FEATURE_SB_CORE_COMPRESSION
+  OS_LIBS += -lz
+endif
 
 GC_SRC = gencgc.c
 
