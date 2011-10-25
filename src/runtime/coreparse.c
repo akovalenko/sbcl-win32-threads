@@ -294,6 +294,7 @@ process_directory(int fd, lispobj *ptr, int count, os_vm_offset_t file_offset)
                    len, len, (uword_t)addr));
             if (compressed) {
 #ifdef LISP_FEATURE_SB_CORE_COMPRESSION
+                os_validate_recommit(addr,ALIGN_UP(len,os_vm_mmap_unit_size));
                 real_addr = inflate_core_bytes(fd, offset + file_offset, addr, len);
 #else
                 lose("This runtime was not built with zlib-compressed core support... aborting\n");
