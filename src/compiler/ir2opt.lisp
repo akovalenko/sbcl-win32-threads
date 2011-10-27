@@ -212,7 +212,7 @@
                     (ir2-block-next 2block)))
                  ((null 2block) nil)
                (cond ((eq target (ir2-block-%label 2block))
-                      (return t))
+                      (return (not (ir2-block-%trampoline-label 2block))))
                      ((ir2-block-start-vop 2block)
                       (return nil)))))))
     ;; Walk the blocks in reverse emission order to catch jumps
