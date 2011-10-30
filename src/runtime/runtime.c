@@ -443,7 +443,7 @@ main(int argc, char *argv[], char *envp[])
                   if (tail[0])
                     lose("--dynamic-space-size argument is not a number");
                   if ((tmp <= 0) ||
-                      (tmp >= (LONG_MAX >> 20))) {
+                      (tmp >= (SIZE_MAX >> 20))) {
                     lose("--dynamic-space-size argument is out of range");
                   }
                   dynamic_space_size = (sword_t)tmp << 20;
