@@ -4015,9 +4015,16 @@
 ;; Fall-through jump elimination made control flow fall through to trampolines.
 ;; Reported by Eric Marsden on sbcl-devel@ 2011.10.26, with a test case
 ;; reproduced below (triggered a corruption warning and a memory fault).
-(with-test (:name :fall-through-jumps-to-trampolines)
+(with-test (:name :bug-883500)
   (funcall (compile nil `(lambda (a)
                            (declare (type (integer -50 50) a))
                            (declare (optimize (speed 0)))
                            (mod (mod a (min -5 a)) 5)))
            1))
+
+;; Test for literals too large for the ISA (e.g. (SIGNED-BYTE 13) on SPARC).
+#+sb-unicode
+(with-test (:name :bug-883519)
+  (compile nil `(lambda (x)
+                  (declare (type character x))
+                  (eql x #\U0010FFFF))))

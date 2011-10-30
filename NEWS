@@ -15,6 +15,14 @@ changes relative to sbcl-1.0.52:
   * bug fix: floating-point traps now work on darwin/x86 and /x86-64.
   * bug fix: repair crash in x86oid darwin signal handling emulation
     when built with certain compilers.
+  * bug fix: SB-ROTATE-BYTE misrotated to the right when using constant
+    rotation arguments on x86-64. (lp#882151)
+  * bug fix: low-level control flow optimisations could result in bogus
+    code in functions with tail and non-tail calls to local functions on
+    x86oids. (lp#883500)
+  * bug fix: on SPARC/:sb-unicode, avoid crashing the assembler by trying
+    to emit literal characters > (code-char 4095), for comparisons with
+    constant characters.
 
 changes in sbcl-1.0.52 relative to sbcl-1.0.51:
   * enhancement: ASDF has been updated to version 2.017.
