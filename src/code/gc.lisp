@@ -25,7 +25,8 @@
 (declaim (inline dynamic-usage))
 #!+gencgc
 (defun dynamic-usage ()
-  (sb!alien:extern-alien "bytes_allocated" sb!alien:unsigned-long))
+  (sb!alien:extern-alien "bytes_allocated"
+                         (sb!alien:unsigned #.sb!vm:n-word-bits)))
 #!-gencgc
 (defun dynamic-usage ()
   (the (unsigned-byte 32)
@@ -176,7 +177,8 @@ NIL as the pathname."
         (native-pathname (cast val c-string)))))
   (declaim (inline dynamic-space-size))
   (defun dynamic-space-size ()
-    (sb!alien:extern-alien "dynamic_space_size" sb!alien:unsigned-long)))
+    (sb!alien:extern-alien "dynamic_space_size"
+                           (sb!alien:unsigned #.sb!vm:n-word-bits))))
 
 ;;;; SUB-GC
 
