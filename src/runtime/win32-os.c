@@ -51,7 +51,6 @@
 #include <unistd.h>
 
 #include <math.h>
-#include <float.h>
 
 #include <excpt.h>
 
@@ -1432,7 +1431,6 @@ void os_init(char *argv[], char *envp[])
        too. */
     pthread_key_create(&lisp_fiber_key,fiber_is_dead);
     /* Now INVALID fpu trap should be enabled from the very start */
-    _controlfp(~_EM_INVALID,_MCW_EM);
     pthread_save_context_hook = save_lisp_tls;
     pthread_restore_context_hook = restore_lisp_tls;
     pthread_cond_init(&fiber_factory_condition,NULL);
