@@ -126,7 +126,7 @@
   (if (typep stream 'file-simple-stream)
       (with-stream-class (file-simple-stream stream)
         (setf (sm pathname stream) new-name)
-        (setf (sm filename stream) (file-namestring new-name))
+        (setf (sm filename stream) (sb-ext:native-namestring new-name))
         t)
       nil))
 
@@ -1102,7 +1102,7 @@ is supported only on simple-streams."
      (cond (new-name
             (setf (sb-impl::fd-stream-pathname stream) new-name)
             (setf (sb-impl::fd-stream-file stream)
-                  (file-namestring new-name))
+                  (sb-ext:native-namestring new-name))
             t)
            (t
             (sb-impl::fd-stream-pathname stream))))))
