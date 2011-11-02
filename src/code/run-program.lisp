@@ -549,9 +549,9 @@ status slot."
 (defun mswin-escape-command-argument (arg &optional force)
   (if (string= "" arg)
       "\"\""
-      (flet ((special-char-p (character)
-               (member character '(#\Return #\Newline #\Space #\Tab #\"))))
-        (let ((quote (or force (find-if #'special-char-p arg)))
+      (flet ((white-space-p (character)
+               (member character '(#\Return #\Newline #\Space #\Tab))))
+        (let ((quote (or force (find-if #'white-space-p arg)))
               (n-backslashes 0))
           (with-output-to-string (out)
             (flet ((maybe-double-quote ()
