@@ -331,10 +331,8 @@ GNAME(alloc_tramp):
 	push	%rbp		# Save old frame pointer.
 	mov	%rsp,%rbp	# Establish new frame.
 	and	$-32,%rsp
-#ifdef LISP_FEATURE_WIN32
 	sub	$16*16,%rsp
-    map_all_xmm(stkxmmsave)
-#endif
+	map_all_xmm(stkxmmsave)
 	push	%rax
 	push	%rcx
 	push	%rdx
@@ -358,9 +356,7 @@ GNAME(alloc_tramp):
 	pop	%rdx
 	pop	%rcx
 	pop	%rax
-#ifdef LISP_FEATURE_WIN32
-    map_all_xmm(stkxmmload)
-#endif        
+	map_all_xmm(stkxmmload)
 	mov	%rbp,%rsp
 	pop	%rbp
 	ret
