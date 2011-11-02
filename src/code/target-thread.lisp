@@ -1255,6 +1255,9 @@ return DEFAULT if given or else signal JOIN-THREAD-ERROR."
       ;; deferrables when pending.
       (setf *interrupt-pending* t))
     (when interruption
+      #!-win32
+      (funcall interruption)
+      #!+win32
       (invoke-interruption interruption))))
 
 (defun interrupt-thread (thread function)

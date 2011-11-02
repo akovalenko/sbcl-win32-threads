@@ -316,7 +316,7 @@
        (when absolutep
          (let ((string (get-output-stream-string s)))
            (return-from unparse-native-win32-namestring
-             (cond ((< (- sb!win32::max_path 12) (length string))
+             (cond ((< (- 260 12) (length string))
                     ;; KLUDGE: account for additional length of 8.3 name to make
                     ;; directories always accessible
                     (coerce string 'simple-string))

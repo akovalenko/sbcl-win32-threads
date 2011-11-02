@@ -315,7 +315,7 @@
         (multiple-value-bind (existsp errno ino mode nlink uid gid rdev size
                               atime mtime)
             (sb!unix:unix-stat filename)
-          (declare (ignore ino nlink gid rdev size atime uid))
+          (declare (ignore ino nlink gid rdev size atime))
           (values
            (if existsp
                (case query-for
@@ -354,7 +354,7 @@
                  ;; we must distinguish cases where the symlink exists
                  ;; from ones where there's a loop in the apparent
                  ;; containing directory.
-                 (multiple-value-bind (linkp ignore ino mode nlink uid gid rdev
+                 (multiple-value-bind (linkp ignore ino mode nlink gid rdev
                                        size atime mtime)
                      (sb!unix:unix-lstat filename)
                    (declare (ignore ignore ino mode nlink gid rdev size atime))

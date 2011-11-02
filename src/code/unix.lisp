@@ -218,7 +218,7 @@ corresponds to NAME, or NIL if there is none."
                                mode)))
         (if (minusp fd)
             (values nil (get-errno))
-            (values (sb!win32::duplicate-and-unwrap-fd fd)
+            (values #!-win32 fd #!+win32 (sb!win32::duplicate-and-unwrap-fd fd)
                     (octets-to-string template-buffer)))))))
 
 ;;;; timebits.h
