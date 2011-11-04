@@ -877,76 +877,22 @@ static inline lispobj cdr(lispobj conscell)
 
 extern void undefined_alien_function(); /* see interrupt.c */
 
-void os_link_runtime()
+static u32 buildTimeImageCount = 0;
+
+/* Resolve symbols against the executable and its build-time dependencies */
+void* os_dlsym_default(char* name)
 {
-    lispobj head;
-    void *link_target = (void*)(intptr_t)LINKAGE_TABLE_SPACE_START;
-    u32 nsymbol;
-    lispobj symbol_name;
-    char *namechars;
-    void *myself = (void*)runtime_module_handle;
-    HMODULE buildTimeImages[16] = {myself};
-    boolean datap;
-    u32 i;
-    /* Somewhat arbitrary (and DLL topic itself is dirty on
-       pre-WinXP).  What I want is to get module handles for the
-       libraries that _are_ already loaded because of our build-time
-       dependencies. What I don't what is to list some preselected set
-       of libraries. */
-    u32 nlibraries =
-        1 + os_get_build_time_shared_libraries(15u, myself,
-                                               1+(void**)buildTimeImages,
-                                               NULL);
-
-    if (dyndebug_runtime_link) {
-        for (i=0; i<nlibraries; ++i) {
-            fprintf(dyndebug_output,"Got library %u/%u with base %p\n",
-                    i,nlibraries, buildTimeImages[i]);
-        }
+    int i;
+    void* result = NULL;
+    if (buildTimeImageCount == 0) {
+        buildTimeImageCount =
+            1 + os_get_build_time_shared_libraries(15u,
+            myself, 1+(void**)buildTimeImages, NULL);
     }
-
-    for (head = SymbolValue(REQUIRED_RUNTIME_C_SYMBOLS,0);
-         head!=NIL; head = cdr(head))
-    {
-        int linked = 0;
-        lispobj item = car(head);
-
-        if (PTR_IS_ALIGNED(link_target,os_vm_page_size)) {
-            os_validate_recommit(link_target,os_vm_page_size);
-        }
-        symbol_name = car(item);
-        datap = (NIL!=(cdr(item)));
-        namechars = (void*)(intptr_t)FOTHERPTR(symbol_name,vector).data;
-
-        for (i=0u; i<nlibraries; ++i) {
-            void* result = GetProcAddress(buildTimeImages[i], namechars);
-            if (result) {
-                if (dyndebug_runtime_link) {
-                    fprintf(dyndebug_output,
-                            "Core requests linking [0x%p] <= [%s]: => [0x%p]\n",
-                            link_target, namechars, result);
-                }
-                if (datap)
-                    arch_write_linkage_table_ref(link_target,result);
-                else
-                    arch_write_linkage_table_jmp(link_target,result);
-                break;
-            }
-        }
-        if (i == nlibraries)
-        {
-            if (dyndebug_runtime_link) {
-                fprintf(stderr,"Core requests linking [0x%p] <= [%s]: failed\n",
-                        link_target, namechars);
-            }
-            if (datap)
-                arch_write_linkage_table_ref(link_target,undefined_alien_address);
-            else
-                arch_write_linkage_table_jmp(link_target,undefined_alien_function);
-
-        }
-        link_target = (void*)(((uintptr_t)link_target)+LINKAGE_TABLE_ENTRY_SIZE);
+    for (i = 0; i<buildTimeImageCount && (!result); ++i) {
+        result = GetProcAddress(buildTimeImages[i], name);
     }
+    return result;
 }
 
 #endif
