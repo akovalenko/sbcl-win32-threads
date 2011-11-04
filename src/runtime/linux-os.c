@@ -246,6 +246,7 @@ os_init(char *argv[], char *envp[])
      * don't do this trick on other platforms.
      */
 #if defined(LISP_FEATURE_X86) || defined(LISP_FEATURE_X86_64)
+#if !defined(LISP_FEATURE_SB_DYNAMIC_CORE)
     if ((major_version == 2
          /* Some old kernels will apparently lose unsupported personality flags
           * on exec() */
@@ -289,6 +290,7 @@ os_init(char *argv[], char *envp[])
             fprintf(stderr, "WARNING: Couldn't re-execute SBCL with the proper personality flags (maybe /proc isn't mounted?). Trying to continue anyway.\n");
         }
     }
+#endif
 #ifdef LISP_FEATURE_X86
     /* Use SSE detector.  Recent versions of Linux enable SSE support
      * on SSE capable CPUs.  */
