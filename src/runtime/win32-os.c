@@ -878,6 +878,7 @@ static inline lispobj cdr(lispobj conscell)
 extern void undefined_alien_function(); /* see interrupt.c */
 
 static u32 buildTimeImageCount = 0;
+static void* buildTimeImages[16];
 
 /* Resolve symbols against the executable and its build-time dependencies */
 void* os_dlsym_default(char* name)
@@ -887,7 +888,7 @@ void* os_dlsym_default(char* name)
     if (buildTimeImageCount == 0) {
         buildTimeImageCount =
             1 + os_get_build_time_shared_libraries(15u,
-            myself, 1+(void**)buildTimeImages, NULL);
+            NULL, 1+(void**)buildTimeImages, NULL);
     }
     for (i = 0; i<buildTimeImageCount && (!result); ++i) {
         result = GetProcAddress(buildTimeImages[i], name);
