@@ -91,7 +91,6 @@ os_get_errno(void)
 /* We start with a little greenspunning to make car, cdr and base-string data
  * accessible. */
 
-#include <dlfcn.h>
 #include "genesis/config.h"
 #include "genesis/cons.h"
 #include "genesis/vector.h"
@@ -119,6 +118,9 @@ static inline lispobj cdr(lispobj conscell)
 }
 
 extern void undefined_alien_function(); /* see interrupt.c */
+#ifndef HAVE_os_dlsym_default
+#include <dlfcn.h>
+#endif
 
 void os_link_runtime()
 {
