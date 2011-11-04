@@ -25,6 +25,10 @@
 #define os_allocate_lazily(len) os_validate(NULL,len)
 #endif
 
+#ifndef HAVE_os_dlsym_default
+#define os_dlsym_default(name) dlsym(NULL,(name))
+#endif
+
 #ifndef HAVE_os_number_of_processors
 /* To be used for things like spinning-vs-yielding-vs-sleeping.  The
    default value of 0, provided here, means "unknown" (OS-specific

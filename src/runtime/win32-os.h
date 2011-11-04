@@ -81,6 +81,7 @@ char *dirname(char *path);
 
 #define os_vm_mmap_unit_size 65536
 #define HAVE_os_vm_mmap_unit_size
+#define HAVE_os_dlsym_default
 
 void os_invalidate_free(os_vm_address_t addr, os_vm_size_t len);
 void* os_validate_recommit(os_vm_address_t addr, os_vm_size_t len);
