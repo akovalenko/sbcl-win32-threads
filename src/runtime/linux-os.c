@@ -56,7 +56,7 @@
 #include "cheneygc-internal.h"
 #endif
 
-#ifdef LISP_FEATURE_X86
+#if defined(LISP_FEATURE_X86)||defined(LISP_FEATURE_X86_64)
 /* Prototype for personality(2). Done inline here since the header file
  * for this isn't available on old versions of glibc. */
 int personality (unsigned long);
