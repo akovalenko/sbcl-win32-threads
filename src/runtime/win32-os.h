@@ -89,6 +89,7 @@ os_vm_address_t os_allocate_lazily(os_vm_size_t len);
 
 void win32_interrupt_console_input();
 void os_link_runtime();
+void* os_dlsym_default(char* name);
 void os_commit_wp_violation_data(boolean call_gc);
 
 boolean win32_maybe_interrupt_io(void* thread);
