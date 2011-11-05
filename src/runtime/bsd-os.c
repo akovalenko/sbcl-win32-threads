@@ -71,13 +71,13 @@ static void freebsd_init();
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
-#include <dlfcn.h>
 #ifdef LISP_FEATURE_X86
 #include <machine/cpu.h>
 #endif
 
 static void openbsd_init();
 #endif
+#include <dlfcn.h>
 
 void
 os_init(char *argv[], char *envp[])
