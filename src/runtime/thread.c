@@ -152,6 +152,7 @@ static int run_lisp_function(lispobj function)
     return funcall0(function);
 }
 
+#ifdef LISP_FEATURE_SB_THREAD
 /* For safepoint-based builds, together with thread's
    csp_around_foreign_call pointer target, thread_qrl(thread) makes
    `quickly revokable lock'. Unlike most mutexes, this one is normally
@@ -182,6 +183,7 @@ static inline pthread_mutex_t* thread_qrl(struct thread* p)
 {
     return 1 + p->state_lock;
 }
+#endif
 
 lispobj reset_dynamic_values[TLS_SIZE];
 static int last_initially_bound_dynamic_value_index;
@@ -202,7 +204,9 @@ initial_thread_trampoline(struct thread *th)
     function = th->no_tls_value_marker;
     th->no_tls_value_marker = NO_TLS_VALUE_MARKER_WIDETAG;
     if(arch_os_thread_init(th)==0) return 1;
+#ifdef LISP_FEATURE_SB_THREAD
     pthread_mutex_lock(thread_qrl(th));
+#endif
     link_thread(th);
     th->os_thread=thread_self();
 #ifndef LISP_FEATURE_WIN32

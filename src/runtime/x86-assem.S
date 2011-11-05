@@ -266,11 +266,13 @@ GNAME(call_into_lisp):
 	movl	%ebp,%eax
 	pushl	%ebp		# Save old frame pointer.
 	movl	%esp,%ebp	# Establish new frame.
+#ifdef LISP_FEATURE_SB_GC_SAFEPOINT
 	pushl	%eax		# Save a copy.
 	pushl	%eax		# Save an arg.
 	call	GNAME(carry_frame_pointer)
 	movl	%eax,(%ebp)
 	popl	%eax
+#endif
 Lstack:
 	
 	fwait

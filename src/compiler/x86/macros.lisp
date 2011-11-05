@@ -236,7 +236,6 @@
 (defun allocation-inline (alloc-tn size)
   (let ((ok (gen-label))
         (done (gen-label))
-        #!+(and sb-thread win32)
         (scratch-tns (loop for my-tn in `(,eax-tn ,ebx-tn ,edx-tn ,ecx-tn)
                            when (and (not (location= alloc-tn my-tn))
                                      (or (not (tn-p size))
@@ -253,13 +252,20 @@
                   #!+sb-thread (* n-word-bytes (1+ thread-alloc-region-slot))
                   #!-sb-thread (make-fixup "boxed_region" :foreign 4)
                   :scale 1)))          ; thread->alloc_region.end_addr
-
-    (multiple-value-bind
-          #!+(and sb-thread win32) (scratch-tn swap-tn)
-      #!+(and sb-thread win32) (values-list scratch-tns)
-      #!-(and sb-thread win32) () #!-(and sb-thread win32) ()
+    (multiple-value-bind (scratch-tn swap-tn) (values-list scratch-tns)
+      (declare (ignorable scratch-tn swap-tn))
       (unless (and (tn-p size) (location= alloc-tn size))
         (inst mov alloc-tn size))
+      #!+(and sb-dynamic-core (not sb-thread))
+      (progn
+        (inst push scratch-tn)
+        (inst mov scratch-tn
+              (make-ea :dword :disp (make-fixup "boxed_region"
+                                                :foreign-dataref)))
+        (setf (ea-base free-pointer) scratch-tn
+              (ea-disp free-pointer) 0
+              (ea-base end-addr) scratch-tn
+              (ea-disp end-addr) 4))
       #!+(and sb-thread win32)
       (progn
         (inst push scratch-tn)
@@ -301,6 +307,8 @@
              (inst mov free-pointer alloc-tn tls-prefix)
              (inst sub alloc-tn size)))
       (emit-label done)
+      #!+(and sb-dynamic-core (not sb-thread))
+      (inst pop scratch-tn)
       #!+(and sb-thread win32)
       (progn
         (inst pop swap-tn)

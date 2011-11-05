@@ -1081,7 +1081,7 @@ have the foreground next."
 list designator provided (defaults to no argument). When the function
 returns the thread exits. The return values of FUNCTION are kept
 around and can be retrieved by JOIN-THREAD."
-  #!-sb-thread (declare (ignore function name arguments))
+  #!-sb-thread (declare (ignore function name arguments ephemeral))
   #!-sb-thread (error "Not supported in unithread builds.")
   #!+sb-thread (assert (or (atom arguments)
                            (null (cdr (last arguments))))
