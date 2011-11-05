@@ -26,7 +26,7 @@
 #endif
 
 #ifndef HAVE_os_dlsym_default
-#define os_dlsym_default(name) dlsym(NULL,(name))
+#define os_dlsym_default(name) dlsym(RTLD_DEFAULT,(name))
 #endif
 
 #ifndef HAVE_os_number_of_processors
