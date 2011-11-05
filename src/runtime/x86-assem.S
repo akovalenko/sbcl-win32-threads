@@ -380,7 +380,9 @@ LsingleValue:
 	addl	$112,%esp
 	popl	%ebp		# c-sp
 	movl	%edx,%eax	# c-val
+#ifdef LISP_FEATURE_SB_GC_SAFEPOINT	
 	addl	$4,%esp
+#endif	
 	ret
 	SIZE(GNAME(call_into_lisp))
 
