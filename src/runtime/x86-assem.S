@@ -226,7 +226,7 @@ GNAME(call_into_c_fp_result):
 #else	
 /* Save the return Lisp address in ebx. */
 	popl	%ebx
-	call	*%eax		  # normal callout using Lisp stack
+	call	*%ecx		  # normal callout using Lisp stack
 	fldz;fldz;fldz;fldz;fldz;fldz;fldz;
 	fxch	%st(7)
 /* Return. */

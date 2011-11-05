@@ -532,7 +532,9 @@ The system may fail to start.\n",
                  "  or raising the datasize or datasize-max limits in /etc/login.conf\n");
 }
 
-/* OpenBSD's dlsym() relies on the gcc bulitin
+#endif
+
+/* Some BSD implementations of dlsym() rely on the gcc bulitin
  * __builtin_return_address(0) returning an address in the
  * executable's text segment, but when called from lisp it will return
  * an address in the dynamic space.  Work around this by calling this
@@ -546,5 +548,3 @@ os_dlsym(void *handle, const char *symbol)
     void * volatile ret = dlsym(handle, symbol);
     return ret;
 }
-
-#endif
