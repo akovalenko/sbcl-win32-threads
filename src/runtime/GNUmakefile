@@ -31,6 +31,9 @@ CPPFLAGS = -I. -DSBCL_PREFIX=\"$(SBCL_PREFIX)\"
 
 # Give make access to the target Lisp features.
 include genesis/Makefile.features
+ifdef LISP_FEATURE_LINUX
+CPPFLAGS += -D_GNU_SOURCE
+endif
 
 # The Config file is the preferred place for tweaking options which
 # are appropriate for particular setups (OS, ARCH, whatever). Make a
