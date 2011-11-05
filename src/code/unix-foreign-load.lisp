@@ -11,7 +11,7 @@
 
 (in-package "SB!ALIEN")
 
-(define-alien-routine dlopen system-area-pointer
+(define-alien-routine ("os_dlopen" dlopen) system-area-pointer
   (file c-string) (mode int))
 
 (define-alien-routine dlclose int

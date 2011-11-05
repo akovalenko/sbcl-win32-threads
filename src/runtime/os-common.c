@@ -122,6 +122,11 @@ extern void undefined_alien_function(); /* see interrupt.c */
 #include <dlfcn.h>
 #endif
 
+void* os_dlopen(char* name, int flags) {
+	volatile void* ret = dlopen(name,flags);
+	return ret;
+}
+
 void os_link_runtime()
 {
     lispobj head;
