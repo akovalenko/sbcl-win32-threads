@@ -120,12 +120,12 @@ static inline lispobj cdr(lispobj conscell)
 extern void undefined_alien_function(); /* see interrupt.c */
 #ifndef HAVE_os_dlsym_default
 #include <dlfcn.h>
-#endif
 
 void* os_dlopen(char* name, int flags) {
 	volatile void* ret = dlopen(name,flags);
 	return ret;
 }
+#endif
 
 void os_link_runtime()
 {
