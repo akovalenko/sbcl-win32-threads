@@ -2055,7 +2055,6 @@ trans_unboxed_large(lispobj object)
     return copy_large_unboxed_object(object, length);
 }
 #endif
-
 
 /*
  * weak pointers
