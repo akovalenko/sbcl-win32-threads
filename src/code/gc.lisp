@@ -382,9 +382,7 @@ collection is initiated. This can be set with SETF."
             (number-of-gcs int)
             (number-of-gcs-before-promotion int)
             (cum-sum-bytes-allocated unsigned)
-            (minimum-age-before-gc unsigned)
-            ;; `struct lutex *' or `void *', depending.
-            (lutexes (* char))))
+            (minimum-age-before-gc unsigned)))
 
 #!+gencgc
 (define-alien-variable generations
