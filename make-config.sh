@@ -399,6 +399,7 @@ case "$sbcl_os" in
         printf ' :win32' >> $ltf
 	# Native :-]
         # printf ' :sb-pthread-futex' >> $ltf
+    printf ' :sb-futex' >> $ltf
 	printf ' :sb-thread' >> $ltf
 	printf ' :sb-foreign-thread' >> $ltf
         # of course it doesn't provide dlopen, but there is
