@@ -108,11 +108,18 @@ the symbol not having a thread-local value, or the target thread having
 exited. The offending symbol can be accessed using CELL-ERROR-NAME, and the
 offending thread using THREAD-ERROR-THREAD."))
 
-(define-condition join-thread-error (thread-error) ()
+(define-condition join-thread-error (thread-error)
+  ((problem :initarg :problem :reader join-thread-problem))
   (:report (lambda (c s)
-             (format s "Joining thread failed: thread ~A ~
-                        did not return normally."
-                     (thread-error-thread c))))
+             (ecase (join-thread-problem c)
+               (:abort
+                (format s "Joining thread failed: thread ~A ~
+                           did not return normally."
+                        (thread-error-thread c)))
+               (:timeout
+                (format s "Joining thread timed out: thread ~A ~
+                           did not exit in time."
+                        (thread-error-thread c))))))
   #!+sb-doc
   (:documentation
    "Signalled when joining a thread fails due to abnormal exit of the thread
@@ -795,7 +802,8 @@ around the call, checking the the associated data:
 "
   #!-sb-thread (declare (ignore queue timeout))
   (assert mutex)
-  #!-sb-thread (error "Not supported in unithread builds.")
+  #!-sb-thread
+  (wait-for nil :timeout timeout) ; Yeah...
   #!+sb-thread
   (let ((me *current-thread*))
     (barrier (:read))
@@ -863,23 +871,27 @@ around the call, checking the the associated data:
             (when (and (eq :timeout status) deadlinep)
               (let ((got-it (%try-mutex mutex me)))
                 (allow-with-interrupts
-                  (signal-deadline))
-                (cond (got-it
-                       (return-from condition-wait t))
-                      (t
-                       (setf (values to-sec to-usec stop-sec stop-usec deadlinep)
-                             (decode-timeout timeout))))))
+                  (signal-deadline)
+                  (cond (got-it
+                         (return-from condition-wait t))
+                        (t
+                         ;; The deadline may have changed.
+                         (setf (values to-sec to-usec stop-sec stop-usec deadlinep)
+                               (decode-timeout timeout))
+                         (setf status :ok))))))
             ;; Re-acquire the mutex for normal return.
-            (unless (or (%try-mutex mutex me)
-                        (allow-with-interrupts
-                          (%wait-for-mutex mutex me timeout
-                                           to-sec to-usec
-                                           stop-sec stop-usec deadlinep)))
+            (when (eq :ok status)
+              (unless (or (%try-mutex mutex me)
+                          (allow-with-interrupts
+                            (%wait-for-mutex mutex me timeout
+                                             to-sec to-usec
+                                             stop-sec stop-usec deadlinep)))
+                (setf status :timeout)))))
+        (or (eq :ok status)
+            (unless (eq :timeout status)
               ;; The only case we return normally without re-acquiring the
               ;; mutex is when there is a :TIMEOUT that runs out.
-              (aver (and timeout (not deadlinep)))
-              (return-from condition-wait nil)))))))
-  t)
+              (bug "CONDITION-WAIT: invalid status on normal return: ~S" status)))))))
 
 (defun condition-notify (queue &optional (n 1))
   #!+sb-doc
@@ -952,16 +964,22 @@ future."
   "Create a semaphore with the supplied COUNT and NAME."
   (%make-semaphore name count))
 
-(defun wait-on-semaphore (semaphore)
+(defun wait-on-semaphore (semaphore &key timeout)
   #!+sb-doc
-  "Decrement the count of SEMAPHORE if the count would not be
-negative. Else blocks until the semaphore can be decremented."
+  "Decrement the count of SEMAPHORE if the count would not be negative. Else
+blocks until the semaphore can be decremented. Returns T on success.
+
+If TIMEOUT is given, it is the maximum number of seconds to wait. If the count
+cannot be decremented in that time, returns NIL without decrementing the
+count."
   ;; A more direct implementation based directly on futexes should be
   ;; possible.
   ;;
   ;; We need to disable interrupts so that we don't forget to
   ;; decrement the waitcount (which would happen if an asynch
   ;; interrupt should catch us on our way out from the loop.)
+  ;;
+  ;; FIXME: No timeout on initial mutex acquisition.
   (with-system-mutex ((semaphore-mutex semaphore) :allow-with-interrupts t)
     ;; Quick check: is it positive? If not, enter the wait loop.
     (let ((count (semaphore-%count semaphore)))
@@ -976,12 +994,15 @@ negative. Else blocks until the semaphore can be decremented."
                  ;; at most one increment per thread waiting on the semaphore.
                  (sb!ext:atomic-incf (semaphore-waitcount semaphore))
                  (loop until (plusp (setf count (semaphore-%count semaphore)))
-                       do (condition-wait (semaphore-queue semaphore)
-                                          (semaphore-mutex semaphore)))
+                       do (or (condition-wait (semaphore-queue semaphore)
+                                              (semaphore-mutex semaphore)
+                                              :timeout timeout)
+                              (return-from wait-on-semaphore nil)))
                  (setf (semaphore-%count semaphore) (1- count)))
             ;; Need to use ATOMIC-DECF instead of DECF, as CONDITION-WAIT
             ;; may unwind without the lock being held due to timeouts.
-            (sb!ext:atomic-decf (semaphore-waitcount semaphore)))))))
+            (sb!ext:atomic-decf (semaphore-waitcount semaphore))))))
+  t)
 
 (defun try-semaphore (semaphore &optional (n 1))
   #!+sb-doc
@@ -1303,18 +1324,37 @@ around and can be retrieved by JOIN-THREAD."
           (wait-on-semaphore setup-sem)
           thread)))))
 
-(defun join-thread (thread &key (default nil defaultp))
+(defun join-thread (thread &key (default nil defaultp) timeout)
   #!+sb-doc
-  "Suspend current thread until THREAD exits. Returns the result
-values of the thread function. If the thread does not exit normally,
-return DEFAULT if given or else signal JOIN-THREAD-ERROR."
-  (with-system-mutex ((thread-result-lock thread) :allow-with-interrupts t)
-    (cond ((car (thread-result thread))
-           (return-from join-thread
-             (values-list (cdr (thread-result thread)))))
-          (defaultp
-           (return-from join-thread default))))
-  (error 'join-thread-error :thread thread))
+  "Suspend current thread until THREAD exits. Return the result values of the
+thread function.
+
+If the thread does not exit normally within TIMEOUT seconds return DEFAULT if
+given, or else signal JOIN-THREAD-ERROR.
+
+NOTE: Return convention in case of a timeout is exprimental and subject to
+change."
+  (let ((lock (thread-result-lock thread))
+        (got-it nil)
+        (problem :timeout))
+    (without-interrupts
+      (unwind-protect
+           (if (setf got-it
+                     (allow-with-interrupts
+                       ;; Don't use the timeout if the thread is not alive anymore.
+                       (grab-mutex lock :timeout (and (thread-alive-p thread) timeout))))
+               (cond ((car (thread-result thread))
+                      (return-from join-thread
+                        (values-list (cdr (thread-result thread)))))
+                     (defaultp
+                      (return-from join-thread default))
+                     (t
+                      (setf problem :abort)))
+               (when defaultp
+                 (return-from join-thread default)))
+        (when got-it
+          (release-mutex lock))))
+    (error 'join-thread-error :thread thread :problem problem)))
 
 (defun destroy-thread (thread)
   #!+sb-doc
