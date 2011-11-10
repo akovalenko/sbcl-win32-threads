@@ -1,9 +1,14 @@
 ;;;; -*- coding: utf-8; fill-column: 78 -*-
 changes relative to sbcl-1.0.53:
+  * enchancement: on CHENEYGC targets, SB-KERNEL:MAKE-LISP-OBJ now does
+    the same validation of pointer objects as GENCGC does, instead of a
+    comparatively weak bounds-check against the heap spaces.
   * bug fix: on 64-bit targets, atomic-incf/aref does index computation
     correctly, even on wide-fixnum builds. (lp#887220)
   * bug fix: (directory "foo/*/*.*") did not follow symlinks in foo/ that
     resolved to directories.
+  * bug fix: SB-KERNEL:MAKE-LISP-OBJ on GENCGC no longer categorically
+    refuses to create SIMPLE-FUN objects.
 
 changes in sbcl-1.0.53 relative to sbcl-1.0.52:
   * enhancement: on 64-bit targets, in src/compiler/generic/early-vm.lisp,

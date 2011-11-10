@@ -539,8 +539,7 @@
 (sb!alien:define-alien-routine component-ptr-from-pc (system-area-pointer)
   (pc system-area-pointer))
 
-#!+gencgc (declaim (inline valid-lisp-pointer-p))
-#!+gencgc
+(declaim (inline valid-lisp-pointer-p))
 (sb!alien:define-alien-routine valid-lisp-pointer-p sb!alien:int
   (pointer system-area-pointer))
 
@@ -1987,21 +1986,7 @@ register."
        ;; unbound marker
        (= val sb!vm:unbound-marker-widetag)
        ;; pointer
-       #!+gencgc
-       (not (zerop (valid-lisp-pointer-p (int-sap val))))
-       ;; FIXME: There is no fundamental reason not to use the above
-       ;; function on other platforms as well, but I didn't have
-       ;; others available while doing this. --NS 2007-06-21
-       #!-gencgc
-       (and (logbitp 0 val)
-            (or (< sb!vm:read-only-space-start val
-                   (ash sb!vm:*read-only-space-free-pointer*
-                        sb!vm:n-fixnum-tag-bits))
-                (< sb!vm:static-space-start val
-                   (ash sb!vm:*static-space-free-pointer*
-                        sb!vm:n-fixnum-tag-bits))
-                (< (current-dynamic-space-start) val
-                   (sap-int (dynamic-space-free-pointer))))))
+       (not (zerop (valid-lisp-pointer-p (int-sap val)))))
       (values (%make-lisp-obj val) t)
       (if errorp
           (error "~S is not a valid argument to ~S"
@@ -3154,20 +3139,10 @@ register."
      #!-(or x86 x86-64)
      (let ((new-lra (make-lisp-obj (+ (sap-int dst-start)
                                       sb!vm:other-pointer-lowtag))))
-       #!-(or gencgc ppc)
-       (progn
-         ;; Set the offset from the LRA to the enclosing component.
-         ;; This does not need to be done on GENCGC targets, as the
-         ;; pointer validation done in MAKE-LISP-OBJ requires that it
-         ;; already have been set before we get here.  It does not
-         ;; need to be done on CHENEYGC PPC as it's easier to use the
-         ;; same fun_end_breakpoint_guts on both, including the LRA
-         ;; header.
-         (set-header-data
-          new-lra
-          (logandc2 (+ sb!vm:code-constants-offset bogus-lra-constants 1)
-                    1))
-         (sb!vm:sanctify-for-execution code-object))
+       ;; We used to set the header value of the LRA here to the
+       ;; offset from the enclosing component to the LRA header, but
+       ;; MAKE-LISP-OBJ actually checks the value before we get a
+       ;; chance to set it, so it's now done in arch-assem.S.
        (values new-lra code-object (sap- trap-loc src-start))))))
 
 ;;;; miscellaneous
