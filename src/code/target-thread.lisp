@@ -495,6 +495,7 @@ HOLDING-MUTEX-P."
        ;; Spin.
        (go :retry))))
 
+#!+sb-thread
 (defun %wait-for-mutex (mutex self timeout to-sec to-usec stop-sec stop-usec deadlinep)
   (with-deadlocks (self mutex timeout)
     (with-interrupts (check-deadlock))
@@ -734,7 +735,8 @@ around the call, checking the the associated data:
       (push data *data*)
       (condition-notify *queue*)))
 "
-  #!-sb-thread (declare (ignore queue timeout))
+  #!-sb-thread
+  (declare (ignore queue))
   (assert mutex)
   #!-sb-thread
   (wait-for nil :timeout timeout) ; Yeah...
