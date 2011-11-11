@@ -844,18 +844,19 @@ Users Manual for details about the PROCESS structure."#-win32"
                                      (setf proc
                                            (apply
                                             #'make-process
-                                            :pid child
                                             :input input-stream
                                             :output output-stream
                                             :error error-stream
                                             :status-hook status-hook
                                             :cookie cookie
                                             #-win32 (list :pty pty-stream
-                                                          :%status :running)
+                                                          :%status :running
+                                                          :pid child)
                                             #+win32 (if wait
                                                         (list :%status :exited
                                                               :exit-code child)
-                                                        (list :%status :running))))
+                                                        (list :%status :running
+                                                              :pid child))))
                                      (push proc *active-processes*)))))))
                          ;; Report the error outside the lock.
                          (when (= child -1)
