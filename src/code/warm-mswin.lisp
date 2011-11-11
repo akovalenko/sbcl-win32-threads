@@ -64,7 +64,7 @@
              max_path (cast pathname-buffer (* char)) nil)))
 
 (define-alien-routine ("GetExitCodeProcess" get-exit-code-process) int
-  (handle unsigned) (exit-code dword :out))
+  (handle handle) (exit-code dword :out))
 
 (define-alien-routine ("GetExitCodeThread" get-exit-code-thread) int
   (handle handle) (exit-code dword :out))

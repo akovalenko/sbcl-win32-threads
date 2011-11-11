@@ -183,11 +183,6 @@
 #+sb-doc
 (setf (documentation 'process-pid 'function) "The pid of the child process.")
 
-#+win32
-(define-alien-routine ("GetExitCodeProcess" get-exit-code-process)
-    int
-  (handle unsigned) (exit-code unsigned-int :out))
-
 (defun process-status (process)
   #+sb-doc
   "Return the current status of PROCESS.  The result is one of :RUNNING,
@@ -356,7 +351,7 @@ status slot."
                          (let ((pid (process-pid proc)))
                            (when pid
                              (multiple-value-bind (ok code)
-                                 (get-exit-code-process pid)
+                                 (sb-win32::get-exit-code-process pid)
                                (when (and (plusp ok) (/= code 259))
                                  (setf (process-%status proc) :exited
                                        (process-exit-code proc) code)
