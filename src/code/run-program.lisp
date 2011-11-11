@@ -353,14 +353,16 @@ status slot."
                              t)))
                        #+win32
                        (lambda (proc)
-                         (multiple-value-bind (ok code)
-                             (get-exit-code-process (process-pid proc))
-                           (when (and (plusp ok) (/= code 259))
-                             (setf (process-%status proc) :exited
-                                   (process-exit-code proc) code)
-                             (when (process-status-hook proc)
-                               (push proc exited))
-                             t)))
+                         (let ((pid (process-pid proc)))
+                           (when pid
+                             (multiple-value-bind (ok code)
+                                 (get-exit-code-process pid)
+                               (when (and (plusp ok) (/= code 259))
+                                 (setf (process-%status proc) :exited
+                                       (process-exit-code proc) code)
+                                 (when (process-status-hook proc)
+                                   (push proc exited))
+                                 t)))))
                        *active-processes*)))
     ;; Can't call the hooks before all the processes have been deal
     ;; with, as calling a hook may cause re-entry to
