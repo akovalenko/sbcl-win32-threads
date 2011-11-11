@@ -52,7 +52,7 @@ Enabling this option can increase heap consing of closures.")
 only used as the final argument to APPLY.")
 
 (define-optimization-quality alien-funcall-saves-fp-and-pc
-    (if (<= speed debug) 3 0)
+    (if #!-sb-gc-safepoint (<= speed debug) #!+sb-gc-safepoint (= debug 3) 3 0)
   ("no" "maybe" "yes" "yes")
   "Control ALIEN-FUNCALL saving frame-pointer and program counter for
 more reliable bactracing across foreign calls.")
