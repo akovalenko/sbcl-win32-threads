@@ -859,6 +859,7 @@ Users Manual for details about the PROCESS structure."#-win32"
                                                               :exit-code child)
                                                         (list :%status :running
                                                               :pid child))))
+                                     #-win32
                                      (push proc *active-processes*)))))))
                          ;; Report the error outside the lock.
                          (when (= child -1)
