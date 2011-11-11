@@ -1030,6 +1030,8 @@ Users Manual for details about the PROCESS structure."#-win32"
                  (error #-win32 "~@<couldn't open \"/dev/null\": ~2I~_~A~:>"
                         #+win32 "~@<couldn't open \"nul\" device: ~2I~_~A~:>"
                         (strerror errno)))
+               #+fds-are-windows-handles
+               (setf (sb-win32::inheritable-handle-p fd) t)
                (push fd *close-in-parent*)
                (values fd nil)))
             ((eq object :stream)
