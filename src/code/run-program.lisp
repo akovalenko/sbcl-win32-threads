@@ -233,6 +233,16 @@ The function is called with PROCESS as its only argument.")
   "Wait for PROCESS to quit running for some reason. When
 CHECK-FOR-STOPPED is T, also returns when PROCESS is stopped. Returns
 PROCESS."
+  (declare (ignorable check-for-stopped))
+  #+win32
+  (let ((pid (process-pid process)))
+    (when (and pid (plusp pid))
+      (without-interrupts
+        (do ()
+            ((= 0
+                (with-local-interrupts
+                  (sb-win32:wait-object-or-signal pid))))))))
+  #-win32
   (loop
       (case (process-status process)
         (:running)
