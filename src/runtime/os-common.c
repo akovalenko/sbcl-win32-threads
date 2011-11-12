@@ -74,6 +74,14 @@ os_get_errno(void)
     return errno;
 }
 
+#if defined(LISP_FEATURE_OS_PROVIDES_DLOPEN)
+#include <dlfcn.h>
+
+void* os_dlopen(char* name, int flags) {
+	volatile void* ret = dlopen(name,flags);
+	return ret;
+}
+
 #if defined(LISP_FEATURE_SB_DYNAMIC_CORE)
 /* When this feature is enabled, the special category of /static/ foreign
  * symbols disappears. Foreign fixups are resolved to linkage table locations
@@ -118,14 +126,6 @@ static inline lispobj cdr(lispobj conscell)
 }
 
 extern void undefined_alien_function(); /* see interrupt.c */
-#ifndef HAVE_os_dlsym_default
-#include <dlfcn.h>
-
-void* os_dlopen(char* name, int flags) {
-	volatile void* ret = dlopen(name,flags);
-	return ret;
-}
-#endif
 
 void os_link_runtime()
 {
@@ -158,5 +158,5 @@ void os_link_runtime()
         link_target = (void*)(((uintptr_t)link_target)+LINKAGE_TABLE_ENTRY_SIZE);
     }
 }
-
-#endif
+#endif  /* sb-dynamic-core */
+#endif  /* os-provides-dlopen */
