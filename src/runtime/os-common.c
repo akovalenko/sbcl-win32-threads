@@ -75,13 +75,14 @@ os_get_errno(void)
 }
 
 #if defined(LISP_FEATURE_OS_PROVIDES_DLOPEN)
+#if !defined(LISP_FEATURE_WIN32)
 #include <dlfcn.h>
 
 void* os_dlopen(char* name, int flags) {
 	volatile void* ret = dlopen(name,flags);
 	return ret;
 }
-
+#endif
 #if defined(LISP_FEATURE_SB_DYNAMIC_CORE)
 /* When this feature is enabled, the special category of /static/ foreign
  * symbols disappears. Foreign fixups are resolved to linkage table locations
