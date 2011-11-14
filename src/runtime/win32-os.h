@@ -91,6 +91,7 @@ void win32_interrupt_console_input();
 void os_link_runtime();
 void* os_dlsym_default(char* name);
 void os_commit_wp_violation_data(boolean call_gc);
+void maybe_resetstkoflw();
 
 boolean win32_maybe_interrupt_io(void* thread);
 intptr_t win32_get_module_handle_by_address(os_vm_address_t addr);

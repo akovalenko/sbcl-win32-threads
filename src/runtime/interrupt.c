@@ -1565,7 +1565,7 @@ void reset_control_stack_guard_page(void)
 
     if (th->control_stack_guard_page_protected == NIL) {
 #ifdef LISP_FEATURE_WIN32
-        _resetstkoflw();
+        maybe_resetstkoflw();
         th->control_stack_guard_page_protected = T;
 #else
         reset_thread_control_stack_guard_page(th);

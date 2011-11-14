@@ -887,7 +887,7 @@ static int _dummyresetstkoflw()
     return 0;
 }
 
-int _resetstkoflw()
+int maybe_resetstkoflw()
 {
     if (!msvcrt_resetstkoflw) {
         msvcrt_resetstkoflw =
