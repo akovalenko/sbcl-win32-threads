@@ -880,6 +880,23 @@ extern void undefined_alien_function(); /* see interrupt.c */
 static u32 buildTimeImageCount = 0;
 static void* buildTimeImages[16];
 
+int (*msvcrt_resetstkoflw)() = NULL;
+
+static int _dummyresetstkoflw()
+{
+    return 0;
+}
+
+int _resetstkoflw()
+{
+    if (!msvcrt_resetstkoflw) {
+        msvcrt_resetstkoflw =
+            GetProcAddress(GetModuleHandleA("MSVCRT.DLL"),"_resetstkoflw");
+        if (!msvcrt_resetstkoflw)
+            msvcrt_resetstkoflw = _dummyresetstkoflw;
+    }
+    return msvcrt_resetstkoflw();
+}
 /* Resolve symbols against the executable and its build-time dependencies */
 void* os_dlsym_default(char* name)
 {
