@@ -599,10 +599,10 @@ evaluated as a PROGN."
         (condition (sb!xc:gensym "CONDITION")))
     `(dx-flet ((,name (,condition)
                  (typecase ,condition
-                   ,(mapcar (lambda (binding)
-                              (destructuring-bind (type handler) binding
-                                `(,type (funcall ,handler ,condition))))
-                     bindings))))
+                   ,@(mapcar (lambda (binding)
+                               (destructuring-bind (type handler) binding
+                                 `(,type (funcall ,handler ,condition))))
+                      bindings))))
        (let ((*handler-clusters*
                (cons (function ,name)
                      *handler-clusters*)))
