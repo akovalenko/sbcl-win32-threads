@@ -2111,6 +2111,16 @@ void c_level_backtrace(const char* header, int depth)
 #else
 #define voidreg(ctxptr,name) ((void*)((ctxptr)->R##name))
 #endif
+
+/*
+ * We return ExceptionContinueSearch for memory fault errors by default, so any
+ * handler established by foreign libraries has a chance to handle the
+ * exception. Old behavior of letting memory faults to Lisp-side handler can
+ * interfere with non-Lisp GCs and similar software; however, it may still be
+ * preferred during development, so let's provide a variable to control this.
+ */
+int sbcl_enable_lisp_pagefault_handler = 0;
+
 /*
  * A good explanation of the exception handling semantics is
  * http://win32assembly.online.fr/Exceptionhandling.html .
@@ -2290,8 +2300,12 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         }
         if (fault_address == undefined_alien_address)
             goto complain;
-        if (!is_valid_lisp_addr(fault_address))
-            goto complain;
+        if (!is_valid_lisp_addr(fault_address)) {
+            if (sbcl_enable_lisp_pagefault_handler && internal_errors_enabled)
+                goto complain;
+            disposition = ExceptionContinueSearch;
+            goto finish;
+        }
 
     try_recommit:
         AVER(VirtualAlloc(PTR_ALIGN_DOWN(fault_address,os_vm_page_size),
