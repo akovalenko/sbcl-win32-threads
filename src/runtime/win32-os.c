@@ -2270,23 +2270,6 @@ handle_exception(EXCEPTION_RECORD *exception_record,
                     goto try_recommit;
                 }
             }
-
-            if (dyndebug_lowpagefault_log && (((lispobj)fault_address)<0xFFFF)) {
-                fprintf(stderr,
-                        "Low page access (?) thread %p\n"
-                        "(addr 0x%p, EIP 0x%p ESP 0x%p EBP 0x%p)\n",
-                        self,
-                        fault_address,
-                        voidreg(context,ip),
-                        voidreg(context,sp),
-                        voidreg(context,bp));
-                if (dyndebug_lowpagefault_halt) {
-                    Sleep(INFINITE);
-                    ExitProcess(0);
-                } else {
-                    goto complain;
-                }
-            }
         }
         if (fault_address == GC_SAFEPOINT_PAGE_ADDR) {
             /* Pick off GC-related memory fault next. */
