@@ -2217,6 +2217,7 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         if (handle_guard_page_triggered(&ctx, fault_address))
             goto finish;
         END_GC_UNSAFE_CODE;
+        disposition = ExceptionContinueSearch;
         goto finish;
     }
     else if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
