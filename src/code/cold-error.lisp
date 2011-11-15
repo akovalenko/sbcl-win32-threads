@@ -87,9 +87,7 @@
       (unless *handler-clusters*
         (return))
       (let ((cluster (pop *handler-clusters*)))
-        (dolist (handler cluster)
-          (when (typep condition (car handler))
-            (funcall (cdr handler) condition)))))
+        (funcall (the function cluster) condition)))
     nil))
 
 ;;; a shared idiom in ERROR, CERROR, and BREAK: The user probably

@@ -24,9 +24,11 @@
   (typep warning *muffled-warnings*))
 
 (defun initial-handler-clusters ()
-  `(((warning . ,#'(lambda (warning)
-                     (when (muffle-warning-p warning)
-                       (muffle-warning warning)))))))
+  (list (lambda (condition)
+          (typecase condition
+            (warning
+             (when (muffle-warning-p condition)
+               (muffle-warning condition)))))))
 
 (defvar *handler-clusters* (initial-handler-clusters))
 

@@ -595,28 +595,17 @@ evaluated as a PROGN."
                               bindings)))
     (when member-if
       (error "ill-formed handler binding: ~S" (first member-if))))
-  (let* ((local-funs nil)
-         (mapped-bindings (mapcar (lambda (binding)
-                                    (destructuring-bind (type handler) binding
-                                      (let ((lambda-form handler))
-                                        (if (and (consp handler)
-                                                 (or (eq 'lambda (car handler))
-                                                     (and (eq 'function (car handler))
-                                                          (consp (cdr handler))
-                                                          (let ((x (second handler)))
-                                                            (and (consp x)
-                                                                 (eq 'lambda (car x))
-                                                                 (setf lambda-form x))))))
-                                            (let ((name (sb!xc:gensym "LAMBDA")))
-                                              (push `(,name ,@(cdr lambda-form)) local-funs)
-                                              (list type `(function ,name)))
-                                            binding))))
-                                  bindings)))
-    `(dx-flet (,@(reverse local-funs))
+  (let ((name (sb!xc:gensym "HANDLER"))
+        (condition (sb!xc:gensym "CONDITION")))
+    `(dx-flet ((,name (,condition)
+                 (typecase ,condition
+                   ,(mapcar (lambda (binding)
+                              (destructuring-bind (type handler) binding
+                                `(,type (funcall ,handler ,condition))))
+                     bindings))))
        (let ((*handler-clusters*
-              (cons (list ,@(mapcar (lambda (x) `(cons ',(car x) ,(cadr x)))
-                                    mapped-bindings))
-                    *handler-clusters*)))
+               (cons (function ,name)
+                     *handler-clusters*)))
          #!+stack-allocatable-fixed-objects
          (declare (truly-dynamic-extent *handler-clusters*))
          (progn ,form)))))
