@@ -2131,6 +2131,9 @@ void c_level_backtrace(const char* header, int depth)
  * exception. Old behavior of letting memory faults to Lisp-side handler can
  * interfere with non-Lisp GCs and similar software; however, it may still be
  * preferred during development, so let's provide a variable to control this.
+ *
+ * FIXME: once we have non-consing CL:SIGNAL and sane restarts in
+ * handle-win32-exception, reenable it by default.
  */
 int sbcl_enable_lisp_pagefault_handler = 0;
 
@@ -2315,7 +2318,8 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         if (fault_address == undefined_alien_address)
             goto complain;
         if (!is_valid_lisp_addr(fault_address)) {
-            if (sbcl_enable_lisp_pagefault_handler && internal_errors_enabled)
+            if (sbcl_enable_lisp_pagefault_handler &&
+                internal_errors_enabled)
                 goto complain;
             disposition = ExceptionContinueSearch;
             goto finish;
@@ -2328,8 +2332,20 @@ handle_exception(EXCEPTION_RECORD *exception_record,
         goto finish;
     }
 complain:
-    /* All else failed, drop through to the lisp-side exception handler. */
-
+    /* All else failed, drop through to the lisp-side exception handler, except
+     * if we aren't in Lisp thread (that's possible with VEH, i.e. on 64-bit
+     * windows). */
+#ifdef LISP_FEATURE_X86_64
+    if (!self) {
+        /* We know full well that calling to lisp is not going to work here.  If
+         * we're lucky, some other (foreign) code is prepared to handle the
+         * exception. */
+        disposition = ExceptionContinueSearch;
+        goto finish;
+    }
+        
+#endif
+    
     /*
      * If we fall through to here then we need to either forward
      * the exception to the lisp-side exception handler if it's
