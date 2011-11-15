@@ -1378,6 +1378,19 @@ void os_init(char *argv[], char *envp[])
 {
     SYSTEM_INFO system_info;
     _set_sbh_threshold(480);
+
+    /* <http://msdn.microsoft.com/en-us/library/windows/desktop/ms680621(v=vs.85).aspx>:
+       Best practice is that all applications call the process-wide SetErrorMode
+       function with a parameter of SEM_FAILCRITICALERRORS at startup. This is
+       to prevent error mode dialogs from hanging the application.
+
+       akovalenko: while I'm not sure if it's actually the universally best
+       practice, it's good for SBCL, which has its own error reporting when
+       shared library fails to load (that's the most frequent critical error
+       affected by this setting).
+    */
+    SetErrorMode(SEM_FAILCRITICALERRORS);
+    
     GetSystemInfo(&system_info);
     os_vm_page_size = system_info.dwPageSize > BACKEND_PAGE_BYTES?
         system_info.dwPageSize : BACKEND_PAGE_BYTES;
