@@ -29,55 +29,60 @@
         (*handler-clusters* *handler-clusters*)
         (old-bos *break-on-signals*)
         (bos-actually-breaking nil))
-    (restart-case
-        (let ((break-on-signals *break-on-signals*)
-              (*break-on-signals* nil))
-          ;; The rebinding encloses the TYPEP so that a bogus
-          ;; type specifier will not lead to infinite recursion when
-          ;; TYPEP fails.
-          (when (typep condition break-on-signals)
-            (setf bos-actually-breaking t)
-            (break "~A~%BREAK was entered because of *BREAK-ON-SIGNALS* ~
+    (when old-bos
+      ;; When *break-on-signals* is not nil, it makes sense to establish a
+      ;; restart for reassignment (see below). Otherwise we avoid it, because
+      ;; it would make any signal cons too much, and it's important for them
+      ;; to be fast.
+      (restart-case
+          (let ((break-on-signals *break-on-signals*)
+                (*break-on-signals* nil))
+            ;; The rebinding encloses the TYPEP so that a bogus
+            ;; type specifier will not lead to infinite recursion when
+            ;; TYPEP fails.
+            (when (typep condition break-on-signals)
+              (setf bos-actually-breaking t)
+              (break "~A~%BREAK was entered because of *BREAK-ON-SIGNALS* ~
                     (now rebound to NIL)."
-                   condition)))
-      ;; Give the user a chance to unset *BREAK-ON-SIGNALS* on the
-      ;; way out.
-      ;;
-      ;; (e.g.: Consider a long compilation. After a failed compile
-      ;; the user sets *BREAK-ON-SIGNALS* to T, and select the
-      ;; RECOMPILE restart. Once the user diagnoses and fixes the
-      ;; problem, he selects RECOMPILE again... and discovers that
-      ;; he's entered the *BREAK-ON-SIGNALS* hell with no escape,
-      ;; unless we provide this restart.)
-      (reassign (new-value)
-        :report
-        (lambda (stream)
-          (format stream
-                  (if bos-actually-breaking
-                    "Return from BREAK and assign a new value to ~
+                     condition)))
+        ;; Give the user a chance to unset *BREAK-ON-SIGNALS* on the
+        ;; way out.
+        ;;
+        ;; (e.g.: Consider a long compilation. After a failed compile
+        ;; the user sets *BREAK-ON-SIGNALS* to T, and select the
+        ;; RECOMPILE restart. Once the user diagnoses and fixes the
+        ;; problem, he selects RECOMPILE again... and discovers that
+        ;; he's entered the *BREAK-ON-SIGNALS* hell with no escape,
+        ;; unless we provide this restart.)
+        (reassign (new-value)
+          :report
+          (lambda (stream)
+            (format stream
+                    (if bos-actually-breaking
+                        "Return from BREAK and assign a new value to ~
                      *BREAK-ON-SIGNALS*."
-                    "Assign a new value to *BREAK-ON-SIGNALS* and ~
+                        "Assign a new value to *BREAK-ON-SIGNALS* and ~
                      continue with signal handling.")))
-        :interactive
-        (lambda ()
-          (let (new-value)
-            (loop
-             (format *query-io*
-                     "Enter new value for *BREAK-ON-SIGNALS*. ~
+          :interactive
+          (lambda ()
+            (let (new-value)
+              (loop
+                (format *query-io*
+                        "Enter new value for *BREAK-ON-SIGNALS*. ~
                       Current value is ~S.~%~
                       > "
-                     old-bos)
-             (force-output *query-io*)
-             (let ((*break-on-signals* nil))
-               (setf new-value (eval (read *query-io*)))
-               (if (typep new-value 'type-specifier)
-                   (return)
-                   (format *query-io*
-                           "~S is not a valid value for *BREAK-ON-SIGNALS* ~
+                        old-bos)
+                (force-output *query-io*)
+                (let ((*break-on-signals* nil))
+                  (setf new-value (eval (read *query-io*)))
+                  (if (typep new-value 'type-specifier)
+                      (return)
+                      (format *query-io*
+                              "~S is not a valid value for *BREAK-ON-SIGNALS* ~
                             (must be a type-specifier).~%"
-                           new-value))))
-            (list new-value)))
-        (setf *break-on-signals* new-value)))
+                              new-value))))
+              (list new-value)))
+          (setf *break-on-signals* new-value))))
     (loop
       (unless *handler-clusters*
         (return))
