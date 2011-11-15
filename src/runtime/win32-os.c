@@ -891,7 +891,7 @@ int maybe_resetstkoflw()
 {
     if (!msvcrt_resetstkoflw) {
         msvcrt_resetstkoflw =
-            GetProcAddress(GetModuleHandleA("MSVCRT.DLL"),"_resetstkoflw");
+            (int(*)())GetProcAddress(GetModuleHandleA("MSVCRT.DLL"),"_resetstkoflw");
         if (!msvcrt_resetstkoflw)
             msvcrt_resetstkoflw = _dummyresetstkoflw;
     }
@@ -900,7 +900,7 @@ int maybe_resetstkoflw()
 /* Resolve symbols against the executable and its build-time dependencies */
 void* os_dlsym_default(char* name)
 {
-    int i;
+    unsigned int i;
     void* result = NULL;
     if (buildTimeImageCount == 0) {
         buildTimeImageCount =
@@ -1251,7 +1251,7 @@ static void restore_lisp_tls()
 static int translating_vfprintf(FILE*stream, const char *fmt, va_list args)
 {
     char translated[1024];
-    int i=0, delta = 0;
+    unsigned int i=0, delta = 0;
 
     while (fmt[i-delta] && i<sizeof(translated)-1) {
         if((fmt[i-delta]=='%')&&
