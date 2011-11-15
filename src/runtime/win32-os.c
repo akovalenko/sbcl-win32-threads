@@ -3158,20 +3158,6 @@ struct ctx_package {
 
     /* Pthread identifier of a target thread (to resume it). */
     os_thread_t os_thread;
-
-    /* Low-level variant of pseudo-atomic bits is currently
-     * represented by misaligned frame pointer below the pseudo-atomic
-     * frame. We've no idea where SuspendThread() will freeze the
-     * target (and I'd like to avoid rolling/deferring, both for
-     * accuracy and simplicity), so we fix frame pointer chain after
-     * suspend and restore it on resume.
-     *
-     * paframe: address of flagged frame pointer in target stack */
-    os_vm_address_t paframe;
-
-    /* pacont: original frame pointer, containing "pseudo-atomic
-     * misalignment", that should be restored. */
-    os_context_register_t pacont;
 };
 
 pthread_mutex_t sprof_suspend_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -3262,25 +3248,6 @@ os_context_t* win32_suspend_get_context(pthread_t os_thread)
          * to use `covers' / `covered by' for logical stack ordering
          * predicates) */
         *os_context_sp_addr(&data->ctx) = (os_context_register_t)csp;
-    } else {
-        os_vm_address_t fp = *(void**)os_context_fp_addr(&data->ctx);
-
-        /* Fix low-level pseudo-atomic representation: traverse frame
-         * pointer chain and fix first misaligned address we meet,
-         * remembering its location. */
-        while ((void*)fp < (void*)p->control_stack_end &&
-               (void*)fp > (void*)p->control_stack_start &&
-               /* Avoid infinite loop if the chain happens to be
-                * circular */
-               *(void**)fp > fp) {
-            if ((*(os_context_register_t*)fp)&3) {
-                data->pacont = *(os_context_register_t*)fp;
-                data->paframe = fp;
-                *(os_context_register_t*)fp &= ~((intptr_t)3);
-                break;
-            }
-            fp = *(os_vm_address_t*)fp;
-        }
     }
     data->os_thread = os_thread;
     return &data->ctx;
@@ -3298,11 +3265,6 @@ void win32_resume(void *ctx)
         /* Given CTX member, calculate entire data block address
          * (actually no-op on X86 as soon as CTX is at the beginning) */
         struct ctx_package *data = ctx - offsetof(struct ctx_package,ctx);
-
-        /* Restore pseudo-atomic misalignment in the `beautified'
-         * frame pointer (if any) */
-        if (data->paframe)
-            *(os_context_register_t*)data->paframe = data->pacont;
 
         /* Resume (for inactive fibers it means `unlock and allow
          * activation'). NB os_thread may become invalid after that
