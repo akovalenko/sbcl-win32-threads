@@ -25,7 +25,9 @@
 (defstruct (queue (:constructor %make-queue (head tail name))
                   (:copier nil)
                   (:predicate queuep))
-  "Lock-free thread safe queue."
+  "Lock-free thread safe FIFO queue.
+
+Use ENQUEUE to add objects to the queue, and DEQUEUE to remove them."
   (head (error "No HEAD.") :type node)
   (tail (error "No TAIL.") :type node)
   (name nil))
@@ -120,7 +122,8 @@ and secondary value."
 
 (defun list-queue-contents (queue)
   "Returns the contents of QUEUE as a list without removing them from the
-QUEUE. Mainly useful for manual examination of queue state."
+QUEUE. Mainly useful for manual examination of queue state, as the list
+may be out of date by the time it is returned."
   (let (all)
     (labels ((walk (node)
                ;; Since NEXT pointers are always right, traversing from tail
@@ -137,7 +140,7 @@ QUEUE. Mainly useful for manual examination of queue state."
 (defun queue-count (queue)
   "Returns the number of objects in QUEUE. Mainly useful for manual
 examination of queue state, and in PRINT-OBJECT methods: inefficient as it
-walks the entire queue."
+must walk the entire queue."
   (let ((n 0))
     (declare (unsigned-byte n))
     (labels ((walk (node)
