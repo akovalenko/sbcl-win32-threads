@@ -80,9 +80,12 @@ static inline lispobj
 thread_state(struct thread *thread)
 {
     lispobj state;
+    sigset_t old;
+    block_blockable_signals(0, &old);
     pthread_mutex_lock(thread->state_lock);
     state = thread->state;
     pthread_mutex_unlock(thread->state_lock);
+    thread_sigmask(SIG_SETMASK,&old,0);
     return state;
 }
 
@@ -108,21 +111,27 @@ static const char * get_thread_state_as_string(struct thread * thread)
 static inline void
 set_thread_state(struct thread *thread, lispobj state)
 {
+    sigset_t old;
+    block_blockable_signals(0, &old);
     pthread_mutex_lock(thread->state_lock);
     thread->state = state;
     pthread_mutex_unlock(thread->state_lock);
     pthread_cond_broadcast(thread->state_cond);
+    thread_sigmask(SIG_SETMASK,&old,0);
 }
 
 static inline void
 wait_for_thread_state_change(struct thread *thread, lispobj state)
 {
-    if (thread->state == state) {
-        pthread_mutex_lock(thread->state_lock);
-        while (thread->state == state)
-            pthread_cond_wait(thread->state_cond, thread->state_lock);
-        pthread_mutex_unlock(thread->state_lock);
-    }
+    sigset_t old;
+    if (thread->state != state)
+        return;
+    block_blockable_signals(0, &old);
+    pthread_mutex_lock(thread->state_lock);
+    while (thread->state == state)
+        pthread_cond_wait(thread->state_cond, thread->state_lock);
+    pthread_mutex_unlock(thread->state_lock);
+    thread_sigmask(SIG_SETMASK,&old,0);
 }
 
 extern pthread_key_t lisp_thread;

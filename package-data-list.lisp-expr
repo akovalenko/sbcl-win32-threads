@@ -2024,9 +2024,16 @@ is a good idea, but see SB-SYS re. blurring of boundaries."
                "SIGNAL-SEMAPHORE"
                "TRY-SEMAPHORE"
                "WAIT-ON-SEMAPHORE"
+
                ;; Foreign thread support
                #!+sb-foreign-thread "FOREIGN-THREAD-DEINIT"
-               #!+sb-foreign-thread "FOREIGN-THREAD-INIT"))
+               #!+sb-foreign-thread "FOREIGN-THREAD-INIT"
+
+               ;; Semaphore notification objects
+               "CLEAR-SEMAPHORE-NOTIFICATION"
+               "MAKE-SEMAPHORE-NOTIFICATION"
+               "SEMAPHORE-NOTIFICATION"
+               "SEMAPHORE-NOTIFICATION-STATUS"))
 
    #s(sb-cold:package-data
       :name "SB!LOOP"

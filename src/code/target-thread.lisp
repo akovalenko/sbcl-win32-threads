@@ -39,20 +39,33 @@ WITH-CAS-LOCK can be entered recursively."
     (multiple-value-bind (vars vals old new cas-form read-form)
         (sb!ext:get-cas-expansion place env)
       `(let* (,@(mapcar #'list vars vals)
-              (,owner ,read-form)
+              (,owner (progn
+                        (barrier (:read))
+                        ,read-form))
               (,self *current-thread*)
               (,old nil)
               (,new ,self))
          (unwind-protect
               (progn
                 (unless (eq ,owner ,self)
-                  (loop while (setf ,owner (or ,read-form ,cas-form))
+                  (loop until (loop repeat 100
+                                    when (and (progn
+                                                (barrier (:read))
+                                                (not ,read-form))
+                                              (not (setf ,owner ,cas-form)))
+                                    return t
+                                    else
+                                    do (sb!ext:spin-loop-hint))
                         do (thread-yield)))
                 ,@body)
+           ;; FIXME: SETF + write barrier should to be enough here.
+           ;; ...but GET-CAS-EXPANSION doesn't return a WRITE-FORM.
+           ;; ...maybe it should?
            (unless (eq ,owner ,self)
              (let ((,old ,self)
                    (,new nil))
-               ,cas-form)))))))
+               (unless (eq ,old ,cas-form)
+                 (bug "Failed to release CAS lock!")))))))))
 
 ;;; Conditions
 
@@ -160,7 +173,9 @@ arbitrary printable objects, and need not be unique.")
                      (multiple-value-list
                       (join-thread thread :default cookie))))
            (state (if (eq :running info)
-                      (let* ((thing (thread-waiting-for thread)))
+                      (let* ((thing (progn
+                                      (barrier (:read))
+                                      (thread-waiting-for thread))))
                         (typecase thing
                           (cons
                            (list "waiting on:" (cdr thing)
@@ -317,10 +332,12 @@ created and old ones may exit at any time."
        (unwind-protect
             (progn
               (setf (thread-waiting-for ,n-thread) ,new)
+              (barrier (:write))
               ,@forms)
          ;; Interrupt handlers and GC save and restore any
          ;; previous wait marks using WITHOUT-DEADLOCKS below.
-         (setf (thread-waiting-for ,n-thread) nil)))))
+         (setf (thread-waiting-for ,n-thread) nil)
+         (barrier (:write))))))
 
 ;;;; Mutexes
 
@@ -354,7 +371,9 @@ HOLDING-MUTEX-P."
 ;;; depends on the current thread. Does not detect deadlocks from sempahores.
 (defun check-deadlock ()
   (let* ((self *current-thread*)
-         (origin (thread-waiting-for self)))
+         (origin (progn
+                   (barrier (:read))
+                   (thread-waiting-for self))))
     (labels ((detect-deadlock (lock)
                (let ((other-thread (mutex-%owner lock)))
                  (cond ((not other-thread))
@@ -375,7 +394,9 @@ HOLDING-MUTEX-P."
                                  :thread *current-thread*
                                  :cycle chain)))
                        (t
-                        (let ((other-lock (thread-waiting-for other-thread)))
+                        (let ((other-lock (progn
+                                            (barrier (:read))
+                                            (thread-waiting-for other-thread))))
                           ;; If the thread is waiting with a timeout OTHER-LOCK
                           ;; is a cons, and we don't consider it a deadlock -- since
                           ;; it will time out on its own sooner or later.
@@ -384,6 +405,7 @@ HOLDING-MUTEX-P."
              (deadlock-chain (thread lock)
                (let* ((other-thread (mutex-owner lock))
                       (other-lock (when other-thread
+                                    (barrier (:read))
                                     (thread-waiting-for other-thread))))
                  (cond ((not other-thread)
                         ;; The deadlock is gone -- maybe someone unwound
@@ -419,7 +441,8 @@ HOLDING-MUTEX-P."
     (when old
       (error "Strange deadlock on ~S in an unithreaded build?" mutex))
     #!-sb-futex
-    (and (not (mutex-%owner mutex))
+    (and (not old)
+         ;; Don't even bother to try to CAS if it looks bad.
          (not (sb!ext:compare-and-swap (mutex-%owner mutex) nil new-owner)))
     #!+sb-futex
     ;; From the Mutex 2 algorithm from "Futexes are Tricky" by Ulrich Drepper.
@@ -438,11 +461,16 @@ HOLDING-MUTEX-P."
   (declare (ignore to-sec to-usec))
   #!-sb-futex
   (flet ((cas ()
-           (loop repeat 24
-                 when (and (not (mutex-%owner mutex))
+           (loop repeat 100
+                 when (and (progn
+                             (barrier (:read))
+                             (not (mutex-%owner mutex)))
                            (not (sb!ext:compare-and-swap (mutex-%owner mutex) nil
                                                          new-owner)))
-                 do (return-from cas t))
+                 do (return-from cas t)
+                 else
+                 do
+                    (sb!ext:spin-loop-hint))
            ;; Check for pending interrupts.
            (with-interrupts nil)))
     (declare (dynamic-extent #'cas))
@@ -667,7 +695,8 @@ IF-NOT-OWNER is :FORCE)."
                              (setf (waitqueue-%head queue) (cdr head)))
                          (car head)))
           while next
-          do (when (eq queue (sb!ext:compare-and-swap (thread-waiting-for next) queue nil))
+          do (when (eq queue (sb!ext:compare-and-swap
+                              (thread-waiting-for next) queue nil))
                (decf n)))
     nil))
 
@@ -746,11 +775,14 @@ around the call, checking the the associated data:
                (progn
                  #!-sb-futex
                  (progn
-                   (%waitqueue-enqueue me queue)
+                   (%with-cas-lock ((waitqueue-%owner queue))
+                     (%waitqueue-enqueue me queue))
                    (release-mutex mutex)
                    (setf status
                          (or (flet ((wakeup ()
-                                      (when (neq queue (thread-waiting-for me))
+                                      (barrier (:read))
+                                      (when (neq queue
+                                                 (thread-waiting-for me))
                                         :ok)))
                                (declare (dynamic-extent #'wakeup))
                                (allow-with-interrupts
@@ -881,8 +913,38 @@ future."
 (setf (fdocumentation 'semaphore-name 'function)
       "The name of the semaphore INSTANCE. Setfable.")
 
+(defstruct (semaphore-notification (:constructor make-semaphore-notification ())
+                                   (:copier nil))
+  #!+sb-doc
+  "Semaphore notification object. Can be passed to WAIT-ON-SEMAPHORE and
+TRY-SEMAPHORE as the :NOTIFICATION argument. Consequences are undefined if
+multiple threads are using the same notification object in parallel."
+  (%status nil :type boolean))
+
+(setf (fdocumentation 'make-semaphore-notification 'function)
+      "Constructor for SEMAPHORE-NOTIFICATION objects. SEMAPHORE-NOTIFICATION-STATUS
+is initially NIL.")
+
+(declaim (inline semaphore-notification-status))
+(defun semaphore-notification-status (semaphore-notification)
+  #!+sb-doc
+  "Returns T if a WAIT-ON-SEMAPHORE or TRY-SEMAPHORE using
+SEMAPHORE-NOTICATION has succeeded since the notification object was created
+or cleared."
+  (barrier (:read))
+  (semaphore-notification-%status semaphore-notification))
+
+(declaim (inline clear-semaphore-notification))
+(defun clear-semaphore-notification (semaphore-notification)
+  #!+sb-doc
+  "Resets the SEMAPHORE-NOTIFICATION object for use with another call to
+WAIT-ON-SEMAPHORE or TRY-SEMAPHORE."
+  (barrier (:write)
+    (setf (semaphore-notification-%status semaphore-notification) nil)))
+
 (declaim (inline semaphore-count))
 (defun semaphore-count (instance)
+  #!+sb-doc
   "Returns the current count of the semaphore INSTANCE."
   (barrier (:read))
   (semaphore-%count instance))
@@ -892,14 +954,23 @@ future."
   "Create a semaphore with the supplied COUNT and NAME."
   (%make-semaphore name count))
 
-(defun wait-on-semaphore (semaphore &key timeout)
+(defun wait-on-semaphore (semaphore &key timeout notification)
   #!+sb-doc
   "Decrement the count of SEMAPHORE if the count would not be negative. Else
 blocks until the semaphore can be decremented. Returns T on success.
 
 If TIMEOUT is given, it is the maximum number of seconds to wait. If the count
 cannot be decremented in that time, returns NIL without decrementing the
-count."
+count.
+
+If NOTIFICATION is given, it must be a SEMAPHORE-NOTIFICATION object whose
+SEMAPHORE-NOTIFICATION-STATUS is NIL. If WAIT-ON-SEMAPHORE succeeds and
+decrements the count, the status is set to T."
+  (when (and notification (semaphore-notification-status notification))
+    (with-simple-restart (continue "Clear notification status and continue.")
+      (error "~@<Semaphore notification object status not cleared on entry to ~S on ~S.~:@>"
+             'wait-on-semaphore semaphore))
+    (clear-semaphore-notification notification))
   ;; A more direct implementation based directly on futexes should be
   ;; possible.
   ;;
@@ -911,36 +982,55 @@ count."
   (with-system-mutex ((semaphore-mutex semaphore) :allow-with-interrupts t)
     ;; Quick check: is it positive? If not, enter the wait loop.
     (let ((count (semaphore-%count semaphore)))
-      (if (plusp count)
-          (setf (semaphore-%count semaphore) (1- count))
-          (unwind-protect
-               (progn
-                 ;; Need to use ATOMIC-INCF despite the lock, because on our
-                 ;; way out from here we might not be locked anymore -- so
-                 ;; another thread might be tweaking this in parallel using
-                 ;; ATOMIC-DECF. No danger over overflow, since there it
-                 ;; at most one increment per thread waiting on the semaphore.
-                 (sb!ext:atomic-incf (semaphore-waitcount semaphore))
-                 (loop until (plusp (setf count (semaphore-%count semaphore)))
-                       do (or (condition-wait (semaphore-queue semaphore)
-                                              (semaphore-mutex semaphore)
-                                              :timeout timeout)
-                              (return-from wait-on-semaphore nil)))
-                 (setf (semaphore-%count semaphore) (1- count)))
-            ;; Need to use ATOMIC-DECF instead of DECF, as CONDITION-WAIT
-            ;; may unwind without the lock being held due to timeouts.
-            (sb!ext:atomic-decf (semaphore-waitcount semaphore))))))
+      (cond ((plusp count)
+             (setf (semaphore-%count semaphore) (1- count))
+             (when notification
+               (setf (semaphore-notification-%status notification) t)))
+            (t
+             (unwind-protect
+                  (progn
+                    ;; Need to use ATOMIC-INCF despite the lock, because on our
+                    ;; way out from here we might not be locked anymore -- so
+                    ;; another thread might be tweaking this in parallel using
+                    ;; ATOMIC-DECF. No danger over overflow, since there it
+                    ;; at most one increment per thread waiting on the semaphore.
+                    (sb!ext:atomic-incf (semaphore-waitcount semaphore))
+                    (loop until (plusp (setf count (semaphore-%count semaphore)))
+                          do (or (condition-wait (semaphore-queue semaphore)
+                                                 (semaphore-mutex semaphore)
+                                                 :timeout timeout)
+                                 (return-from wait-on-semaphore nil)))
+                    (setf (semaphore-%count semaphore) (1- count))
+                    (when notification
+                      (setf (semaphore-notification-%status notification) t)))
+               ;; Need to use ATOMIC-DECF as we may unwind without the lock
+               ;; being held!
+               (sb!ext:atomic-decf (semaphore-waitcount semaphore)))))))
   t)
 
-(defun try-semaphore (semaphore &optional (n 1))
+(defun try-semaphore (semaphore &optional (n 1) notification)
   #!+sb-doc
   "Try to decrement the count of SEMAPHORE by N. If the count were to
-become negative, punt and return NIL, otherwise return true."
+become negative, punt and return NIL, otherwise return true.
+
+If NOTIFICATION is given it must be a semaphore notification object
+with SEMAPHORE-NOTIFICATION-STATUS of NIL. If the count is decremented,
+the status is set to T."
   (declare (type (integer 1) n))
+  (when (and notification (semaphore-notification-status notification))
+    (with-simple-restart (continue "Clear notification status and continue.")
+      (error "~@<Semaphore notification object status not cleared on entry to ~S on ~S.~:@>"
+             'try-semaphore semaphore))
+    (clear-semaphore-notification notification))
   (with-system-mutex ((semaphore-mutex semaphore) :allow-with-interrupts t)
     (let ((new-count (- (semaphore-%count semaphore) n)))
       (when (not (minusp new-count))
-        (setf (semaphore-%count semaphore) new-count)))))
+        (setf (semaphore-%count semaphore) new-count)
+        (when notification
+          (setf (semaphore-notifiction-%status notification) t))
+        ;; FIXME: We don't actually document this -- should we just
+        ;; return T, or document new count as the return?
+        new-count))))
 
 (defun signal-semaphore (semaphore &optional (n 1))
   #!+sb-doc
@@ -1329,16 +1419,58 @@ change."
 
 (defun interrupt-thread (thread function)
   #!+sb-doc
-  "Interrupt the live THREAD and make it run FUNCTION. A moderate
-degree of care is expected for use of INTERRUPT-THREAD, due to its
-nature: if you interrupt a thread that was holding important locks
-then do something that turns out to need those locks, you probably
-won't like the effect. FUNCTION runs with interrupts disabled, but
-WITH-INTERRUPTS is allowed in it. Keep in mind that many things may
-enable interrupts (GET-MUTEX when contended, for instance) so the
-first thing to do is usually a WITH-INTERRUPTS or a
-WITHOUT-INTERRUPTS. Within a thread interrupts are queued, they are
-run in same the order they were sent."
+  "Interrupt THREAD and make it run FUNCTION.
+
+The interrupt is asynchronous, and can occur anywhere with the exception of
+sections protected using SB-SYS:WITHOUT-INTERRUPTS.
+
+FUNCTION is called with interrupts disabled, under
+SB-SYS:ALLOW-WITH-INTERRUPTS. Since functions such as GRAB-MUTEX may try to
+enable interrupts internally, in most cases FUNCTION should either enter
+SB-SYS:WITH-INTERRUPTS to allow nested interrupts, or
+SB-SYS:WITHOUT-INTERRUPTS to prevent them completely.
+
+When a thread receives multiple interrupts, they are executed in the order
+they were sent -- first in, first out.
+
+This means that a great degree of care is required to use INTERRUPT-THREAD
+safely and sanely in a production environment. The general recommendation is
+to limit uses of INTERRUPT-THREAD for interactive debugging, banning it
+entirely from production environments -- it is simply exceedingly hard to use
+correctly.
+
+With those caveats in mind, what you need to know when using it:
+
+ * If calling FUNCTION causes a non-local transfer of control (ie. an
+   unwind), all normal cleanup forms will be executed.
+
+   However, if the interrupt occurs during cleanup forms of an UNWIND-PROTECT,
+   it is just as if that had happened due to a regular GO, THROW, or
+   RETURN-FROM: the interrupted cleanup form and those following it in the
+   same UNWIND-PROTECT do not get executed.
+
+   SBCL tries to keep its own internals asynch-unwind-safe, but this is
+   frankly an unreasonable expectation for third party libraries, especially
+   given that asynch-unwind-safety does not compose: a function calling
+   only asynch-unwind-safe function isn't automatically asynch-unwind-safe.
+
+   This means that in order for an asych unwind to be safe, the entire
+   callstack at the point of interruption needs to be asynch-unwind-safe.
+
+ * In addition to asynch-unwind-safety you must consider the issue of
+   re-entrancy. INTERRUPT-THREAD can cause function that are never normally
+   called recursively to be re-entered during their dynamic contour,
+   which may cause them to misbehave. (Consider binding of special variables,
+   values of global variables, etc.)
+
+Take togather, these two restrict the \"safe\" things to do using
+INTERRUPT-THREAD to a fairly minimal set. One useful one -- exclusively for
+interactive development use is using it to force entry to debugger to inspect
+the state of a thread:
+
+  (interrupt-thread thread #'break)
+
+Short version: be careful out there."
   #!+(and (not sb-thread) win32)
   (progn
     (declare (ignore thread))
@@ -1364,8 +1496,43 @@ run in same the order they were sent."
 
 (defun terminate-thread (thread)
   #!+sb-doc
-  "Terminate the thread identified by THREAD, by causing it to run
-SB-EXT:QUIT - the usual cleanup forms will be evaluated"
+  "Terminate the thread identified by THREAD, by interrupting it and causing
+it to call SB-EXT:QUIT.
+
+The unwind caused by TERMINATE-THREAD is asynchronous, meaning that eg. thread
+executing
+
+  (let (foo)
+     (unwind-protect
+         (progn
+            (setf foo (get-foo))
+            (work-on-foo foo))
+       (when foo
+         ;; An interrupt occurring inside the cleanup clause
+         ;; will cause cleanups from the current UNWIND-PROTECT
+         ;; to be dropped.
+         (release-foo foo))))
+
+might miss calling RELEASE-FOO despite GET-FOO having returned true if the
+interrupt occurs inside the cleanup clause, eg. during execution of
+RELEASE-FOO.
+
+Thus, in order to write an asynch unwind safe UNWIND-PROTECT you need to use
+WITHOUT-INTERRUPTS:
+
+  (let (foo)
+    (sb-sys:without-interrupts
+      (unwind-protect
+          (progn
+            (setf foo (sb-sys:allow-with-interrupts
+                        (get-foo)))
+            (sb-sys:with-local-interrupts
+              (work-on-foo foo)))
+       (when foo
+         (release-foo foo)))))
+
+Since most libraries using UNWIND-PROTECT do not do this, you should never
+assume that unknown code can safely be terminated using TERMINATE-THREAD."
   (interrupt-thread thread 'sb!ext:quit))
 
 (define-alien-routine "thread_yield" int)
