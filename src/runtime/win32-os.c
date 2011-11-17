@@ -2583,7 +2583,7 @@ int win32_write_unicode_console(HANDLE handle, void * buf, int count)
         errno = EINTR;
         return -1;
     }
-    result = WriteConsoleW(handle,buf,count>>1,&written,NULL);
+    result = WriteConsoleW(handle,buf,nchars,&written,NULL);
     io_end_interruptible(handle);
 
     if (result) {
