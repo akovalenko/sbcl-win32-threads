@@ -837,29 +837,29 @@ Users Manual for details about the PROCESS structure."#-win32"
                                                   (if search 1 0)
                                                   environment-vec pty-name
                                                   (if wait 1 0))))
-                                   (unless (= child -1)
-                                     (setf proc
-                                           (apply
-                                            #'make-process
-                                            :input input-stream
-                                            :output output-stream
-                                            :error error-stream
-                                            :status-hook status-hook
-                                            :cookie cookie
-                                            #-win32 (list :pty pty-stream
-                                                          :%status :running
-                                                          :pid child)
-                                            #+win32 (if wait
-                                                        (list :%status :exited
-                                                              :exit-code child)
-                                                        (list :%status :running
-                                                              :pid child))))
-                                     #-win32
-                                     (push proc *active-processes*)))))))
-                         ;; Report the error outside the lock.
-                         (when (= child -1)
-                           (error "couldn't fork child process: ~A"
-                                  (strerror))))))))))
+                             (when (plusp child)
+                               (setf proc
+                                     (apply
+                                      #'make-process
+                                      :input input-stream
+                                      :output output-stream
+                                      :error error-stream
+                                      :status-hook status-hook
+                                      :cookie cookie
+                                      #-win32 (list :pty pty-stream
+                                                    :%status :running
+                                                    :pid child)
+                                      #+win32 (if wait
+                                                  (list :%status :exited
+                                                        :exit-code child)
+                                                  (list :%status :running))))
+                               (push proc *active-processes*)))))))
+                       ;; Report the error outside the lock.
+                       (case child
+                         (0
+                          (error "Couldn't execute ~A: ~A" progname (strerror)))
+                         (-1
+                          (error "Couldn't fork child process: ~A" (strerror)))))))))))
         (dolist (fd *close-in-parent*)
           (sb-unix:unix-close fd))
         (unless proc
