@@ -79,8 +79,8 @@ os_get_errno(void)
 #include <dlfcn.h>
 
 void* os_dlopen(char* name, int flags) {
-	volatile void* ret = dlopen(name,flags);
-	return ret;
+        volatile void* ret = dlopen(name,flags);
+        return ret;
 }
 #endif
 #if defined(LISP_FEATURE_SB_DYNAMIC_CORE)

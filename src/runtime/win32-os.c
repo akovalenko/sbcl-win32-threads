@@ -1390,7 +1390,7 @@ void os_init(char *argv[], char *envp[])
        affected by this setting).
     */
     SetErrorMode(SEM_FAILCRITICALERRORS);
-    
+
     GetSystemInfo(&system_info);
     os_vm_page_size = system_info.dwPageSize > BACKEND_PAGE_BYTES?
         system_info.dwPageSize : BACKEND_PAGE_BYTES;
@@ -2326,9 +2326,9 @@ complain:
         disposition = ExceptionContinueSearch;
         goto finish;
     }
-        
+
 #endif
-    
+
     /*
      * If we fall through to here then we need to either forward
      * the exception to the lisp-side exception handler if it's
