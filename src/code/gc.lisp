@@ -25,8 +25,7 @@
 (declaim (inline dynamic-usage))
 #!+gencgc
 (defun dynamic-usage ()
-  (sb!alien:extern-alien "bytes_allocated"
-                         (sb!alien:unsigned #.sb!vm:n-word-bits)))
+  (sb!alien:extern-alien "bytes_allocated" os-vm-size-t))
 #!-gencgc
 (defun dynamic-usage ()
   (the (unsigned-byte 32)
@@ -158,10 +157,6 @@ run in any thread.")
 (progn
   (sb!alien:define-alien-variable ("gc_logfile" %gc-logfile) (* char))
   (defun (setf gc-logfile) (pathname)
-    "Use PATHNAME to log garbage collections. If non-null, the
-designated file is opened before and after each collection, and
-generation statistics are appended to it. To stop writing the log, use
-NIL as the pathname."
     (let ((new (when pathname
                  (sb!alien:make-alien-string
                   (native-namestring (translate-logical-pathname pathname)
@@ -171,14 +166,18 @@ NIL as the pathname."
       (when old
         (sb!alien:free-alien old))))
   (defun gc-logfile ()
-    "Return the name of the current GC logfile."
+    #!+sb-doc
+    "Return the pathname used to log garbage collections. Can be SETF.
+Default is NIL, meaning collections are not logged. If non-null, the
+designated file is opened before and after each collection, and generation
+statistics are appended to it."
     (let ((val %gc-logfile))
       (when val
         (native-pathname (cast val c-string)))))
   (declaim (inline dynamic-space-size))
   (defun dynamic-space-size ()
-    (sb!alien:extern-alien "dynamic_space_size"
-                           (sb!alien:unsigned #.sb!vm:n-word-bits))))
+    "Size of the dynamic space in bytes."
+    (sb!alien:extern-alien "dynamic_space_size" os-vm-size-t)))
 
 ;;;; SUB-GC
 
@@ -341,14 +340,17 @@ NIL as the pathname."
 (defun bytes-consed-between-gcs ()
   #!+sb-doc
   "The amount of memory that will be allocated before the next garbage
-collection is initiated. This can be set with SETF."
-  (sb!alien:extern-alien "bytes_consed_between_gcs"
-                         (sb!alien:unsigned 32)))
+collection is initiated. This can be set with SETF.
+
+On GENCGC platforms this is the nursery size, and defaults to 5% of dynamic
+space size.
+
+Note: currently changes to this value are lost when saving core."
+  (sb!alien:extern-alien "bytes_consed_between_gcs" os-vm-size-t))
 
 (defun (setf bytes-consed-between-gcs) (val)
   (declare (type index val))
-  (setf (sb!alien:extern-alien "bytes_consed_between_gcs"
-                               (sb!alien:unsigned 32))
+  (setf (sb!alien:extern-alien "bytes_consed_between_gcs" os-vm-size-t)
         val))
 
 (declaim (inline maybe-handle-pending-gc))
@@ -376,12 +378,12 @@ collection is initiated. This can be set with SETF."
             (alloc-unboxed-start-page page-index-t)
             (alloc-large-start-page page-index-t)
             (alloc-large-unboxed-start-page page-index-t)
-            (bytes-allocated unsigned)
-            (gc-trigger unsigned)
-            (bytes-consed-between-gcs unsigned)
+            (bytes-allocated os-vm-size-t)
+            (gc-trigger os-vm-size-t)
+            (bytes-consed-between-gcs os-vm-size-t)
             (number-of-gcs int)
             (number-of-gcs-before-promotion int)
-            (cum-sum-bytes-allocated unsigned)
+            (cum-sum-bytes-allocated os-vm-size-t)
             (minimum-age-before-gc unsigned)))
 
 #!+gencgc
@@ -418,7 +420,8 @@ collection is initiated. This can be set with SETF."
       "Number of bytes that can be allocated to GENERATION before that
 generation is considered for garbage collection. This value is meaningless for
 generation 0 (the nursery): see BYTES-CONSED-BETWEEN-GCS instead. Default is
-20Mb. Can be assigned to using SETF. Available on GENCGC platforms only.
+5% of the dynamic space size. Can be assigned to using SETF. Available on
+GENCGC platforms only.
 
 Experimental: interface subject to change."
     t)
@@ -432,8 +435,8 @@ Experimental: interface subject to change."
     t)
   (def number-of-gcs-before-promotion
       "Number of times garbage collection is done on GENERATION before
-automatic promotion to the next generation is triggered. Can be assigned to
-using SETF. Available on GENCGC platforms only.
+automatic promotion to the next generation is triggered. Default is 1. Can be
+assigned to using SETF. Available on GENCGC platforms only.
 
 Experimental: interface subject to change."
     t)

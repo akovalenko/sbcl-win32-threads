@@ -43,6 +43,7 @@
 
 #include "validate.h"
 #include "gc-internal.h"
+#include "runtime-options.h"
 
 #ifndef LISP_FEATURE_WIN32
 #include <sys/mman.h>
@@ -62,10 +63,10 @@ unsigned char build_id[] =
 static struct runtime_options *
 read_runtime_options(int fd)
 {
-    size_t optarray[RUNTIME_OPTIONS_WORDS];
+    os_vm_size_t optarray[RUNTIME_OPTIONS_WORDS];
     struct runtime_options *options = NULL;
 
-    if (read(fd, optarray, RUNTIME_OPTIONS_WORDS * sizeof(size_t)) !=
+    if (read(fd, optarray, RUNTIME_OPTIONS_WORDS * sizeof(os_vm_size_t)) !=
         RUNTIME_OPTIONS_WORDS * sizeof(size_t)) {
         return NULL;
     }

@@ -56,8 +56,8 @@
 #endif
 #endif
 
-size_t dynamic_space_size = DEFAULT_DYNAMIC_SPACE_SIZE;
-size_t thread_control_stack_size = DEFAULT_CONTROL_STACK_SIZE;
+os_vm_size_t dynamic_space_size = DEFAULT_DYNAMIC_SPACE_SIZE;
+os_vm_size_t thread_control_stack_size = DEFAULT_CONTROL_STACK_SIZE;
 
 inline static boolean
 forwarding_pointer_p(lispobj *pointer) {
@@ -94,8 +94,7 @@ lispobj (*transother[256])(lispobj object);
 intptr_t (*sizetab[256])(lispobj *where);
 struct weak_pointer *weak_pointers;
 
-uword_t bytes_consed_between_gcs = 12*1024*1024;
-
+os_vm_size_t bytes_consed_between_gcs = 12*1024*1024;
 
 /*
  * copying objects

@@ -57,7 +57,8 @@ Extensions}.
 
 @include var-sb-ext-star-gc-run-time-star.texinfo
 @include fun-sb-ext-bytes-consed-between-gcs.texinfo
-@include fun-sb-ext-setf-gc-logfile.texinfo
+@include fun-sb-ext-dynamic-space-size.texinfo
+@include fun-sb-ext-get-bytes-consed.texinfo
 @include fun-sb-ext-gc-logfile.texinfo
 @include fun-sb-ext-generation-average-age.texinfo
 @include fun-sb-ext-generation-bytes-allocated.texinfo
@@ -65,7 +66,6 @@ Extensions}.
 @include fun-sb-ext-generation-minimum-age-before-gc.texinfo
 @include fun-sb-ext-generation-number-of-gcs-before-promotion.texinfo
 @include fun-sb-ext-generation-number-of-gcs.texinfo
-@include fun-sb-ext-get-bytes-consed.texinfo
 
 @node Metaobject Protocol
 @comment  node-name,  next,  previous,  up

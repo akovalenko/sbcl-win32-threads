@@ -153,8 +153,8 @@ boolean gencgc_partial_pickup = 0;
  */
 
 /* the total bytes allocated. These are seen by Lisp DYNAMIC-USAGE. */
-uword_t bytes_allocated = 0;
-uword_t auto_gc_trigger = 0;
+os_vm_size_t bytes_allocated = 0;
+os_vm_size_t auto_gc_trigger = 0;
 
 /* the source and destination generations. These are set before a GC starts
  * scavenging. */
@@ -292,13 +292,13 @@ struct generation {
     page_index_t alloc_large_unboxed_start_page;
 
     /* the bytes allocated to this generation */
-    uword_t bytes_allocated;
+    os_vm_size_t bytes_allocated;
 
     /* the number of bytes at which to trigger a GC */
-    uword_t gc_trigger;
+    os_vm_size_t gc_trigger;
 
     /* to calculate a new level for gc_trigger */
-    uword_t bytes_consed_between_gc;
+    os_vm_size_t bytes_consed_between_gc;
 
     /* the number of GCs since the last raise */
     int num_gc;
@@ -312,7 +312,7 @@ struct generation {
      * objects are added from a GC of a younger generation. Dividing by
      * the bytes_allocated will give the average age of the memory in
      * this generation since its last GC. */
-    uword_t cum_sum_bytes_allocated;
+    os_vm_size_t cum_sum_bytes_allocated;
 
     /* a minimum average memory age before a GC will occur helps
      * prevent a GC when a large number of new live objects have been
@@ -524,7 +524,7 @@ write_generation_stats(FILE *file)
                 generations[i].num_gc,
                 ((double)generation_average_age(i))/((double)AGE_SCALE));
     }
-    fprintf(file,"   Total bytes allocated    = %lu\n", bytes_allocated);
+    fprintf(file,"   Total bytes allocated    = %lu\n", (unsigned long)bytes_allocated);
     fprintf(file,"   Dynamic-space-size bytes = %lu\n", (unsigned long)dynamic_space_size);
 
     fpu_restore(fpu_state);
@@ -3751,8 +3751,8 @@ garbage_collect_generation(generation_index_t generation, int raise)
     /* As a check re-scavenge the newspace once; no new objects should
      * be found. */
     {
-        intptr_t old_bytes_allocated = bytes_allocated;
-        intptr_t bytes_allocated;
+        os_vm_size_t old_bytes_allocated = bytes_allocated;
+        os_vm_size_t bytes_allocated;
 
         /* Start with a full scavenge. */
         scavenge_newspace_generation_one_scan(new_space);
@@ -4140,6 +4140,12 @@ gc_init(void)
     page_table_pages = dynamic_space_size/GENCGC_CARD_BYTES;
     gc_assert(dynamic_space_size == npage_bytes(page_table_pages));
 
+    /* Default nursery size to 5% of the total dynamic space size,
+     * min 1Mb. */
+    bytes_consed_between_gcs = dynamic_space_size/(os_vm_size_t)20;
+    if (bytes_consed_between_gcs < (1024*1024))
+        bytes_consed_between_gcs = 1024*1024;
+
     /* The page_table must be allocated using "calloc" to initialize
      * the page structures correctly. There used to be a separate
      * initialization loop (now commented out; see below) but that was
@@ -4202,7 +4208,7 @@ gc_init(void)
         generations[i].num_gc = 0;
         generations[i].cum_sum_bytes_allocated = 0;
         /* the tune-able parameters */
-        generations[i].bytes_consed_between_gc = 2000000;
+        generations[i].bytes_consed_between_gc = bytes_consed_between_gcs;
         generations[i].number_of_gcs_before_promotion = 1;
         generations[i].minimum_age_before_gc = (AGE_SCALE/4)*3;
     }

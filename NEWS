@@ -24,13 +24,20 @@ changes relative to sbcl-1.0.53:
        STANDARD-INSTANCE-ACCESS, and FUNCALLABLE-STANDARD-INSTANCE-ACCESS.
     ** Users can now defined new places usable with SB-EXT:COMPARE-AND-SWAP
        using an API anologous to defining new SETFable places.
-  * enchancement: on CHENEYGC targets, SB-KERNEL:MAKE-LISP-OBJ now does
+  * enhancement: debug-names of anonymous and local function are more
+    descriptive. Affects backtraces and SB-SPROF results. (lp#805100)
+  * enhancement: on GENCGC systems nursery and generation sizes now default to
+    5% of dynamic-space size.
+  * enhancement: on CHENEYGC targets, SB-KERNEL:MAKE-LISP-OBJ now does
     the same validation of pointer objects as GENCGC does, instead of a
     comparatively weak bounds-check against the heap spaces.
   * enhancement: on win32, ABS of complex floats guards better against
     overflows. (lp#888410)
   * enhancement: RUN-PROGRAM now distinguishes exec() failing from child
     process exiting with code 1. (lp#676987)
+  * enhancement: convenience function SET-SBCL-SOURCE-LOCATION for informing
+    the system where on the filesystem the SBCL sources themselves are
+    located.  (Thanks to Zach Beane)
   * bug fix: on 64-bit targets, atomic-incf/aref does index computation
     correctly, even on wide-fixnum builds. (lp#887220)
   * bug fix: (directory "foo/*/*.*") did not follow symlinks in foo/ that
@@ -47,6 +54,8 @@ changes relative to sbcl-1.0.53:
        systems with getaddrinfo().
     ** GET-HOST-BY-NAME and GET-HOST-BY-ADDRESS weren't thread or interrupt
        safe outside systems with getaddrinfo().
+  * bug fix: on 64-bit systems setting the nursery size above 4Gb now works.
+    (lp#870868)
 
 changes in sbcl-1.0.53 relative to sbcl-1.0.52:
   * enhancement: on 64-bit targets, in src/compiler/generic/early-vm.lisp,
