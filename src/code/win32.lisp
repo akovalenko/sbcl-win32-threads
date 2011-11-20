@@ -330,14 +330,13 @@
   (handle handle))
 
 (defun microsleep (microseconds)
-  (let ((*allow-with-interrupts* *interrupts-enabled*))
-    (without-interrupts
-      (let ((timer (create-waitable-timer nil 0 nil)))
-        (set-waitable-timer timer (- (* 10 microseconds)) 0 nil nil 0)
-        (unwind-protect
-             (do () ((with-local-interrupts
-                       (zerop (wait-object-or-signal timer)))))
-          (close-handle timer))))))
+  (without-interrupts
+    (let ((timer (create-waitable-timer nil 0 nil)))
+      (set-waitable-timer timer (- (* 10 microseconds)) 0 nil nil 0)
+      (unwind-protect
+           (do () ((with-local-interrupts
+                     (zerop (wait-object-or-signal timer)))))
+        (close-handle timer)))))
 
 (defun sb!unix:nanosleep (sec nsec)
   (microsleep (+ (* sec 1000000) (* nsec 1000))))
