@@ -196,7 +196,7 @@
   (def!constant static-space-end      #x221ff000)
 
   (def!constant dynamic-space-start   #x22300000)
-  (def!constant dynamic-space-end     (!configure-dynamic-space-end #x42300000))
+  (def!constant dynamic-space-end     (!configure-dynamic-space-end))
 
   (def!constant linkage-table-space-start #x22200000)
   (def!constant linkage-table-space-end   #x222ff000))
@@ -210,7 +210,7 @@
   (def!constant static-space-end          #x011ff000)
 
   (def!constant dynamic-space-start       #x09000000)
-  (def!constant dynamic-space-end         (!configure-dynamic-space-end #x29000000))
+  (def!constant dynamic-space-end         (!configure-dynamic-space-end))
 
   (def!constant linkage-table-space-start #x01200000)
   (def!constant linkage-table-space-end   #x012ff000))
@@ -224,7 +224,7 @@
   (def!constant static-space-end          #x201ff000)
 
   (def!constant dynamic-space-start       #x48000000)
-  (def!constant dynamic-space-end         (!configure-dynamic-space-end #xA0000000))
+  (def!constant dynamic-space-end         (!configure-dynamic-space-end))
 
   (def!constant linkage-table-space-start #x20200000)
   (def!constant linkage-table-space-end   #x202ff000))
@@ -238,7 +238,7 @@
   (def!constant static-space-end          #x011ff000)
 
   (def!constant dynamic-space-start       #x58000000)
-  (def!constant dynamic-space-end         (!configure-dynamic-space-end #x98000000))
+  (def!constant dynamic-space-end         (!configure-dynamic-space-end))
 
   (def!constant linkage-table-space-start #x01200000)
   (def!constant linkage-table-space-end   #x012ff000))
@@ -252,7 +252,7 @@
   (def!constant static-space-end          #x1b1ff000)
 
   (def!constant dynamic-space-start       #x40000000)
-  (def!constant dynamic-space-end         (!configure-dynamic-space-end #x5bfff000))
+  (def!constant dynamic-space-end         (!configure-dynamic-space-end))
 
   (def!constant linkage-table-space-start #x1b200000)
   (def!constant linkage-table-space-end   #x1b2ff000))
@@ -266,7 +266,7 @@
   (def!constant static-space-end          #x201ff000)
 
   (def!constant dynamic-space-start       #x60000000)
-  (def!constant dynamic-space-end         (!configure-dynamic-space-end #x98000000))
+  (def!constant dynamic-space-end         (!configure-dynamic-space-end))
 
   ;; In CMUCL: 0xB0000000->0xB1000000
   (def!constant linkage-table-space-start #x20200000)
@@ -282,7 +282,7 @@
   (def!constant static-space-end      #x041ff000)
 
   (def!constant dynamic-space-start #x10000000)
-  (def!constant dynamic-space-end   (!configure-dynamic-space-end #x6ffff000))
+  (def!constant dynamic-space-end   (!configure-dynamic-space-end))
 
   (def!constant linkage-table-space-start #x04200000)
   (def!constant linkage-table-space-end   #x042ff000))
