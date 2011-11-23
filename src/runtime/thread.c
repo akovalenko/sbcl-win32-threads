@@ -1714,6 +1714,7 @@ void wake_thread(struct thread * thread)
         gc_stop_the_world();
         gc_start_the_world();
     }
+    wake_thread_io(thread);
     pthread_mutex_lock(&all_threads_lock);
     return;
 }
