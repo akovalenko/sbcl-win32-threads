@@ -1708,13 +1708,13 @@ void wake_thread(struct thread * thread)
         (SymbolTlValue(STOP_FOR_GC_PENDING,thread)==T))
         return;
 
+    wake_thread_io(thread);
     pthread_mutex_unlock(&all_threads_lock);
 
     if (maybe_become_stw_initiator(1) && !in_race_p()) {
         gc_stop_the_world();
         gc_start_the_world();
     }
-    wake_thread_io(thread);
     pthread_mutex_lock(&all_threads_lock);
     return;
 }
