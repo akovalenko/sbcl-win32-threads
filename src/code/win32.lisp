@@ -666,11 +666,15 @@
   (declare (type sb!unix:unix-pathname name)
            (type sb!unix:unix-file-mode mode)
            (ignore mode))
-  (void-syscall* (("CreateDirectory" t) system-string dword) name 0))
+  (syscall (("CreateDirectory" t) lispbool system-string (* t))
+           (values result (if result 0 (- (get-last-error))))
+           name nil))
 
 (defun sb!unix:unix-rename (name1 name2)
   (declare (type sb!unix:unix-pathname name1 name2))
-  (void-syscall* (("MoveFile" t) system-string system-string) name1 name2))
+  (syscall (("MoveFile" t) lispbool system-string system-string)
+           (values result (if result 0 (- (get-last-error))))
+           name1 name2))
 
 (defun sb!unix::posix-getenv (name)
   (declare (type simple-string name))
