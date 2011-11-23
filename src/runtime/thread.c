@@ -1880,6 +1880,7 @@ kill_safely(os_thread_t os_thread, int signal)
            etc. */
         if (os_thread == pthread_self()) {
           pthread_kill(os_thread, signal);
+          check_pending_interrupts(NULL);
           return 0;
         }
         /* pthread_kill is not async signal safe and we don't want to be
