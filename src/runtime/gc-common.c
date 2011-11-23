@@ -2436,14 +2436,14 @@ looks_like_valid_lisp_pointer_p(lispobj *pointer, lispobj *start_addr)
         case CODE_HEADER_WIDETAG:
           /* Make sure we actually point to a function in the code object,
            * as opposed to a random point there. */
-          if (SIMPLE_FUN_HEADER_WIDETAG==widetag_of(*((lispobj *)(((unsigned long)pointer)-FUN_POINTER_LOWTAG))))
+          if (SIMPLE_FUN_HEADER_WIDETAG==widetag_of(*((lispobj *)(((char*)pointer)-FUN_POINTER_LOWTAG))))
             return 1;
           else
             return 0;
         case CLOSURE_HEADER_WIDETAG:
         case FUNCALLABLE_INSTANCE_HEADER_WIDETAG:
-            if ((unsigned long)pointer !=
-                ((unsigned long)start_addr+FUN_POINTER_LOWTAG)) {
+            if ((char*)pointer !=
+                ((char*)start_addr+FUN_POINTER_LOWTAG)) {
                 return 0;
             }
             break;
@@ -2452,8 +2452,8 @@ looks_like_valid_lisp_pointer_p(lispobj *pointer, lispobj *start_addr)
         }
         break;
     case LIST_POINTER_LOWTAG:
-        if ((unsigned long)pointer !=
-            ((unsigned long)start_addr+LIST_POINTER_LOWTAG)) {
+        if ((char*)pointer !=
+            ((char*)start_addr+LIST_POINTER_LOWTAG)) {
             return 0;
         }
         /* Is it plausible cons? */
@@ -2466,8 +2466,8 @@ looks_like_valid_lisp_pointer_p(lispobj *pointer, lispobj *start_addr)
             return 0;
         }
     case INSTANCE_POINTER_LOWTAG:
-        if ((unsigned long)pointer !=
-            ((unsigned long)start_addr+INSTANCE_POINTER_LOWTAG)) {
+        if ((char*)pointer !=
+            ((char*)start_addr+INSTANCE_POINTER_LOWTAG)) {
             return 0;
         }
         if (widetag_of(start_addr[0]) != INSTANCE_HEADER_WIDETAG) {
@@ -2484,7 +2484,7 @@ looks_like_valid_lisp_pointer_p(lispobj *pointer, lispobj *start_addr)
          * need to check for it. -- AB, 2010-Jun-04 */
         if ((widetag_of(start_addr[0]) == CODE_HEADER_WIDETAG)) {
             lispobj *potential_lra =
-                (lispobj *)(((unsigned long)pointer) - OTHER_POINTER_LOWTAG);
+                (lispobj *)(((char*)pointer) - OTHER_POINTER_LOWTAG);
             if ((widetag_of(potential_lra[0]) == RETURN_PC_HEADER_WIDETAG) &&
                 ((potential_lra - HeaderValue(potential_lra[0])) == start_addr)) {
                 return 1; /* It's as good as we can verify. */
@@ -2492,8 +2492,8 @@ looks_like_valid_lisp_pointer_p(lispobj *pointer, lispobj *start_addr)
         }
 #endif
 
-        if ((unsigned long)pointer !=
-            ((unsigned long)start_addr+OTHER_POINTER_LOWTAG)) {
+        if ((char*)pointer !=
+            ((char*)start_addr+OTHER_POINTER_LOWTAG)) {
             return 0;
         }
         /* Is it plausible?  Not a cons. XXX should check the headers. */
