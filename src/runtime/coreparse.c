@@ -378,11 +378,13 @@ process_directory(int fd, lispobj *ptr, int count, os_vm_offset_t file_offset)
 lispobj
 load_core_file(char *file, os_vm_offset_t file_offset)
 {
-    lispobj *header, val, len, *ptr, remaining_len;
+    void *header;
+    word_t val, *ptr;
+    os_vm_size_t len, remaining_len;
     int fd = os_open_core(file, O_RDONLY);
-    unsigned int count;
-
+    ssize_t count;
     lispobj initial_function = NIL;
+
     FSHOW((stderr, "/entering load_core_file(%s)\n", file));
     if (fd < 0) {
         fprintf(stderr, "could not open file \"%s\"\n", file);
@@ -391,7 +393,7 @@ load_core_file(char *file, os_vm_offset_t file_offset)
     }
 
     lseek(fd, file_offset, SEEK_SET);
-    header = calloc(os_vm_page_size / sizeof(uword_t), sizeof(uword_t));
+    header = calloc(os_vm_page_size, 1);
 
     count = read(fd, header, os_vm_page_size);
     if (count < os_vm_page_size) {
@@ -413,8 +415,8 @@ load_core_file(char *file, os_vm_offset_t file_offset)
         val = *ptr++;
         len = *ptr++;
         remaining_len = len - 2; /* (-2 to cancel the two ++ operations) */
-        FSHOW((stderr, "/val=0x%ld, remaining_len=0x%ld\n",
-               (intptr_t)val, (intptr_t)remaining_len));
+        FSHOW((stderr, "/val=0x%"WORD_FMTX", remaining_len=0x%"WORD_FMTX"\n",
+               val, remaining_len));
 
         switch (val) {
 
@@ -434,7 +436,7 @@ load_core_file(char *file, os_vm_offset_t file_offset)
         case BUILD_ID_CORE_ENTRY_TYPE_CODE:
             SHOW("BUILD_ID_CORE_ENTRY_TYPE_CODE case");
             {
-                unsigned int i;
+                os_vm_size_t i;
 
                 FSHOW((stderr, "build_id[]=\"%s\"\n", build_id));
                 FSHOW((stderr, "remaining_len = %d\n", remaining_len));
@@ -485,10 +487,10 @@ load_core_file(char *file, os_vm_offset_t file_offset)
         {
             os_vm_size_t size = *ptr;
             os_vm_size_t fdoffset = (*(ptr+1) + 1) * (os_vm_page_size);
-            os_vm_size_t offset = 0;
-            uword_t bytes_read;
-            uword_t data[4096];
-            uword_t word;
+            page_index_t offset = 0;
+            ssize_t bytes_read;
+            word_t data[4096];
+            word_t word;
             lseek(fd, fdoffset + file_offset, SEEK_SET);
             while ((bytes_read = read(fd, data, (size < 4096 ? size : 4096 )))
                     > 0)
@@ -496,7 +498,7 @@ load_core_file(char *file, os_vm_offset_t file_offset)
                 int i = 0;
                 size -= bytes_read;
                 while (bytes_read) {
-                    bytes_read -= sizeof(word);
+                    bytes_read -= sizeof(word_t);
                     /* Ignore all zeroes. The size of the page table
                      * core entry was rounded up to os_vm_page_size
                      * during the save, and might now have more
@@ -518,11 +520,11 @@ load_core_file(char *file, os_vm_offset_t file_offset)
         }
 #endif
         default:
-            lose("unknown core file entry: %ld\n", (long)val);
+            lose("unknown core file entry: 0x%"WORD_FMTX"\n", val);
         }
 
         ptr += remaining_len;
-        FSHOW((stderr, "/new ptr=%lx\n", (unsigned long)ptr));
+        FSHOW((stderr, "/new ptr=0x%"WORD_FTMX"\n", ptr));
     }
     SHOW("about to free(header)");
     free(header);

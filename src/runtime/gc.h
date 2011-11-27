@@ -21,7 +21,9 @@
 
 #define PAGE_BYTES BACKEND_PAGE_BYTES
 
-typedef intptr_t page_index_t;
+typedef signed long page_index_t;
+#define PAGE_INDEX_FMT "ld"
+
 typedef signed char generation_index_t;
 
 extern void gc_init(void);
