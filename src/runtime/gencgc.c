@@ -1133,7 +1133,7 @@ gc_alloc_update_page_tables(int page_type_flag, struct alloc_region *alloc_regio
     gc_set_region_empty(alloc_region);
 }
 
-static inline void *gc_quick_alloc(sword_t nbytes);
+static inline void *gc_quick_alloc(word_t nbytes);
 
 /* Allocate a possibly large object. */
 void *
