@@ -1594,13 +1594,13 @@ general_copy_large_object(lispobj object, word_t nwords, boolean boxedp)
 }
 
 lispobj
-copy_large_object(lispobj object, long nwords)
+copy_large_object(lispobj object, sword_t nwords)
 {
     return general_copy_large_object(object, nwords, 1);
 }
 
 lispobj
-copy_large_unboxed_object(lispobj object, long nwords)
+copy_large_unboxed_object(lispobj object, sword_t nwords)
 {
     return general_copy_large_object(object, nwords, 0);
 }
