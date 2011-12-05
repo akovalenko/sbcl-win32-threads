@@ -467,6 +467,7 @@
               `(,newval)
               `(let ((,(car stores) (%putf ,get ,ptemp ,newval))
                      ,@(cdr stores))
+                 ,def-temp ;; prevent unused style-warning
                  ,set
                  ,newval)
               `(getf ,get ,ptemp ,@(if default `(,def-temp)))))))
@@ -474,24 +475,26 @@
 (sb!xc:define-setf-expander get (symbol prop &optional default)
   (let ((symbol-temp (gensym))
         (prop-temp (gensym))
-        (def-temp (gensym))
+        (def-temp (if default (gensym)))
         (newval (gensym)))
     (values `(,symbol-temp ,prop-temp ,@(if default `(,def-temp)))
             `(,symbol ,prop ,@(if default `(,default)))
             (list newval)
-            `(%put ,symbol-temp ,prop-temp ,newval)
+            `(progn ,def-temp ;; prevent unused style-warning
+                    (%put ,symbol-temp ,prop-temp ,newval))
             `(get ,symbol-temp ,prop-temp ,@(if default `(,def-temp))))))
 
 (sb!xc:define-setf-expander gethash (key hashtable &optional default)
   (let ((key-temp (gensym))
         (hashtable-temp (gensym))
-        (default-temp (gensym))
+        (default-temp (if default (gensym)))
         (new-value-temp (gensym)))
     (values
      `(,key-temp ,hashtable-temp ,@(if default `(,default-temp)))
      `(,key ,hashtable ,@(if default `(,default)))
      `(,new-value-temp)
-     `(%puthash ,key-temp ,hashtable-temp ,new-value-temp)
+     `(progn ,default-temp ;; prevent unused style-warning
+             (%puthash ,key-temp ,hashtable-temp ,new-value-temp))
      `(gethash ,key-temp ,hashtable-temp ,@(if default `(,default-temp))))))
 
 (sb!xc:define-setf-expander logbitp (index int &environment env)

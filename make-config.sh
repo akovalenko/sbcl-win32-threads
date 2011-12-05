@@ -38,6 +38,10 @@ bad_option() {
     exit 1
 }
 
+WITH_FEATURES=""
+WITHOUT_FEATURES=""
+
+fancy=false
 some_options=false
 for option
 do
@@ -45,10 +49,15 @@ do
   # Split --foo=bar into --foo and bar.
   case $option in
       *=*)
-        # For ease of scripting treat skip valued options with empty
+        # For ease of scripting skip valued options with empty
         # values.
         optarg=`expr "X$option" : '[^=]*=\(.*\)'` || optarg_ok=false
         option=`expr "X$option" : 'X\([^=]*=\).*'`
+        ;;
+      --with*)
+        optarg=`expr "X$option" : 'X--[^-]*-\(.*\)'` \
+            || bad_option "Malformed feature toggle: $option"
+        option=`expr "X$option" : 'X\(--[^-]*\).*'`
         ;;
       *)
         optarg=""
@@ -61,12 +70,26 @@ do
       --prefix=)
         $optarg_ok && SBCL_PREFIX=$optarg
         ;;
+      --arch=)
+        $oparg_ok && SBCL_ARCH=$optarg
+        ;;
       --xc-host=)
         $optarg_ok && SBCL_XC_HOST=$optarg
         ;;
       --dynamic-space-size=)
         $optarg_ok && SBCL_DYNAMIC_SPACE_SIZE=$optarg
 	;;
+      --with)
+        WITH_FEATURES="$WITH_FEATURES :$optarg"
+        ;;
+      --without)
+        WITHOUT_FEATURES="$WITHOUT_FEATURES :$optarg"
+	;;
+      --fancy)
+        WITH_FEATURES="$WITH_FEATURES :sb-core-compression :sb-xref-for-internals :sb-after-xc-core"
+        # Lower down we add :sb-thread for platforms where it can be built.
+        fancy=true
+        ;;
       -*)
         bad_option "Unknown command-line option to $0: \"$option\""
         ;;
@@ -81,6 +104,17 @@ do
   esac
   some_options=true
 done
+
+if (test -f customize-target-features.lisp && \
+    (test -n "$WITH_FEATURES" || test -n "$WITHOUT_FEATURES"))
+then
+    # Actually there's no reason why it would not work, but it would
+    # be confusing to say --with-thread only to have it turned off by
+    # customize-target-features.lisp...
+    echo "ERROR: Both customize-target-features.lisp, and feature-options"
+    echo "to make.sh present -- cannot use both at the same time."
+    exit 1
+fi
 
 # Previously XC host was provided as a positional argument. 
 if test -n "$legacy_xc_spec"
@@ -123,6 +157,13 @@ Options:
       If not provided, the default is platform-specific. <size> is
       taken to be megabytes unless explicitly suffixed with Gb in
       order to specify the size in gigabytes.
+
+  --with-<feature>     Build with specified feature.
+  --without-<feature>  Build wihout the specfied feature.
+
+  --arch=<string>      Specify the architecture to build for.
+
+      Mainly for doing x86 builds on x86-64.
 
   --xc-host=<string>   Specify the Common Lisp compilation host.
 
@@ -271,18 +312,77 @@ echo //entering make-config.sh
 echo //ensuring the existence of output/ directory
 if [ ! -d output ] ; then mkdir output; fi
 
+echo //guessing default target CPU architecture from host architecture
+case `uname -m` in
+    *86) guessed_sbcl_arch=x86 ;;
+    i86pc) guessed_sbcl_arch=x86 ;;
+    *x86_64) guessed_sbcl_arch=x86-64 ;;
+    amd64) guessed_sbcl_arch=x86-64 ;;
+    [Aa]lpha) guessed_sbcl_arch=alpha ;;
+    sparc*) guessed_sbcl_arch=sparc ;;
+    sun*) guessed_sbcl_arch=sparc ;;
+    *ppc) guessed_sbcl_arch=ppc ;;
+    ppc64) guessed_sbcl_arch=ppc ;;
+    Power*Macintosh) guessed_sbcl_arch=ppc ;;
+    parisc) guessed_sbcl_arch=hppa ;;
+    9000/800) guessed_sbcl_arch=hppa ;;
+    mips*) guessed_sbcl_arch=mips ;;
+    *)
+        # If we're not building on a supported target architecture, we
+        # we have no guess, but it's not an error yet, since maybe
+        # target architecture will be specified explicitly below.
+        guessed_sbcl_arch=''
+        ;;
+esac
+
+# Under Solaris, uname -m returns "i86pc" even if CPU is amd64.
+if [ "$sbcl_os" = "sunos" ] && [ `isainfo -k` = "amd64" ]; then
+    guessed_sbcl_arch=x86-64
+fi
+
+# Under Darwin, uname -m returns "i386" even if CPU is x86_64.
+if [ "$sbcl_os" = "darwin" ] && [ "`/usr/sbin/sysctl -n hw.optional.x86_64`" = "1" ]; then
+    guessed_sbcl_arch=x86-64
+fi
+
+echo //setting up CPU-architecture-dependent information
+if test -n "$SBCL_ARCH"
+then
+    # Normalize it.
+    SBCL_ARCH=`echo $SBCL_ARCH | tr '[A-Z]' '[a-z]' | tr _ -`
+fi
+sbcl_arch=${SBCL_ARCH:-$guessed_sbcl_arch}
+echo sbcl_arch=\"$sbcl_arch\"
+if [ "$sbcl_arch" = "" ] ; then
+    echo "can't guess target SBCL architecture, please specify --arch=<name>"
+    exit 1
+fi
+if $fancy
+then
+    # If --fancy, enable threads on platforms where they can be built.
+    case $sbcl_arch in
+        x86|x86-64|ppc)
+            WITH_FEATURES="$WITH_FEATURES :sb-thread"
+            echo "Enabling threads due to --fancy."
+            ;;
+        *)
+            echo "No threads on this platform."
+            ;;
+    esac
+fi
+
 ltf=`pwd`/local-target-features.lisp-expr
 echo //initializing $ltf
 echo ';;;; This is a machine-generated file.' > $ltf
 echo ';;;; Please do not edit it by hand.' >> $ltf
 echo ';;;; See make-config.sh.' >> $ltf
-printf '(' >> $ltf
+echo "((lambda (features) (set-difference features (list$WITHOUT_FEATURES)))" >> $ltf
+printf " (union (list$WITH_FEATURES) (list " >> $ltf
 
-echo //saving target CPU architecture
 printf ":%s" "$sbcl_arch" >> $ltf
 
-echo //saving OS-dependent information
-
+echo //setting up OS-dependent information
+# Under Darwin x86-64, guess whether Darwin 9+ or below.
 if [ "$sbcl_os" = "darwin" ] && [ "$sbcl_arch" = "x86-64" ]; then
     if (( 8 < $darwin_version_major )); then
 	printf ' :inode64 :darwin9-or-better' >> $ltf
@@ -529,7 +629,7 @@ export sbcl_os sbcl_arch
 sh tools-for-build/grovel-features.sh >> $ltf
 
 echo //finishing $ltf
-echo ')' >> $ltf
+echo ')))' >> $ltf
 
 # FIXME: The version system should probably be redone along these lines:
 #

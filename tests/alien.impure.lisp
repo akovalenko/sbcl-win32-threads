@@ -324,4 +324,12 @@
     (assert (equal "This comes from lisp!" (cast alien c-string)))
     (free-alien alien)))
 
+(with-test (:name :malloc-failure)
+  (assert (eq :enomem
+              (handler-case
+                  (loop repeat 128
+                        collect (sb-alien:make-alien char (1- array-total-size-limit)))
+                (storage-condition ()
+                  :enomem)))))
+
 ;;; success

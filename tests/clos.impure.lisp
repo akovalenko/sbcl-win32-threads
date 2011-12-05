@@ -1901,4 +1901,23 @@
                    (sb-pcl::generic-function-pretty-arglist
                     #'generic-function-pretty-arglist-optional-and-key)))))
 
+(with-test (:name :bug-894202)
+  (assert (eq :good
+              (handler-case
+                  (let ((name (gensym "FOO"))
+                        (decl (gensym "BAR")))
+                    (eval `(defgeneric ,name ()
+                             (declare (,decl)))))
+                (warning ()
+                  :good)))))
+
+(with-test (:name :bug-898331)
+  (handler-bind ((warning #'error))
+    (eval `(defgeneric bug-898331 (request type remaining-segment-requests all-requests)))
+    (eval `(defmethod bug-898331 ((request cons) (type (eql :cancel))
+                                  remaining-segment-requests
+                                  all-segment-requests)
+             (declare (ignore all-segment-requests))
+             (check-type request t)))))
+
 ;;;; success

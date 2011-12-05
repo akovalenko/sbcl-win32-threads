@@ -1,5 +1,55 @@
 ;;;; -*- coding: utf-8; fill-column: 78 -*-
-changes relative to sbcl-1.0.53:
+changes relative to sbcl-1.0.54:
+  * enhancements to building SBCL using make.sh:
+    ** --fancy can be specified to enable all supported feature enhancements.
+    ** --with-<feature> and --without-<feature> can be used to specify
+       which features to build with.
+    ** --arch option can be used to specify the architecture to build for.
+       (Mainly useful for building 32-bit SBCL's on x86-64 hosts, not
+       full-blows cross-compilation.)
+  * enhancement: extended package prefix syntax <pkgname>::<form-in-package>
+    which allows specifying the name of the package for a whole form.
+  * enhancement: when *READ-EVAL* is true, arrays with element type other than
+    T can be printed readably using #.-based syntax. (Thanks to Robert Brown)
+  * enhancement: MAKE-ALIEN signals a storage-condition instead of returning a
+    null alien when malloc() fails. (lp#891268)
+  * enhancement: SB-EXT:PRINT-UNREADABLY restart for PRINT-NOT-READABLE
+    conditions can be conveniently accessed through function with the same
+    name, analogously to CONTINUE.
+  * enhancement: SB-EXT:*SUPPRESS-PRINT-ERRORS* can be used to suppress errors
+    from the printer by type, causing an error marker to be printed instead.
+    (Thanks to Attila Lendvai)
+  * enhancement: BACKTRACE and DESCRIBE now bind *PRINT-CIRCLE* to T, and
+    generally behave better when errors occur during printing.
+  * optimization: the compiler is smarter about representation selection for
+    floating point constants used in full calls.
+  * optimization: the compiler no longer refuses to coerce large fixnums to
+    single floats inline, except on x86 where this limitation is still
+    necessary.
+  * bug fix: deadlock detection could report the same deadlock twice, for
+    two different threads. Now a single deadlock is reported exactly once.
+  * bug fix: interval-arithmetic division during type derivation did not
+    account for signed zeros.
+  * bug fix: compiler error when typechecking a call to a function with
+    non-constant keyword arguments.
+  * bug fix: misoptimization of TRUNCATE causing erratic behaviour.
+  * bug fix: condition slot accessors no longer cause undefined function
+    style-warnings when used in the :REPORT clause of the DEFINE-CONDITION
+    form that defines them. (lp#896379)
+  * bug fix: DEFGENERIC warns about unsupported declarations, as specified
+    by ANSI. (lp#894202)
+  * bug fix: SUBTYPEP tests involving forward-referenced classes no longer
+    bogusly report NIL, T.
+  * bug fix: bogus style-warnings for DEFMETHOD forms that both declared some
+    required arguments ignored and performed assignments to others.
+    (lp#898331)
+  * bug fix: *EVALUATOR-MODE* :COMPILE treated (LET () ...) identically
+    to (LOCALLY ...) leading to internally inconsistent toplevel-formness.
+  * bug fix: non-toplevel DEFSTRUCT signaled a style warning for unknown type.
+  * bug fix: redefining a function whose previous definition contained an
+    unknown type no longer causes a style-warning. (lp#806243)
+
+changes in sbcl-1.0.54 relative to sbcl-1.0.53:
   * minor incompatible changes:
     ** RENAME-FILE on a symbolic links used to rename the linked-to file
        instead of the link.

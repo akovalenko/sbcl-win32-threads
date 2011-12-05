@@ -4080,3 +4080,55 @@
                                        (throw 'out (lambda () t))))
                                 (foo))))))))
     (assert (equal '(lambda () :in foo) (sb-kernel:%fun-name fun)))))
+
+(with-test (:name :interval-div-signed-zero)
+  (let ((fun (compile nil
+                      `(Lambda (a)
+                         (declare (type (member 0 -272413371076) a))
+                         (ffloor (the number a) -63243.127451934015d0)))))
+    (multiple-value-bind (q r) (funcall fun 0)
+      (assert (eql -0d0 q))
+      (assert (eql 0d0 r)))))
+
+(with-test (:name :non-constant-keyword-typecheck)
+  (let ((fun (compile nil
+                      `(lambda (p1 p3 p4)
+                         (declare (type keyword p3))
+                         (tree-equal p1 (cons 1 2) (the (member :test) p3) p4)))))
+    (assert (funcall fun (cons 1.0 2.0) :test '=))))
+
+(with-test (:name :truncate-wild-values)
+  (multiple-value-bind (q r)
+      (handler-bind ((warning #'error))
+        (let ((sb-c::*check-consistency* t))
+          (funcall (compile nil
+                            `(lambda (a)
+                               (declare (type (member 1d0 2d0) a))
+                               (block return-value-tag
+                                 (funcall
+                                  (the function
+                                       (catch 'debug-catch-tag
+                                         (return-from return-value-tag
+                                           (progn (truncate a)))))))))
+                   2d0)))
+    (assert (eql 2 q))
+    (assert (eql 0d0 r))))
+
+(with-test (:name :boxed-fp-constant-for-full-call)
+  (let ((fun (compile nil
+                      `(lambda (x)
+                         (declare (double-float x))
+                         (unknown-fun 1.0d0 (+ 1.0d0 x))))))
+    (assert (equal '(1.0d0) (ctu:find-code-constants fun :type 'double-float)))))
+
+(with-test (:name :fixnum+float-coerces-fixnum
+            :skipped-on :x86)
+  (let ((fun (compile nil
+                      `(lambda (x y)
+                         (declare (fixnum x)
+                                  (single-float y))
+                         (+ x y)))))
+    (assert (not (ctu:find-named-callees fun)))
+    (assert (not (search "GENERIC"
+                         (with-output-to-string (s)
+                           (disassemble fun :stream s)))))))
