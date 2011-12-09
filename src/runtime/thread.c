@@ -261,9 +261,6 @@ static inline pthread_mutex_t* thread_qrl(struct thread* th)
 }
 #endif
 
-lispobj reset_dynamic_values[TLS_SIZE];
-static int last_initially_bound_dynamic_value_index;
-
 static int
 initial_thread_trampoline(struct thread *th)
 {
@@ -299,11 +296,6 @@ initial_thread_trampoline(struct thread *th)
     protect_binding_stack_guard_page(1, NULL);
     protect_alien_stack_guard_page(1, NULL);
 
-    memcpy(reset_dynamic_values, th, sizeof(reset_dynamic_values));
-    for (i=last_initially_bound_dynamic_value_index; i<TLS_SIZE;++i) {
-        if (dynamic_values[i]!=NO_TLS_VALUE_MARKER_WIDETAG)
-            last_initially_bound_dynamic_value_index = i;
-    }
     return run_lisp_function(function);
 }
 
@@ -337,7 +329,6 @@ initial_thread_trampoline(struct thread *th)
      -                                                                  \
      (THREAD_STATE_LOCK_SIZE)/sizeof(lispobj))                          \
 
-static int last_initially_bound_dynamic_value_index = FIRST_TLS_INDEX;
 
 
 #ifdef LISP_FEATURE_SB_THREAD
