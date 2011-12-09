@@ -776,7 +776,7 @@ implementation it is ~S." *default-package-use-list*)
 
 ;;; If the symbol named by the first LENGTH characters of NAME doesn't exist,
 ;;; then create it, special-casing the keyword package.
-(defun intern* (name length package)
+(defun intern* (name length package &key no-copy)
   (declare (simple-string name))
   (multiple-value-bind (symbol where) (find-symbol* name length package)
     (cond (where
@@ -790,14 +790,15 @@ implementation it is ~S." *default-package-use-list*)
              (setf (values symbol where) (find-symbol* name length package))
              (if where
                  (values symbol where)
-                 (let ((symbol-name
-                         (if (or (base-string-p name) ; already a base-string
-                                 ; or can't become a base-string at all
-                                 (position-if-not 'base-char-p name
-                                                  :end length))
-                             (subseq name 0 length)
-                             (replace (make-string (or length (length name))
-                                                   :element-type 'base-char) name))))
+                 (let ((symbol-name (cond (no-copy
+                                           (aver (= (length name) length))
+                                           name)
+                                          ((or (base-string-p name)
+                                               (position-if-not 'base-char-p name
+                                                                :end length))
+                                           (subseq name 0 length))
+                                          (t (replace (make-string (or length (length name))
+                                                                   :element-type 'base-char) name)))))
                    (with-single-package-locked-error
                        (:package package "interning ~A" symbol-name)
                      (let ((symbol (make-symbol symbol-name)))
