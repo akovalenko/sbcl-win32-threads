@@ -4057,6 +4057,13 @@ gc_init(void)
     if (bytes_consed_between_gcs < (1024*1024))
         bytes_consed_between_gcs = 1024*1024;
 
+    /* akovalenko: 5% of dynamic_space_size proved to be too much for nursery;
+     * defaulting to relatively small dynamic_space_size on 64-bit systems is
+     * inconvenient too. Proposed 20Mb upper limit + backoff to older
+     * dynamic_space_size default */
+    if (bytes_consed_between_gcs > (20*1024*1024))
+        bytes_consed_between_gcs = 20*1024*1024;
+        
     /* The page_table must be allocated using "calloc" to initialize
      * the page structures correctly. There used to be a separate
      * initialization loop (now commented out; see below) but that was
