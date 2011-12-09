@@ -376,15 +376,15 @@
   (os-address :c-type "void *" :length #!+alpha 2 #!-alpha 1)
   #!+sb-thread
   (os-attr :c-type "pthread_attr_t *" :length #!+alpha 2 #!-alpha 1)
-  #!+sb-thread
+  #!+(and sb-thread (not sb-gc-safepoint))
   (state-sem :c-type "os_sem_t *" :length #!+alpha 2 #!-alpha 1)
-  #!+sb-thread
+  #!+(and sb-thread (not sb-gc-safepoint))
   (state-not-running-sem :c-type "os_sem_t *" :length #!+alpha 2 #!-alpha 1)
-  #!+sb-thread
+  #!+(and sb-thread (not sb-gc-safepoint))
   (state-not-running-waitcount :c-type "int" :length 1)
-  #!+sb-thread
+  #!+(and sb-thread (not sb-gc-safepoint))
   (state-not-stopped-sem :c-type "os_sem_t *" :length #!+alpha 2 #!-alpha 1)
-  #!+sb-thread
+  #!+(and sb-thread (not sb-gc-safepoint))
   (state-not-stopped-waitcount :c-type "int" :length 1)
   (binding-stack-start :c-type "lispobj *" :length #!+alpha 2 #!-alpha 1)
   (binding-stack-pointer :c-type "lispobj *" :length #!+alpha 2 #!-alpha 1)
