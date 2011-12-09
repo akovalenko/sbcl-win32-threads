@@ -456,6 +456,14 @@
 
 ;;;; DYNAMIC-EXTENT related
 
+(defun lambda-var-original-name (leaf)
+  (let* ((home (lambda-var-home leaf)))
+    (if (eq :external (lambda-kind home))
+        (let ((p (1- (position leaf (lambda-vars home)))))
+          (leaf-debug-name
+           (elt (lambda-vars (lambda-entry-fun home)) p)))
+        (leaf-debug-name leaf))))
+
 (defun note-no-stack-allocation (lvar &key flush)
   (do-uses (use (principal-lvar lvar))
     (unless (or
@@ -464,8 +472,12 @@
              ;; If we're flushing, don't complain if we can flush the combination.
              (and flush (combination-p use) (flushable-combination-p use)))
       (let ((*compiler-error-context* use))
-        (compiler-notify "could not stack allocate the result of ~S"
-                         (find-original-source (node-source-path use)))))))
+        (if (and (ref-p use) (lambda-var-p (ref-leaf use)))
+            (compiler-notify "~@<could~2:I not stack allocate ~S in: ~S~:@>"
+                             (lambda-var-original-name (ref-leaf use))
+                             (find-original-source (node-source-path use)))
+            (compiler-notify "~@<could~2:I not stack allocate: ~S~:@>"
+                             (find-original-source (node-source-path use))))))))
 
 (defun use-good-for-dx-p (use dx &optional component)
   ;; FIXME: Can casts point to LVARs in other components?
@@ -550,8 +562,9 @@
                     (neq :indefinite (lambda-var-extent var)))
            (let ((home (lambda-var-home var))
                  (refs (lambda-var-refs var)))
-             ;; bound by a system lambda, no other REFS
+             ;; bound by a non-XEP system lambda, no other REFS
              (when (and (lambda-system-lambda-p home)
+                        (neq :external (lambda-kind home))
                         (eq use (car refs)) (not (cdr refs)))
                ;; the LAMBDA this var is bound by has only a single REF, going
                ;; to a combination
@@ -563,16 +576,15 @@
 
 (defun trivial-lambda-var-ref-lvar (use)
   (let* ((this (ref-leaf use))
-         (home (lambda-var-home this)))
-    (multiple-value-bind (fun vars)
-        (values home (lambda-vars home))
-      (let* ((combination (lvar-dest (ref-lvar (car (lambda-refs fun)))))
-             (args (combination-args combination)))
-        (assert (= (length vars) (length args)))
-        (loop for var in vars
-              for arg in args
-              when (eq var this)
-              return arg)))))
+         (fun (lambda-var-home this))
+         (vars (lambda-vars fun))
+         (combination (lvar-dest (ref-lvar (car (lambda-refs fun)))))
+         (args (combination-args combination)))
+    (aver (= (length vars) (length args)))
+    (loop for var in vars
+          for arg in args
+          when (eq var this)
+          return arg)))
 
 ;;; This needs to play nice with LVAR-GOOD-FOR-DX-P and friends.
 (defun handle-nested-dynamic-extent-lvars (dx lvar &optional recheck-component)
