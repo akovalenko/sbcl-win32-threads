@@ -258,9 +258,8 @@ make_lispobj(void *o, int low_tag)
     return LOW_WORD(o) | low_tag;
 }
 
-#define MAKE_FIXNUM(n) (n << N_FIXNUM_TAG_BITS)
 static inline lispobj
-make_fixnum(long n)
+make_fixnum(s64 n)
 {
     return MAKE_FIXNUM(n);
 }
