@@ -31,6 +31,7 @@
 #include "monitor.h"
 #include "vars.h"
 #include "os.h"
+#ifdef LISP_FEATURE_GENCGC
 #include "gencgc-alloc-region.h" /* genesis/thread.h needs this */
 #if defined(LISP_FEATURE_WIN32)
 #include "win32-thread-private-events.h" /* genesis/thread.h needs this */

@@ -10,8 +10,6 @@
 #include "os.h"
 #ifdef LISP_FEATURE_GENCGC
 #include "gencgc-alloc-region.h"
-#else
-struct alloc_region { };
 #endif
 #ifdef LISP_FEATURE_WIN32
 #include "win32-thread-private-events.h"
