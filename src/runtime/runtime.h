@@ -258,16 +258,17 @@ make_lispobj(void *o, int low_tag)
     return LOW_WORD(o) | low_tag;
 }
 
+/* sometimes we want to use fixnums as switch() keys. Unfortunately,
+   it's impossible even with static inline make_fixnum, but o.k. with
+   constant expression, like this: */
+#define MAKE_FIXNUM(n) ((n)<<N_FIXNUM_TAG_BITS)
+
 static inline lispobj
 make_fixnum(s64 n)
 {
     return MAKE_FIXNUM(n);
 }
 
-/* sometimes we want to use fixnums as switch() keys. Unfortunately,
-   it's impossible even with static inline make_fixnum, but o.k. with
-   constant expression, like this: */
-#define MAKE_FIXNUM(n) ((n)<<N_FIXNUM_TAG_BITS)
 
 static inline s64
 fixnum_value(lispobj n)
