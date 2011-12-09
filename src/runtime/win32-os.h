@@ -158,5 +158,6 @@ void odprintf_(const char * fmt, ...);
 struct thread;
 void** os_get_csp(struct thread* th);
 #define CANNOT_USE_POSIX_SEM_T
+typedef void* os_sem_t;
 
 #endif  /* SBCL_INCLUDED_WIN32_OS_H */
