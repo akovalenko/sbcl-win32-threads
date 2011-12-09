@@ -131,6 +131,7 @@ unlink_thread(struct thread *th)
         th->next->prev = th->prev;
 }
 
+#ifndef LISP_FEATURE_SB_GC_SAFEPOINT
 /* Only access thread state with blockables blocked. */
 lispobj
 thread_state(struct thread *thread)
@@ -204,6 +205,7 @@ wait_for_thread_state_change(struct thread *thread, lispobj state)
     }
     thread_sigmask(SIG_SETMASK, &old, NULL);
 }
+#endif /* !safepoint */
 #endif
 
 static int run_lisp_function(lispobj function)
@@ -433,12 +435,6 @@ schedule_thread_post_mortem(struct thread *corpse)
 
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
 
-pthread_mutex_t resurrected_lock = PTHREAD_MUTEX_INITIALIZER;
-struct thread *resurrected_thread;
-
-unsigned int resurrectable_waiters = 0;
-unsigned int max_resurrectable_waiters = 16;
-
 #endif
 
 /* this is the first thing that runs in the child (which is why the
@@ -479,10 +475,6 @@ new_thread_trampoline(struct thread *th)
      * list and we're just adding this thread to it, there is no
      * danger of deadlocking even with SIG_STOP_FOR_GC blocked (which
      * it is not). */
-
- resurrect:
-    /* Experimental: allow create_thread reuse threads that are about
-       to die */
 
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
     *th->csp_around_foreign_call = (lispobj)&function;
@@ -526,124 +518,8 @@ new_thread_trampoline(struct thread *th)
     gc_assert(lock_ret == 0);
 
     pthread_mutex_unlock(thread_qrl(th));
-    set_thread_state(th,STATE_DEAD);
-
-#ifdef LISP_FEATURE_WIN32
-    if (th->os_thread->created_as_fiber) {
-        goto die;
-    }
-#endif
-
-    if (resurrectable_waiters >= max_resurrectable_waiters)
-        goto die;
-
-    th->next = NULL;
-    th->prev = NULL;
-    struct timespec deadline;
-    int ret;
-    int relative = 10000;
-    struct timeval tv;
-
-    boolean responsible_awakener = 0;
-    lispobj* dynamic_values = (void*)th;
-
-    if (pthread_mutex_trylock(&resurrected_lock))
-        goto die;
-    ++resurrectable_waiters;
-
-    th->next = resurrected_thread;
-    resurrected_thread = th;
-    responsible_awakener = (th->next==0);
-    pthread_mutex_unlock(&resurrected_lock);
-
-    lispobj newstate;
- wait_again:
-    pthread_mutex_lock(th->state_lock);
-    odxprint(safepoints, "Before timed wait %p", th);
-    while (th->state == STATE_DEAD) {
-        if (responsible_awakener) {
-            ret = gettimeofday(&tv, NULL);
-            deadline.tv_sec = tv.tv_sec + relative/1000;
-            deadline.tv_nsec = 0;
-            if (pthread_cond_timedwait(th->state_cond, th->state_lock, &deadline)
-                ==ETIMEDOUT)
-                break;
-        } else {
-            pthread_cond_wait(th->state_cond, th->state_lock);
-        }
-    }
-    newstate = th->state;
-    pthread_mutex_unlock(th->state_lock);
-
-    odxprint(safepoints, "After timed wait %p", th);
-
-    if (responsible_awakener) {
-        if (newstate == STATE_DEAD) {
-            if (!pthread_mutex_trylock(&resurrected_lock)) {
-                struct thread* victim = resurrected_thread;
-                if (victim) {
-                    if (victim->next || victim == th) {
-                        --resurrectable_waiters;
-                        odxprint(safepoints, "State DEAD, final unlinking.. %p",
-                                 victim);
-                        resurrected_thread = victim->next;
-                    } else {
-                        victim = NULL;
-                    }
-                }
-                pthread_mutex_unlock(&resurrected_lock);
-                if (victim) {
-                    pthread_mutex_lock(victim->state_lock);
-                    victim->state = STATE_SUSPENDED;
-                    pthread_mutex_unlock(victim->state_lock);
-                    pthread_cond_broadcast(victim->state_cond);
-                }
-            }
-        }
-    }
-    if (newstate == STATE_SUSPENDED) goto die;
-    if (newstate == STATE_DEAD) goto wait_again;
-
-    pthread_mutex_lock(th->state_lock);
-    odxprint(safepoints, "State UNDEAD (%s) - Resurrecting to run %p",
-             get_thread_state_as_string(th),th->no_tls_value_marker);
-    function = th->no_tls_value_marker;
-    th->no_tls_value_marker = NO_TLS_VALUE_MARKER_WIDETAG;
-    pthread_mutex_unlock(th->state_lock);
-
-
-    fast_aligned_fill_words(&dynamic_values[FIRST_TLS_INDEX],
-                            ALIGN_UP(sizeof(lispobj)*
-                                     ((SymbolValue(FREE_TLS_INDEX,0)>>WORD_SHIFT)
-                                      - FIRST_TLS_INDEX),64),
-                            NO_TLS_VALUE_MARKER_WIDETAG);
-
-    odxprint(safepoints,"Resetting dynamic values from %d to %d", FIRST_TLS_INDEX,
-             last_initially_bound_dynamic_value_index);
-
-    for (i=FIRST_TLS_INDEX; i<last_initially_bound_dynamic_value_index; ++i)
-        dynamic_values[i] = reset_dynamic_values[i];
-
-    /* On safepoint builds, we reenter call_into_lisp in two
-       situations: (1) in exception handler and (2) in resurrected
-       thread. The latter case is the only one that might cause
-       problems with stale frame pointers. */
-    th->gc_safepoint_context = NULL;
-    goto resurrect;
-
-
-die:
 #endif  /* safepoints */
 
-
-    /* lock_ret = pthread_mutex_lock(&all_threads_lock); */
-    /* gc_assert(lock_ret == 0); */
-    /* unlink_thread(th); */
-    /* pthread_mutex_unlock(&all_threads_lock); */
-
-    /* FIXME: Seen th->tls_cookie>=0 below.
-       Meaningless for unsigned (lispobj) tls_cookie.
-       What it's supposed to mean? */
     if(th->tls_cookie>=0) arch_os_thread_cleanup(th);
     os_sem_destroy(th->state_sem);
     os_sem_destroy(th->state_not_running_sem);
@@ -1032,43 +908,6 @@ os_thread_t create_thread(lispobj initial_function) {
     struct thread *th, *thread = arch_os_get_current_thread();
     os_thread_t kid_tid = 0;
 
-#ifdef LISP_FEATURE_SB_GC_SAFEPOINT
-#ifdef LISP_FEATURE_WIN32
-    if (!pthread_self()->fiber_factory) {
-#else
-    if (1) {
-#endif
-        if (resurrected_thread) {
-            pthread_mutex_lock(&resurrected_lock);
-            if (resurrected_thread) {
-                --resurrectable_waiters;
-                th = resurrected_thread;
-                resurrected_thread = th->next;
-                pthread_mutex_lock(th->state_lock);
-                th->no_tls_value_marker = initial_function;
-                th->state = STATE_RUNNING;
-            } else {
-                th = NULL;
-            }
-            pthread_mutex_unlock(&resurrected_lock);
-
-            if (th) {
-                odxprint(safepoints, "%p reused by %p for %p", th,
-                         arch_os_get_current_thread(), initial_function);
-                pthread_cond_broadcast(th->state_cond);
-                kid_tid = th->os_thread;
-                pthread_mutex_unlock(th->state_lock);
-                return kid_tid;
-            }
-        }
-    }
-    /* Experimental: going to test the interpretation of
-       runtime-targeted calls as `floatless'.
-
-       create_thread is the only place I know that is definitely NOT
-       floatless. */
-
-#endif  /* LISP_FEATURE_SB_GC_SAFEPOINT */
     /* Must defend against async unwinds. */
     if (SymbolValue(INTERRUPTS_ENABLED, thread) != NIL)
         lose("create_thread is not safe when interrupts are enabled.\n");
