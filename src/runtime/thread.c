@@ -255,7 +255,7 @@ static int run_lisp_function(lispobj function)
    without memory barriers (paying with exception handling overhead
    whenever a contention happens).
 */
-static inline pthread_mutex_t* thread_qrl(struct thread* p)
+static inline pthread_mutex_t* thread_qrl(struct thread* th)
 {
     return ((void *)th->alien_stack_start + ALIEN_STACK_SIZE)
 }
