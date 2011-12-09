@@ -257,7 +257,7 @@ static int run_lisp_function(lispobj function)
 */
 static inline pthread_mutex_t* thread_qrl(struct thread* p)
 {
-    return 1 + p->state_lock;
+    return ((void *)th->alien_stack_start + ALIEN_STACK_SIZE)
 }
 #endif
 
@@ -308,12 +308,14 @@ initial_thread_trampoline(struct thread *th)
 }
 
 #ifdef LISP_FEATURE_SB_THREAD
-#define THREAD_STATE_LOCK_SIZE \
-    ((sizeof(os_sem_t))+(sizeof(os_sem_t))+(sizeof(os_sem_t)))
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
 #define THREAD_CSP_PAGE_SIZE BACKEND_PAGE_BYTES
+#define THREAD_STATE_LOCK_SIZE \
+    (sizeof(pthread_mutex_t))
 #else
 #define THREAD_CSP_PAGE_SIZE 0
+#define THREAD_STATE_LOCK_SIZE \
+    ((sizeof(os_sem_t))+(sizeof(os_sem_t))+(sizeof(os_sem_t)))
 #endif
 #else
 #define THREAD_STATE_LOCK_SIZE 0
@@ -521,7 +523,9 @@ new_thread_trampoline(struct thread *th)
 #endif  /* safepoints */
 
     if(th->tls_cookie>=0) arch_os_thread_cleanup(th);
-#ifndef LISP_FEATURE_SB_GC_SAFEPOINT
+#ifdef LISP_FEATURE_SB_GC_SAFEPOINT
+    pthread_mutex_destroy(thread_qrl(th));
+#else
     os_sem_destroy(th->state_sem);
     os_sem_destroy(th->state_not_running_sem);
     os_sem_destroy(th->state_not_stopped_sem);
@@ -721,7 +725,9 @@ create_thread_struct(lispobj initial_function) {
 
 #ifdef LISP_FEATURE_SB_THREAD
     th->os_attr=malloc(sizeof(pthread_attr_t));
-#ifndef LISP_FEATURE_SB_GC_SAFEPOINT
+#ifdef LISP_FEATURE_SB_GC_SAFEPOINT
+    pthread_mutex_init(thread_qrl(th));
+#else
     th->state_sem=(os_sem_t *)((void *)th->alien_stack_start + ALIEN_STACK_SIZE);
     th->state_not_running_sem=(os_sem_t *)
         ((void *)th->state_sem + (sizeof(os_sem_t)));
@@ -1379,7 +1385,6 @@ void gc_stop_the_world()
                        it with pending interrupt, so CSP locking is
                        not needed */
                     odxprint(safepoints,"waiting final parking %p (qrl %p)",p, thread_qrl(p));
-                    pthread_mutex_lock(p->state_lock);
                     pthread_mutex_lock(thread_qrl(p));
                     if (SymbolTlValue(GC_INHIBIT,p)==T) {
                         /* Concurrent GC invoked manually */
@@ -1387,7 +1392,6 @@ void gc_stop_the_world()
                         priority_gc = p;
                     }
                     pthread_mutex_unlock(thread_qrl(p));
-                    pthread_mutex_unlock(p->state_lock);
                 }
             }
             if (priority_gc) {
@@ -1495,12 +1499,10 @@ static inline void thread_pitstop(os_context_t *ctxptr)
     if (inhibitor) {
         SetTlSymbolValue(STOP_FOR_GC_PENDING,T,self);
         /* Free qrl to let know we're ready... */
-        pthread_mutex_lock(self->state_lock);
         pthread_mutex_unlock(thread_qrl(self));
         pthread_mutex_lock(&gc_dispatcher.mx_gpunmapped);
         pthread_mutex_lock(thread_qrl(self));
         pthread_mutex_unlock(&gc_dispatcher.mx_gpunmapped);
-        pthread_mutex_unlock(self->state_lock);
         /* Enable FF-CSP recording (not hurt: will gc at pit-stop, and
            pit-stop always waits for GC end) */
         set_thread_csp_access(self,1);
