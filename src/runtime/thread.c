@@ -726,7 +726,7 @@ create_thread_struct(lispobj initial_function) {
 #ifdef LISP_FEATURE_SB_THREAD
     th->os_attr=malloc(sizeof(pthread_attr_t));
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
-    pthread_mutex_init(thread_qrl(th));
+    pthread_mutex_init(thread_qrl(th),NULL);
 #else
     th->state_sem=(os_sem_t *)((void *)th->alien_stack_start + ALIEN_STACK_SIZE);
     th->state_not_running_sem=(os_sem_t *)
