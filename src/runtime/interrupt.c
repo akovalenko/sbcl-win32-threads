@@ -1231,7 +1231,7 @@ low_level_maybe_now_maybe_later(int signal, siginfo_t *info, void *void_context)
 }
 #endif
 
-#ifdef LISP_FEATURE_SB_THREAD
+#if defined(LISP_FEATURE_SB_THREAD) && !defined(LISP_FEATURE_SB_GC_SAFEPOINT)
 
 /* This function must not cons, because that may trigger a GC. */
 void
