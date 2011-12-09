@@ -257,7 +257,7 @@ static int run_lisp_function(lispobj function)
 */
 static inline pthread_mutex_t* thread_qrl(struct thread* th)
 {
-    return ((void *)th->alien_stack_start + ALIEN_STACK_SIZE)
+    return ((void *)th->alien_stack_start + ALIEN_STACK_SIZE);
 }
 #endif
 
