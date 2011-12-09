@@ -4121,6 +4121,13 @@
                          (unknown-fun 1.0d0 (+ 1.0d0 x))))))
     (assert (equal '(1.0d0) (ctu:find-code-constants fun :type 'double-float)))))
 
+(with-test (:name :only-one-boxed-constant-for-multiple-uses)
+  (let* ((big (1+ most-positive-fixnum))
+         (fun (compile nil
+                       `(lambda (x)
+                          (unknown-fun ,big (+ ,big x))))))
+    (assert (= 1 (length (ctu:find-code-constants fun :type `(eql ,big)))))))
+
 (with-test (:name :fixnum+float-coerces-fixnum
             :skipped-on :x86)
   (let ((fun (compile nil

@@ -311,10 +311,11 @@ GNAME(undefined_tramp):
 
 /* The compiler apparently assumes xmm registers to be untouched by alloc_tramp. While neither SYSV nor
    MS ABI states something like that about _all_ xmm regs (some of them are callee-saved everywhere),
-   Windows/x64 is now _known_ to break this assumption.
-
-FIXME:  The code below that saves all XMM registers is now activated only on
-        Windows. Other platfroms may need it as well.  */
+   Windows/x64 is now _known_ to break this assumption. */
+	
+/* KLUDGE: FIND-ESCAPED-FRAME (SYS:SRC;CODE;DEBUG-INT.LISP) needs
+ * to know the name of the function immediately following the
+ * undefined-function trampoline. */
         
 #define stkxmmsave(n) movaps %xmm##n, n*16(%rsp)
 #define stkxmmload(n) movaps n*16(%rsp), %xmm##n

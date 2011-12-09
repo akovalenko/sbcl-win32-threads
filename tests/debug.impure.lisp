@@ -134,8 +134,7 @@
 
 (defvar *undefined-function-frame*
   ;; bug 353
-  '(#+(or x86 x86-64) "bogus stack frame"
-    #-(or x86 x86-64) "undefined function"))
+  '("undefined function"))
 
 ;;; Test for "undefined function" (undefined_tramp) working properly.
 ;;; Try it with and without tail call elimination, since they can have
@@ -152,7 +151,11 @@
          (funcall fun)))
 
   (with-test (:name (:undefined-function :bug-346)
-              :fails-on '(or :alpha :ppc :sparc :mips
+                    ;; Failures on ALPHA, SPARC, MIPS, and probably
+                    ;; HPPA are due to not having a full and valid
+                    ;; stack frame for the undefined function frame.
+                    ;; See PPC undefined_tramp for details.
+              :fails-on '(or :alpha :sparc :mips
                           (and :x86-64 :freebsd)))
     (assert (verify-backtrace
              (lambda () (test #'optimized))
@@ -161,13 +164,7 @@
 
   ;; bug 353: This test fails at least most of the time for x86/linux
   ;; ca. 0.8.20.16. -- WHN
-  (with-test (:name (:undefined-function :bug-353)
-              ;; This used to have fewer :fails-on features pre-0.9.16.38,
-              ;; but it turns out that the bug was just being masked by
-              ;; the presence of the IR1 stepper instrumentation (and
-              ;; is thus again failing now that the instrumentation is
-              ;; no more).
-              :fails-on '(or :alpha :mips :ppc))
+  (with-test (:name (:undefined-function :bug-353))
     (assert (verify-backtrace
              (lambda () (test #'not-optimized))
              (list *undefined-function-frame*

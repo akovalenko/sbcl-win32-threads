@@ -40,6 +40,7 @@ bad_option() {
 
 WITH_FEATURES=""
 WITHOUT_FEATURES=""
+FANCY_FEATURES=":sb-core-compression :sb-xref-for-internals :sb-after-xc-core"
 
 fancy=false
 some_options=false
@@ -86,7 +87,7 @@ do
         WITHOUT_FEATURES="$WITHOUT_FEATURES :$optarg"
 	;;
       --fancy)
-        WITH_FEATURES="$WITH_FEATURES :sb-core-compression :sb-xref-for-internals :sb-after-xc-core"
+        WITH_FEATURES="$WITH_FEATURES $FANCY_FEATURES"
         # Lower down we add :sb-thread for platforms where it can be built.
         fancy=true
         ;;
@@ -160,6 +161,12 @@ Options:
 
   --with-<feature>     Build with specified feature.
   --without-<feature>  Build wihout the specfied feature.
+
+  --fancy              Build with several optional features:
+
+                           $FANCY_FEATURES
+
+                       Plus threading on platforms which support it.
 
   --arch=<string>      Specify the architecture to build for.
 
@@ -362,8 +369,13 @@ then
     # If --fancy, enable threads on platforms where they can be built.
     case $sbcl_arch in
         x86|x86-64|ppc)
-            WITH_FEATURES="$WITH_FEATURES :sb-thread"
-            echo "Enabling threads due to --fancy."
+	    if [ "$sbcl_os" = "sunos" ] && [ "$sbcl_arch" = "x86-64" ]
+	    then
+		echo "No threads on this platform."
+	    else
+		WITH_FEATURES="$WITH_FEATURES :sb-thread"
+		echo "Enabling threads due to --fancy."
+	    fi
             ;;
         *)
             echo "No threads on this platform."
@@ -572,16 +584,10 @@ elif [ "$sbcl_arch" = "x86-64" ]; then
     printf ' :float-eql-vops :inline-constants :memory-barrier-vops' >> $ltf
     printf ' :multiply-high-vops' >> $ltf
 elif [ "$sbcl_arch" = "mips" ]; then
-    printf ' :linkage-table' >> $ltf
+    printf ' :cheneygc :linkage-table' >> $ltf
     printf ' :stack-allocatable-closures :stack-allocatable-vectors' >> $ltf
     printf ' :stack-allocatable-lists :stack-allocatable-fixed-objects' >> $ltf
     printf ' :alien-callbacks' >> $ltf
-    # Use a little C program to try to guess the endianness.  Ware
-    # cross-compilers!
-    #
-    # FIXME: integrate to grovel-features, mayhaps
-    $GNUMAKE -C tools-for-build determine-endianness -I ../src/runtime
-    tools-for-build/determine-endianness >> $ltf
 elif [ "$sbcl_arch" = "ppc" ]; then
     printf ' :gencgc :stack-allocatable-closures :stack-allocatable-lists' >> $ltf
     printf ' :linkage-table :raw-instance-init-vops :memory-barrier-vops' >> $ltf
@@ -611,19 +617,29 @@ elif [ "$sbcl_arch" = "sparc" ]; then
     # FUNCDEF macro for assembler. No harm in running this on sparc-linux
     # as well.
     sh tools-for-build/sparc-funcdef.sh > src/runtime/sparc-funcdef.h
+    printf ' :cheneygc' >> $ltf
     if [ "$sbcl_os" = "sunos" ] || [ "$sbcl_os" = "linux" ]; then
         printf ' :linkage-table' >> $ltf
     fi
     printf ' :stack-allocatable-closures :stack-allocatable-lists' >> $ltf
 elif [ "$sbcl_arch" = "alpha" ]; then
+    printf ' :cheneygc' >> $ltf
     printf ' :stack-allocatable-closures :stack-allocatable-lists' >> $ltf
 elif [ "$sbcl_arch" = "hppa" ]; then
+    printf ' :cheneygc' >> $ltf
     printf ' :stack-allocatable-vectors :stack-allocatable-fixed-objects' >> $ltf
     printf ' :stack-allocatable-lists' >> $ltf
 else
     # Nothing need be done in this case, but sh syntax wants a placeholder.
     echo > /dev/null
 fi
+
+# Use a little C program to try to guess the endianness.  Ware
+# cross-compilers!
+#
+# FIXME: integrate to grovel-features, mayhaps
+$GNUMAKE -C tools-for-build determine-endianness -I ../src/runtime
+tools-for-build/determine-endianness >> $ltf
 
 export sbcl_os sbcl_arch
 sh tools-for-build/grovel-features.sh >> $ltf

@@ -866,7 +866,15 @@
                          (component-from-component-ptr component-ptr))))
             (/noshow0 "got CODE")
             (when (null code)
-              (return (values code 0 context)))
+              ;; KLUDGE: Detect undefined functions by a range-check
+              ;; against the trampoline address and the following
+              ;; function in the runtime.
+              (if (< (foreign-symbol-address "undefined_tramp")
+                     (sap-int (sb!vm:context-pc context))
+                     (foreign-symbol-address #!+x86 "closure_tramp"
+                                             #!+x86-64 "alloc_tramp"))
+                  (return (values :undefined-function 0 context))
+                  (return (values code 0 context))))
             (let* ((code-header-len (* (get-header-data code)
                                        sb!vm:n-word-bytes))
                    (pc-offset
@@ -1997,6 +2005,15 @@ register."
             (= (logand val #xff) sb!vm:character-widetag)) ; char tag
        ;; unbound marker
        (= val sb!vm:unbound-marker-widetag)
+       ;; undefined_tramp doesn't validate properly as a pointer, and
+       ;; the actual value can vary by backend (x86oids need not
+       ;; apply)
+       #!+(or alpha hppa mips ppc)
+       (= val (+ (- (foreign-symbol-address "undefined_tramp")
+                    (* sb!vm:n-word-bytes sb!vm:simple-fun-code-offset))
+                 sb!vm:fun-pointer-lowtag))
+       #!+sparc
+       (= val (foreign-symbol-address "undefined_tramp"))
        ;; pointer
        (not (zerop (valid-lisp-pointer-p (int-sap val)))))
       (values (%make-lisp-obj val) t)

@@ -481,6 +481,8 @@
             'fp-complex-double-zero
             'fp-complex-double-immediate)))))
 
+(!def-vm-support-routine boxed-immediate-sc-p (sc)
+  (eql sc (sc-number-or-lose 'immediate)))
 
 ;;;; miscellaneous function call parameters
 

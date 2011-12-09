@@ -130,6 +130,80 @@ unlink_thread(struct thread *th)
     if (th->next)
         th->next->prev = th->prev;
 }
+
+/* Only access thread state with blockables blocked. */
+lispobj
+thread_state(struct thread *thread)
+{
+    lispobj state;
+    sigset_t old;
+    block_blockable_signals(NULL, &old);
+    os_sem_wait(thread->state_sem, "thread_state");
+    state = thread->state;
+    os_sem_post(thread->state_sem, "thread_state");
+    thread_sigmask(SIG_SETMASK, &old, NULL);
+    return state;
+}
+
+void
+set_thread_state(struct thread *thread, lispobj state)
+{
+    int i, waitcount = 0;
+    sigset_t old;
+    block_blockable_signals(NULL, &old);
+    os_sem_wait(thread->state_sem, "set_thread_state");
+    if (thread->state != state) {
+        if ((STATE_STOPPED==state) ||
+            (STATE_DEAD==state)) {
+            waitcount = thread->state_not_running_waitcount;
+            thread->state_not_running_waitcount = 0;
+            for (i=0; i<waitcount; i++)
+                os_sem_post(thread->state_not_running_sem, "set_thread_state (not running)");
+        }
+        if ((STATE_RUNNING==state) ||
+            (STATE_DEAD==state)) {
+            waitcount = thread->state_not_stopped_waitcount;
+            thread->state_not_stopped_waitcount = 0;
+            for (i=0; i<waitcount; i++)
+                os_sem_post(thread->state_not_stopped_sem, "set_thread_state (not stopped)");
+        }
+        thread->state = state;
+    }
+    os_sem_post(thread->state_sem, "set_thread_state");
+    thread_sigmask(SIG_SETMASK, &old, NULL);
+}
+
+void
+wait_for_thread_state_change(struct thread *thread, lispobj state)
+{
+    sigset_t old;
+    os_sem_t *wait_sem;
+    block_blockable_signals(NULL, &old);
+  start:
+    os_sem_wait(thread->state_sem, "wait_for_thread_state_change");
+    if (thread->state == state) {
+        switch (state) {
+        case STATE_RUNNING:
+            wait_sem = thread->state_not_running_sem;
+            thread->state_not_running_waitcount++;
+            break;
+        case STATE_STOPPED:
+            wait_sem = thread->state_not_stopped_sem;
+            thread->state_not_stopped_waitcount++;
+            break;
+        default:
+            lose("Invalid state in wait_for_thread_state_change: "OBJ_FMTX"\n", state);
+        }
+    } else {
+        wait_sem = NULL;
+    }
+    os_sem_post(thread->state_sem, "wait_for_thread_state_change");
+    if (wait_sem) {
+        os_sem_wait(wait_sem, "wait_for_thread_state_change");
+        goto start;
+    }
+    thread_sigmask(SIG_SETMASK, &old, NULL);
+}
 #endif
 
 static int run_lisp_function(lispobj function)
@@ -233,7 +307,7 @@ initial_thread_trampoline(struct thread *th)
 
 #ifdef LISP_FEATURE_SB_THREAD
 #define THREAD_STATE_LOCK_SIZE \
-    2*(sizeof(pthread_mutex_t))+(sizeof(pthread_cond_t))
+    ((sizeof(os_sem_t))+(sizeof(os_sem_t))+(sizeof(os_sem_t)))
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
 #define THREAD_CSP_PAGE_SIZE BACKEND_PAGE_BYTES
 #else
@@ -570,10 +644,10 @@ die:
     /* FIXME: Seen th->tls_cookie>=0 below.
        Meaningless for unsigned (lispobj) tls_cookie.
        What it's supposed to mean? */
-    if(th->tls_cookie!=0) arch_os_thread_cleanup(th);
-    pthread_mutex_destroy(th->state_lock);
-    pthread_mutex_destroy(th->state_lock+1);
-    pthread_cond_destroy(th->state_cond);
+    if(th->tls_cookie>=0) arch_os_thread_cleanup(th);
+    os_sem_destroy(th->state_sem);
+    os_sem_destroy(th->state_not_running_sem);
+    os_sem_destroy(th->state_not_stopped_sem);
 
 #if defined(LISP_FEATURE_WIN32)
     free((os_vm_address_t)th->interrupt_data);
@@ -769,13 +843,16 @@ create_thread_struct(lispobj initial_function) {
 
 #ifdef LISP_FEATURE_SB_THREAD
     th->os_attr=malloc(sizeof(pthread_attr_t));
-    th->state_lock=(pthread_mutex_t *)((void *)th->alien_stack_start +
-                                       ALIEN_STACK_SIZE);
-    pthread_mutex_init(th->state_lock, NULL);
-    pthread_mutex_init(th->state_lock+1, NULL);
-    th->state_cond=(pthread_cond_t *)((void *)th->state_lock +
-                                      2*(sizeof(pthread_mutex_t)));
-    pthread_cond_init(th->state_cond, NULL);
+    th->state_sem=(os_sem_t *)((void *)th->alien_stack_start + ALIEN_STACK_SIZE);
+    th->state_not_running_sem=(os_sem_t *)
+        ((void *)th->state_sem + (sizeof(os_sem_t)));
+    th->state_not_stopped_sem=(os_sem_t *)
+        ((void *)th->state_not_running_sem + (sizeof(os_sem_t)));
+    th->state_not_running_waitcount = 0;
+    th->state_not_stopped_waitcount = 0;
+    os_sem_init(th->state_sem, 1);
+    os_sem_init(th->state_not_running_sem, 0);
+    os_sem_init(th->state_not_stopped_sem, 0);
 #endif
     th->state=STATE_RUNNING;
 #ifdef LISP_FEATURE_STACK_GROWS_DOWNWARD_NOT_UPWARD
@@ -890,9 +967,6 @@ void create_initial_thread(lispobj initial_function) {
     pthread_key_create(&lisp_thread, 0);
 #endif
     if(th) {
-#ifdef LISP_FEATURE_MACH_EXCEPTION_HANDLER
-        setup_mach_exception_handling_thread();
-#endif
         initial_thread_trampoline(th); /* no return */
     } else lose("can't create initial thread\n");
 }
@@ -1818,7 +1892,7 @@ void gc_start_the_world()
             ++count;
             lispobj state = thread_state(p);
             if (state != STATE_DEAD) {
-                if(state != STATE_SUSPENDED) {
+                if(state != STATE_STOPPED) {
                     lose("gc_start_the_world: wrong thread state is %d\n",
                          fixnum_value(state));
                 }

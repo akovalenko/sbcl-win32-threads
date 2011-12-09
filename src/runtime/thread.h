@@ -18,25 +18,21 @@ struct alloc_region { };
 #endif
 #include "genesis/symbol.h"
 #include "genesis/static-symbols.h"
+
 #include "genesis/thread.h"
 #include "genesis/fdefn.h"
 #include "interrupt.h"
 
-#define STATE_RUNNING (MAKE_FIXNUM(1))
-#define STATE_SUSPENDED (MAKE_FIXNUM(2))
-#define STATE_DEAD (MAKE_FIXNUM(3))
-#if defined(LISP_FEATURE_SB_GC_SAFEPOINT)
-#define STATE_SUSPENDED_BRIEFLY (MAKE_FIXNUM(4))
-#define STATE_GC_BLOCKER (MAKE_FIXNUM(5))
-
-#define STATE_PHASE1_BLOCKER (MAKE_FIXNUM(5))
-#define STATE_PHASE2_BLOCKER (MAKE_FIXNUM(6))
-#define STATE_INTERRUPT_BLOCKER (MAKE_FIXNUM(7))
-#endif
+#define STATE_RUNNING MAKE_FIXNUM(1)
+#define STATE_STOPPED MAKE_FIXNUM(2)
+#define STATE_DEAD MAKE_FIXNUM(3)
 
 #ifdef LISP_FEATURE_SB_THREAD
+lispobj thread_state(struct thread *thread);
+void set_thread_state(struct thread *thread, lispobj state);
+void wait_for_thread_state_change(struct thread *thread, lispobj state);
 
-#ifdef LISP_FEATURE_WIN32
+#ifdef LISP_FEATURE_SB_GC_SAFEPOINT
 
 enum threads_suspend_reason {
     SUSPEND_REASON_NONE,
@@ -74,66 +70,6 @@ struct gcing_safety {
 };
 
 #endif
-
-/* Only access thread state with blockables blocked. */
-static inline lispobj
-thread_state(struct thread *thread)
-{
-    lispobj state;
-    sigset_t old;
-    block_blockable_signals(0, &old);
-    pthread_mutex_lock(thread->state_lock);
-    state = thread->state;
-    pthread_mutex_unlock(thread->state_lock);
-    thread_sigmask(SIG_SETMASK,&old,0);
-    return state;
-}
-
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-static inline const char * get_thread_state_string(lispobj state)
-{
-  if (state == STATE_RUNNING) return "RUNNING";
-  if (state == STATE_SUSPENDED) return "SUSPENDED";
-  if (state == STATE_DEAD) return "DEAD";
-  if (state == STATE_SUSPENDED_BRIEFLY) return "SUSPENDED_BRIEFLY";
-  if (state == STATE_PHASE1_BLOCKER) return "PHASE1_BLOCKER";
-  if (state == STATE_PHASE2_BLOCKER) return "PHASE2_BLOCKER";
-  if (state == STATE_INTERRUPT_BLOCKER) return "INTERRUPT_BLOCKER";
-  return "unknown";
-}
-
-static const char * get_thread_state_as_string(struct thread * thread)
-{
-  return get_thread_state_string(thread_state(thread));
-}
-#endif
-
-static inline void
-set_thread_state(struct thread *thread, lispobj state)
-{
-    sigset_t old;
-    block_blockable_signals(0, &old);
-    pthread_mutex_lock(thread->state_lock);
-    thread->state = state;
-    pthread_mutex_unlock(thread->state_lock);
-    pthread_cond_broadcast(thread->state_cond);
-    thread_sigmask(SIG_SETMASK,&old,0);
-}
-
-static inline void
-wait_for_thread_state_change(struct thread *thread, lispobj state)
-{
-    sigset_t old;
-    if (thread->state != state)
-        return;
-    block_blockable_signals(0, &old);
-    pthread_mutex_lock(thread->state_lock);
-    while (thread->state == state)
-        pthread_cond_wait(thread->state_cond, thread->state_lock);
-    pthread_mutex_unlock(thread->state_lock);
-    thread_sigmask(SIG_SETMASK,&old,0);
-}
-
 extern pthread_key_t lisp_thread;
 #endif
 
