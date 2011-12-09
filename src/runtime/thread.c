@@ -521,9 +521,11 @@ new_thread_trampoline(struct thread *th)
 #endif  /* safepoints */
 
     if(th->tls_cookie>=0) arch_os_thread_cleanup(th);
+#ifndef LISP_FEATURE_SB_GC_SAFEPOINT
     os_sem_destroy(th->state_sem);
     os_sem_destroy(th->state_not_running_sem);
     os_sem_destroy(th->state_not_stopped_sem);
+#endif
 
 #if defined(LISP_FEATURE_WIN32)
     free((os_vm_address_t)th->interrupt_data);
@@ -719,6 +721,7 @@ create_thread_struct(lispobj initial_function) {
 
 #ifdef LISP_FEATURE_SB_THREAD
     th->os_attr=malloc(sizeof(pthread_attr_t));
+#ifndef LISP_FEATURE_SB_GC_SAFEPOINT
     th->state_sem=(os_sem_t *)((void *)th->alien_stack_start + ALIEN_STACK_SIZE);
     th->state_not_running_sem=(os_sem_t *)
         ((void *)th->state_sem + (sizeof(os_sem_t)));
@@ -729,6 +732,7 @@ create_thread_struct(lispobj initial_function) {
     os_sem_init(th->state_sem, 1);
     os_sem_init(th->state_not_running_sem, 0);
     os_sem_init(th->state_not_stopped_sem, 0);
+#endif
 #endif
     th->state=STATE_RUNNING;
 #ifdef LISP_FEATURE_STACK_GROWS_DOWNWARD_NOT_UPWARD
