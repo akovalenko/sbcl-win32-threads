@@ -796,7 +796,12 @@ implementation it is ~S." *default-package-use-list*)
                                           ((or (base-string-p name)
                                                (position-if-not 'base-char-p name
                                                                 :end length))
-                                           (subseq name 0 length))
+                                           (string-dispatch
+                                               ((simple-array base-char (*))
+                                                (simple-array character (*)))
+                                               name
+                                             (declare (optimize speed))
+                                             (subseq name 0 length)))
                                           (t (replace (make-string (or length (length name))
                                                                    :element-type 'base-char) name)))))
                    (with-single-package-locked-error
