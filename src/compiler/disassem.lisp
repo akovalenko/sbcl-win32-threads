@@ -46,7 +46,7 @@
 ;;; the width of the column in which instruction-names are printed. A
 ;;; value of zero gives the effect of not aligning the arguments at
 ;;; all.
-(defvar *disassem-opcode-column-width* 6)
+(defvar *disassem-opcode-column-width* 0)
 (declaim (type text-width *disassem-opcode-column-width*))
 
 ;;; the width of the column in which instruction-bytes are printed. A
@@ -1605,8 +1605,8 @@
               :type (member :big-endian :little-endian))
   ;; for user code to hang stuff off of
   (properties nil :type list)
-  ;; for user code to hang stuff off of, cleared each time before an
-  ;; instruction is processed
+  ;; for user code to hang stuff off of, cleared each time after a
+  ;; non-prefix instruction is processed
   (inst-properties nil :type list)
   (filtered-values (make-array max-filtered-value-index)
                    :type filtered-value-vector)

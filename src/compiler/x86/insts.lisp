@@ -48,13 +48,11 @@
 ;;; correctly in all cases, so we copy the x86-64 version which at
 ;;; least can handle the code output by the compiler.
 ;;;
-;;; Width information for an instruction is stored as an inst-prop on
-;;; the dstate.  The inst-props are cleared automatically after each
-;;; instruction, must be set by prefilters, and contain a single bit
-;;; of data each (presence/absence).  As such, each instruction that
-;;; can emit an operand-size prefix (x66 prefix) needs to have a set
-;;; of printers declared for both the prefixed and non-prefixed
-;;; encodings.
+;;; Width information for an instruction and whether a segment
+;;; override prefix was seen is stored as an inst-prop on the dstate.
+;;; The inst-props are cleared automatically after each non-prefix
+;;; instruction, must be set by prefilters, and contain a single bit of
+;;; data each (presence/absence).
 
 ;;; Return the operand size based on the prefixes and width bit from
 ;;; the dstate.
@@ -154,6 +152,12 @@
   (declare (ignore dstate))
   (sb!disassem:princ16 value stream))
 
+(defun maybe-print-segment-override (stream dstate)
+  (cond ((sb!disassem:dstate-get-inst-prop dstate 'fs-segment-prefix)
+         (princ "FS:" stream))
+        ((sb!disassem:dstate-get-inst-prop dstate 'gs-segment-prefix)
+         (princ "GS:" stream))))
+
 ;;; Returns either an integer, meaning a register, or a list of
 ;;; (BASE-REG OFFSET INDEX-REG INDEX-SCALE), where any component
 ;;; may be missing or nil to indicate that it's not used or has the
@@ -217,6 +221,16 @@
            (ignore value)
            (type sb!disassem:disassem-state dstate))
   (sb!disassem:dstate-put-inst-prop dstate 'operand-size-16))
+
+;;; This prefilter is used solely for its side effect, namely to put
+;;; one of the properties [FG]S-SEGMENT-PREFIX into the DSTATE.
+;;; Unlike PREFILTER-X66, this prefilter only catches the low bit of
+;;; the prefix byte.
+(defun prefilter-seg (value dstate)
+  (declare (type bit value)
+           (type sb!disassem:disassem-state dstate))
+  (sb!disassem:dstate-put-inst-prop
+   dstate (elt '(fs-segment-prefix gs-segment-prefix) value)))
 
 (defun read-address (value dstate)
   (declare (ignore value))              ; always nil anyway
@@ -349,6 +363,11 @@
 (sb!disassem:define-arg-type x66
   :prefilter #'prefilter-x66)
 
+;;; Used to capture the effect of the #x64 and #x65 segment override
+;;; prefixes.
+(sb!disassem:define-arg-type seg
+  :prefilter #'prefilter-seg)
+
 (eval-when (:compile-toplevel :load-toplevel :execute)
 (defparameter *conditions*
   '((:o . 0)
@@ -400,17 +419,18 @@
   (accum :type 'accum)
   (imm))
 
+;;; Prefix instructions
+
+(sb!disassem:define-instruction-format (x66 8)
+  (x66   :field (byte 8 0) :type 'x66 :value #x66))
+
+(sb!disassem:define-instruction-format (seg 8)
+  (seg   :field (byte 7 1) :value #x32)
+  (fsgs  :field (byte 1 0) :type 'seg))
+
 (sb!disassem:define-instruction-format (simple 8)
   (op    :field (byte 7 1))
   (width :field (byte 1 0) :type 'width)
-  ;; optional fields
-  (accum :type 'accum)
-  (imm))
-
-(sb!disassem:define-instruction-format (x66-simple 16)
-  (x66   :field (byte 8 0) :type 'x66 :value #x66)
-  (op    :field (byte 7 9))
-  (width :field (byte 1 8) :type 'width)
   ;; optional fields
   (accum :type 'accum)
   (imm))
@@ -424,20 +444,10 @@
   (op :field (byte 6 2))
   (dir :field (byte 1 1)))
 
-(sb!disassem:define-instruction-format (x66-simple-dir 16 :include 'x66-simple)
-  (op :field (byte 6 10))
-  (dir :field (byte 1 9)))
-
 ;;; Same as simple, but with the immediate value occurring by default,
 ;;; and with an appropiate printer.
 (sb!disassem:define-instruction-format (accum-imm 8
                                      :include 'simple
-                                     :default-printer '(:name
-                                                        :tab accum ", " imm))
-  (imm :type 'imm-data))
-
-(sb!disassem:define-instruction-format (x66-accum-imm 16
-                                     :include 'x66-simple
                                      :default-printer '(:name
                                                         :tab accum ", " imm))
   (imm :type 'imm-data))
@@ -450,32 +460,12 @@
   (accum :type 'word-accum)
   (imm))
 
-(sb!disassem:define-instruction-format (x66-reg-no-width 16
-                                     :default-printer '(:name :tab reg))
-  (x66   :field (byte 8 0) :type 'x66 :value #x66)
-  (op    :field (byte 5 11))
-  (reg   :field (byte 3 8) :type 'word-reg)
-  ;; optional fields
-  (accum :type 'word-accum)
-  (imm))
-
 ;;; adds a width field to reg-no-width
 (sb!disassem:define-instruction-format (reg 8
                                         :default-printer '(:name :tab reg))
   (op    :field (byte 4 4))
   (width :field (byte 1 3) :type 'width)
   (reg   :field (byte 3 0) :type 'reg)
-  ;; optional fields
-  (accum :type 'accum)
-  (imm)
-  )
-
-(sb!disassem:define-instruction-format (x66-reg 16
-                                        :default-printer '(:name :tab reg))
-  (x66   :field (byte 8 0) :type 'x66 :value #x66)
-  (op    :field (byte 4 12))
-  (width :field (byte 1 11) :type 'width)
-  (reg   :field (byte 3 8) :type 'reg)
   ;; optional fields
   (accum :type 'accum)
   (imm)
@@ -501,18 +491,6 @@
   ;; optional fields
   (imm))
 
-(sb!disassem:define-instruction-format (x66-reg-reg/mem 24
-                                        :default-printer
-                                        `(:name :tab reg ", " reg/mem))
-  (x66   :field (byte 8 0) :type 'x66 :value #x66)
-  (op      :field (byte 7 9))
-  (width   :field (byte 1 8)    :type 'width)
-  (reg/mem :fields (list (byte 2 22) (byte 3 16))
-                                :type 'reg/mem)
-  (reg     :field (byte 3 19)   :type 'reg)
-  ;; optional fields
-  (imm))
-
 ;;; same as reg-reg/mem, but with direction bit
 (sb!disassem:define-instruction-format (reg-reg/mem-dir 16
                                         :include 'reg-reg/mem
@@ -523,31 +501,12 @@
   (op  :field (byte 6 2))
   (dir :field (byte 1 1)))
 
-(sb!disassem:define-instruction-format (x66-reg-reg/mem-dir 24
-                                        :include 'x66-reg-reg/mem
-                                        :default-printer
-                                        `(:name
-                                          :tab
-                                          ,(swap-if 'dir 'reg/mem ", " 'reg)))
-  (op  :field (byte 6 10))
-  (dir :field (byte 1 9)))
-
 ;;; Same as reg-rem/mem, but uses the reg field as a second op code.
 (sb!disassem:define-instruction-format (reg/mem 16
                                         :default-printer '(:name :tab reg/mem))
   (op      :fields (list (byte 7 1) (byte 3 11)))
   (width   :field (byte 1 0)    :type 'width)
   (reg/mem :fields (list (byte 2 14) (byte 3 8))
-                                :type 'sized-reg/mem)
-  ;; optional fields
-  (imm))
-
-(sb!disassem:define-instruction-format (x66-reg/mem 24
-                                        :default-printer '(:name :tab reg/mem))
-  (x66   :field (byte 8 0) :type 'x66 :value #x66)
-  (op      :fields (list (byte 7 9) (byte 3 19)))
-  (width   :field (byte 1 8)    :type 'width)
-  (reg/mem :fields (list (byte 2 22) (byte 3 16))
                                 :type 'sized-reg/mem)
   ;; optional fields
   (imm))
@@ -561,24 +520,10 @@
   (reg/mem :type 'sized-reg/mem)
   (imm     :type 'imm-data))
 
-(sb!disassem:define-instruction-format (x66-reg/mem-imm 24
-                                        :include 'x66-reg/mem
-                                        :default-printer
-                                        '(:name :tab reg/mem ", " imm))
-  (reg/mem :type 'sized-reg/mem)
-  (imm     :type 'imm-data))
-
 ;;; Same as reg/mem, but with using the accumulator in the default printer
 (sb!disassem:define-instruction-format
     (accum-reg/mem 16
      :include 'reg/mem :default-printer '(:name :tab accum ", " reg/mem))
-  (reg/mem :type 'reg/mem)              ; don't need a size
-  (accum :type 'accum))
-
-(sb!disassem:define-instruction-format (x66-accum-reg/mem 24
-                                        :include 'x66-reg/mem
-                                        :default-printer
-                                        '(:name :tab accum ", " reg/mem))
   (reg/mem :type 'reg/mem)              ; don't need a size
   (accum :type 'accum))
 
@@ -592,19 +537,6 @@
   (reg/mem :fields (list (byte 2 22) (byte 3 16))
                                 :type 'reg/mem)
   (reg     :field (byte 3 19)   :type 'reg)
-  ;; optional fields
-  (imm))
-
-(sb!disassem:define-instruction-format (x66-ext-reg-reg/mem 32
-                                        :default-printer
-                                        `(:name :tab reg ", " reg/mem))
-  (x66   :field (byte 8 0) :type 'x66 :value #x66)
-  (prefix  :field (byte 8 8)    :value #b00001111)
-  (op      :field (byte 7 17))
-  (width   :field (byte 1 16)    :type 'width)
-  (reg/mem :fields (list (byte 2 30) (byte 3 24))
-                                :type 'reg/mem)
-  (reg     :field (byte 3 27)   :type 'reg)
   ;; optional fields
   (imm))
 
@@ -626,25 +558,8 @@
   ;; optional fields
   (imm))
 
-(sb!disassem:define-instruction-format (x66-ext-reg/mem 32
-                                        :default-printer '(:name :tab reg/mem))
-  (x66     :field (byte 8 0)    :type 'x66 :value #x66)
-  (prefix  :field (byte 8 8)    :value #b00001111)
-  (op      :fields (list (byte 7 17) (byte 3 27)))
-  (width   :field (byte 1 16)    :type 'width)
-  (reg/mem :fields (list (byte 2 30) (byte 3 22))
-                                :type 'sized-reg/mem)
-  ;; optional fields
-  (imm))
-
 (sb!disassem:define-instruction-format (ext-reg/mem-imm 24
                                         :include 'ext-reg/mem
-                                        :default-printer
-                                        '(:name :tab reg/mem ", " imm))
-  (imm :type 'imm-data))
-
-(sb!disassem:define-instruction-format (x66-ext-reg/mem-imm 32
-                                        :include 'x66-ext-reg/mem
                                         :default-printer
                                         '(:name :tab reg/mem ", " imm))
   (imm :type 'imm-data))
@@ -708,10 +623,6 @@
                                      :include 'simple
                                      :default-printer '(:name width)))
 
-(sb!disassem:define-instruction-format (x66-string-op 16
-                                     :include 'x66-simple
-                                     :default-printer '(:name width)))
-
 (sb!disassem:define-instruction-format (short-cond-jump 16)
   (op    :field (byte 4 4))
   (cc    :field (byte 4 0) :type 'condition-code)
@@ -762,17 +673,6 @@
   (reg/mem :fields (list (byte 2 22) (byte 3 16))
                                 :type 'reg/mem)
   (reg     :field (byte 3 19)   :type 'reg))
-
-(sb!disassem:define-instruction-format (x66-cond-move 32
-                                     :default-printer
-                                        '('cmov cc :tab reg ", " reg/mem))
-  (x66   :field (byte 8 0) :type 'x66 :value #x66)
-  (prefix  :field (byte 8 8)    :value #b00001111)
-  (op      :field (byte 4 20)   :value #b0100)
-  (cc      :field (byte 4 16)    :type 'condition-code)
-  (reg/mem :fields (list (byte 2 30) (byte 3 24))
-                                :type 'reg/mem)
-  (reg     :field (byte 3 27)   :type 'reg))
 
 (sb!disassem:define-instruction-format (enter-format 32
                                      :default-printer '(:name
@@ -1070,25 +970,66 @@
     (:dword
      (emit-dword segment value))))
 
+;;;; prefixes
+
+(define-instruction x66 (segment)
+  (:printer x66 () nil :print-name nil)
+  (:emitter
+   (bug "#X66 prefix used as a standalone instruction")))
+
+(defun emit-prefix (segment name)
+  (ecase name
+    ((nil))
+    (:lock
+     #!+sb-thread
+     (emit-byte segment #xf0))
+    (:fs
+     (emit-byte segment #x64))
+    (:gs
+     (emit-byte segment #x65))))
+
+(define-instruction fs (segment)
+  (:printer seg ((fsgs #b0)) nil :print-name nil)
+  (:emitter
+   (bug "FS prefix used as a standalone instruction")))
+
+(define-instruction gs (segment)
+  (:printer seg ((fsgs #b1)) nil :print-name nil)
+  (:emitter
+   (bug "GS prefix used as a standalone instruction")))
+
+(define-instruction lock (segment)
+  (:printer byte ((op #b11110000)) nil)
+  (:emitter
+   (bug "LOCK prefix used as a standalone instruction")))
+
+(define-instruction rep (segment)
+  (:emitter
+   (emit-byte segment #b11110011)))
+
+(define-instruction repe (segment)
+  (:printer byte ((op #b11110011)) nil)
+  (:emitter
+   (emit-byte segment #b11110011)))
+
+(define-instruction repne (segment)
+  (:printer byte ((op #b11110010)) nil)
+  (:emitter
+   (emit-byte segment #b11110010)))
+
 ;;;; general data transfer
 
 (define-instruction mov (segment dst src &optional prefix)
   ;; immediate to register
   (:printer reg ((op #b1011) (imm nil :type 'imm-data))
             '(:name :tab reg ", " imm))
-  (:printer x66-reg ((op #b1011) (imm nil :type 'imm-data))
-            '(:name :tab reg ", " imm))
   ;; absolute mem to/from accumulator
   (:printer simple-dir ((op #b101000) (imm nil :type 'imm-addr))
             `(:name :tab ,(swap-if 'dir 'accum ", " '("[" imm "]"))))
-  (:printer x66-simple-dir ((op #b101000) (imm nil :type 'imm-addr))
-            `(:name :tab ,(swap-if 'dir 'accum ", " '("[" imm "]"))))
   ;; register to/from register/memory
   (:printer reg-reg/mem-dir ((op #b100010)))
-  (:printer x66-reg-reg/mem-dir ((op #b100010)))
   ;; immediate to register/memory
   (:printer reg/mem-imm ((op '(#b1100011 #b000))))
-  (:printer x66-reg/mem-imm ((op '(#b1100011 #b000))))
 
   (:emitter
    (emit-prefix segment prefix)
@@ -1159,27 +1100,19 @@
   (:printer ext-reg-reg/mem ((op #b1011111)
                              (reg nil :type 'word-reg)
                              (reg/mem nil :type 'sized-reg/mem)))
-  (:printer x66-ext-reg-reg/mem ((op #b1011111)
-                                 (reg nil :type 'word-reg)
-                                 (reg/mem nil :type 'sized-reg/mem)))
   (:emitter (emit-move-with-extension segment dst src #b10111110)))
 
 (define-instruction movzx (segment dst src)
   (:printer ext-reg-reg/mem ((op #b1011011)
                              (reg nil :type 'word-reg)
                              (reg/mem nil :type 'sized-reg/mem)))
-  (:printer x66-ext-reg-reg/mem ((op #b1011011)
-                                 (reg nil :type 'word-reg)
-                                 (reg/mem nil :type 'sized-reg/mem)))
   (:emitter (emit-move-with-extension segment dst src #b10110110)))
 
 (define-instruction push (segment src &optional prefix)
   ;; register
   (:printer reg-no-width ((op #b01010)))
-  (:printer x66-reg-no-width ((op #b01010)))
   ;; register/memory
   (:printer reg/mem ((op '(#b1111111 #b110)) (width 1)))
-  (:printer x66-reg/mem ((op '(#b1111111 #b110)) (width 1)))
   ;; immediate
   (:printer byte ((op #b01101010) (imm nil :type 'signed-imm-byte))
             '(:name :tab imm))
@@ -1216,9 +1149,7 @@
    (emit-byte segment #b01100000)))
 
 (define-instruction pop (segment dst)
-  (:printer x66-reg-no-width ((op #b01011)))
   (:printer reg-no-width ((op #b01011)))
-  (:printer x66-reg/mem ((op '(#b1000111 #b000)) (width 1)))
   (:printer reg/mem ((op '(#b1000111 #b000)) (width 1)))
   (:emitter
    (let ((size (operand-size dst)))
@@ -1238,10 +1169,8 @@
 (define-instruction xchg (segment operand1 operand2)
   ;; Register with accumulator.
   (:printer reg-no-width ((op #b10010)) '(:name :tab accum ", " reg))
-  (:printer x66-reg-no-width ((op #b10010)) '(:name :tab accum ", " reg))
   ;; Register/Memory with Register.
   (:printer reg-reg/mem ((op #b1000011)))
-  (:printer x66-reg-reg/mem ((op #b1000011)))
   (:emitter
    (let ((size (matching-operand-size operand1 operand2)))
      (maybe-emit-operand-size-prefix segment size)
@@ -1275,7 +1204,6 @@
 (define-instruction cmpxchg (segment dst src &optional prefix)
   ;; Register/Memory with Register.
   (:printer ext-reg-reg/mem ((op #b1011000)) '(:name :tab reg/mem ", " reg))
-  (:printer x66-ext-reg-reg/mem ((op #b1011000)) '(:name :tab reg/mem ", " reg))
   (:emitter
    (aver (register-p src))
    (emit-prefix segment prefix)
@@ -1291,27 +1219,6 @@
    (emit-byte segment #xf3)
    (emit-byte segment #x90)))
 
-(defun emit-prefix (segment name)
-  (ecase name
-    ((nil))
-    (:lock
-     #!+sb-thread
-     (emit-byte segment #xf0))
-    (:fs
-     (emit-byte segment #x64))
-    (:gs
-     (emit-byte segment #x65))))
-
-(define-instruction fs-segment-prefix (segment)
-  (:printer byte ((op #b01100100)))
-  (:emitter
-   (bug "FS emitted as a separate instruction!")))
-
-(define-instruction gs-segment-prefix (segment)
-  (:printer byte ((op #b01100101)))
-  (:emitter
-   (bug "GS emitted as a separate instruction!")))
-
 ;;;; flag control instructions
 
 ;;; CLC -- Clear Carry Flag.
@@ -1422,16 +1329,10 @@
 (eval-when (:compile-toplevel :execute)
   (defun arith-inst-printer-list (subop)
     `((accum-imm ((op ,(dpb subop (byte 3 2) #b0000010))))
-      (x66-accum-imm ((op ,(dpb subop (byte 3 2) #b0000010))))
       (reg/mem-imm ((op (#b1000000 ,subop))))
-      (x66-reg/mem-imm ((op (#b1000000 ,subop))))
       (reg/mem-imm ((op (#b1000001 ,subop))
                     (imm nil :type signed-imm-byte)))
-      (x66-reg/mem-imm ((op (#b1000001 ,subop))
-                        (imm nil :type signed-imm-byte)))
-      (reg-reg/mem-dir ((op ,(dpb subop (byte 3 1) #b000000))))
-      (x66-reg-reg/mem-dir ((op ,(dpb subop (byte 3 1) #b000000))))))
-  )
+      (reg-reg/mem-dir ((op ,(dpb subop (byte 3 1) #b000000)))))))
 
 (define-instruction add (segment dst src &optional prefix)
   (:printer-list (arith-inst-printer-list #b000))
@@ -1462,10 +1363,8 @@
 (define-instruction inc (segment dst)
   ;; Register.
   (:printer reg-no-width ((op #b01000)))
-  (:printer x66-reg-no-width ((op #b01000)))
   ;; Register/Memory
   (:printer reg/mem ((op '(#b1111111 #b000))))
-  (:printer x66-reg/mem ((op '(#b1111111 #b000))))
   (:emitter
    (let ((size (operand-size dst)))
      (maybe-emit-operand-size-prefix segment size)
@@ -1478,10 +1377,8 @@
 (define-instruction dec (segment dst)
   ;; Register.
   (:printer reg-no-width ((op #b01001)))
-  (:printer x66-reg-no-width ((op #b01001)))
   ;; Register/Memory
   (:printer reg/mem ((op '(#b1111111 #b001))))
-  (:printer x66-reg/mem ((op '(#b1111111 #b001))))
   (:emitter
    (let ((size (operand-size dst)))
      (maybe-emit-operand-size-prefix segment size)
@@ -1493,7 +1390,6 @@
 
 (define-instruction neg (segment dst)
   (:printer reg/mem ((op '(#b1111011 #b011))))
-  (:printer x66-reg/mem ((op '(#b1111011 #b011))))
   (:emitter
    (let ((size (operand-size dst)))
      (maybe-emit-operand-size-prefix segment size)
@@ -1522,7 +1418,6 @@
 
 (define-instruction mul (segment dst src)
   (:printer accum-reg/mem ((op '(#b1111011 #b100))))
-  (:printer x66-accum-reg/mem ((op '(#b1111011 #b100))))
   (:emitter
    (let ((size (matching-operand-size dst src)))
      (aver (accumulator-p dst))
@@ -1532,20 +1427,12 @@
 
 (define-instruction imul (segment dst &optional src1 src2)
   (:printer accum-reg/mem ((op '(#b1111011 #b101))))
-  (:printer x66-accum-reg/mem ((op '(#b1111011 #b101))))
   (:printer ext-reg-reg/mem ((op #b1010111)))
-  (:printer x66-ext-reg-reg/mem ((op #b1010111)))
   (:printer reg-reg/mem ((op #b0110100) (width 1)
                          (imm nil :type 'signed-imm-word))
             '(:name :tab reg ", " reg/mem ", " imm))
-  (:printer x66-reg-reg/mem ((op #b0110100) (width 1)
-                             (imm nil :type 'signed-imm-word))
-            '(:name :tab reg ", " reg/mem ", " imm))
   (:printer reg-reg/mem ((op #b0110101) (width 1)
                          (imm nil :type 'signed-imm-byte))
-            '(:name :tab reg ", " reg/mem ", " imm))
-  (:printer x66-reg-reg/mem ((op #b0110101) (width 1)
-                             (imm nil :type 'signed-imm-byte))
             '(:name :tab reg ", " reg/mem ", " imm))
   (:emitter
    (flet ((r/m-with-immed-to-reg (reg r/m immed)
@@ -1575,7 +1462,6 @@
 
 (define-instruction div (segment dst src)
   (:printer accum-reg/mem ((op '(#b1111011 #b110))))
-  (:printer x66-accum-reg/mem ((op '(#b1111011 #b110))))
   (:emitter
    (let ((size (matching-operand-size dst src)))
      (aver (accumulator-p dst))
@@ -1585,7 +1471,6 @@
 
 (define-instruction idiv (segment dst src)
   (:printer accum-reg/mem ((op '(#b1111011 #b111))))
-  (:printer x66-accum-reg/mem ((op '(#b1111011 #b111))))
   (:emitter
    (let ((size (matching-operand-size dst src)))
      (aver (accumulator-p dst))
@@ -1642,7 +1527,6 @@
 (define-instruction xadd (segment dst src &optional prefix)
   ;; Register/Memory with Register.
   (:printer ext-reg-reg/mem ((op #b1100000)) '(:name :tab reg/mem ", " reg))
-  (:printer x66-ext-reg-reg/mem ((op #b1100000)) '(:name :tab reg/mem ", " reg))
   (:emitter
    (aver (register-p src))
    (emit-prefix segment prefix)
@@ -1673,16 +1557,10 @@
   (defun shift-inst-printer-list (subop)
     `((reg/mem ((op (#b1101000 ,subop)))
                (:name :tab reg/mem ", 1"))
-      (x66-reg/mem ((op (#b1101000 ,subop)))
-                   (:name :tab reg/mem ", 1"))
       (reg/mem ((op (#b1101001 ,subop)))
                (:name :tab reg/mem ", " 'cl))
-      (x66-reg/mem ((op (#b1101001 ,subop)))
-                   (:name :tab reg/mem ", " 'cl))
       (reg/mem-imm ((op (#b1100000 ,subop))
-                    (imm nil :type signed-imm-byte)))
-      (x66-reg/mem-imm ((op (#b1100000 ,subop))
-                        (imm nil :type signed-imm-byte))))))
+                    (imm nil :type signed-imm-byte))))))
 
 (define-instruction rol (segment dst amount)
   (:printer-list
@@ -1742,12 +1620,9 @@
 
 (eval-when (:compile-toplevel :execute)
   (defun double-shift-inst-printer-list (op)
-    `(#+nil
-      (ext-reg-reg/mem-imm ((op ,(logior op #b10))
-                            (imm nil :type signed-imm-byte)))
-      (ext-reg-reg/mem ((op ,(logior op #b10)))
-         (:name :tab reg/mem ", " reg ", " 'cl))
-      (x66-ext-reg-reg/mem ((op ,(logior op #b10)))
+    `((ext-reg-reg/mem ((op ,(logior op #b10)) (width 0)
+                        (imm nil :type signed-imm-byte)))
+      (ext-reg-reg/mem ((op ,(logior op #b10)) (width 1))
          (:name :tab reg/mem ", " reg ", " 'cl)))))
 
 (define-instruction shld (segment dst src amt)
@@ -1770,11 +1645,8 @@
 
 (define-instruction test (segment this that)
   (:printer accum-imm ((op #b1010100)))
-  (:printer x66-accum-imm ((op #b1010100)))
   (:printer reg/mem-imm ((op '(#b1111011 #b000))))
-  (:printer x66-reg/mem-imm ((op '(#b1111011 #b000))))
   (:printer reg-reg/mem ((op #b1000010)))
-  (:printer x66-reg-reg/mem ((op #b1000010)))
   (:emitter
    (let ((size (matching-operand-size this that)))
      (maybe-emit-operand-size-prefix segment size)
@@ -1842,7 +1714,6 @@
 
 (define-instruction not (segment dst)
   (:printer reg/mem ((op '(#b1111011 #b010))))
-  (:printer x66-reg/mem ((op '(#b1111011 #b010))))
   (:emitter
    (let ((size (operand-size dst)))
      (maybe-emit-operand-size-prefix segment size)
@@ -1853,14 +1724,12 @@
 
 (define-instruction cmps (segment size)
   (:printer string-op ((op #b1010011)))
-  (:printer x66-string-op ((op #b1010011)))
   (:emitter
    (maybe-emit-operand-size-prefix segment size)
    (emit-byte segment (if (eq size :byte) #b10100110 #b10100111))))
 
 (define-instruction ins (segment acc)
   (:printer string-op ((op #b0110110)))
-  (:printer x66-string-op ((op #b0110110)))
   (:emitter
    (let ((size (operand-size acc)))
      (aver (accumulator-p acc))
@@ -1869,7 +1738,6 @@
 
 (define-instruction lods (segment acc)
   (:printer string-op ((op #b1010110)))
-  (:printer x66-string-op ((op #b1010110)))
   (:emitter
    (let ((size (operand-size acc)))
      (aver (accumulator-p acc))
@@ -1878,14 +1746,12 @@
 
 (define-instruction movs (segment size)
   (:printer string-op ((op #b1010010)))
-  (:printer x66-string-op ((op #b1010010)))
   (:emitter
    (maybe-emit-operand-size-prefix segment size)
    (emit-byte segment (if (eq size :byte) #b10100100 #b10100101))))
 
 (define-instruction outs (segment acc)
   (:printer string-op ((op #b0110111)))
-  (:printer x66-string-op ((op #b0110111)))
   (:emitter
    (let ((size (operand-size acc)))
      (aver (accumulator-p acc))
@@ -1894,7 +1760,6 @@
 
 (define-instruction scas (segment acc)
   (:printer string-op ((op #b1010111)))
-  (:printer x66-string-op ((op #b1010111)))
   (:emitter
    (let ((size (operand-size acc)))
      (aver (accumulator-p acc))
@@ -1903,7 +1768,6 @@
 
 (define-instruction stos (segment acc)
   (:printer string-op ((op #b1010101)))
-  (:printer x66-string-op ((op #b1010101)))
   (:emitter
    (let ((size (operand-size acc)))
      (aver (accumulator-p acc))
@@ -1915,26 +1779,11 @@
   (:emitter
    (emit-byte segment #b11010111)))
 
-(define-instruction rep (segment)
-  (:emitter
-   (emit-byte segment #b11110011)))
-
-(define-instruction repe (segment)
-  (:printer byte ((op #b11110011)))
-  (:emitter
-   (emit-byte segment #b11110011)))
-
-(define-instruction repne (segment)
-  (:printer byte ((op #b11110010)))
-  (:emitter
-   (emit-byte segment #b11110010)))
-
 
 ;;;; bit manipulation
 
 (define-instruction bsf (segment dst src)
   (:printer ext-reg-reg/mem ((op #b1011110) (width 0)))
-  (:printer x66-ext-reg-reg/mem ((op #b1011110) (width 0)))
   (:emitter
    (let ((size (matching-operand-size dst src)))
      (when (eq size :byte)
@@ -1946,7 +1795,6 @@
 
 (define-instruction bsr (segment dst src)
   (:printer ext-reg-reg/mem ((op #b1011110) (width 1)))
-  (:printer x66-ext-reg-reg/mem ((op #b1011110) (width 1)))
   (:emitter
    (let ((size (matching-operand-size dst src)))
      (when (eq size :byte)
@@ -1976,16 +1824,9 @@
                         (reg/mem nil :type word-reg/mem)
                         (imm nil :type imm-data)
                         (width 0)))
-      (x66-ext-reg/mem-imm ((op (#b1011101 ,subop))
-                            (reg/mem nil :type word-reg/mem)
-                            (imm nil :type imm-data)
-                            (width 0)))
       (ext-reg-reg/mem ((op ,(dpb subop (byte 3 2) #b1000001))
                         (width 1))
-                       (:name :tab reg/mem ", " reg))
-      (x66-ext-reg-reg/mem ((op ,(dpb subop (byte 3 2) #b1000001))
-                            (width 1))
-                           (:name :tab reg/mem ", " reg)))))
+                       (:name :tab reg/mem ", " reg)))))
 
 (define-instruction bt (segment src index)
   (:printer-list (bit-test-inst-printer-list #b100))
@@ -2134,7 +1975,6 @@
 ;;;; conditional move
 (define-instruction cmov (segment cond dst src)
   (:printer cond-move ())
-  (:printer x66-cond-move ())
   (:emitter
    (aver (register-p dst))
    (let ((size (matching-operand-size dst src)))
@@ -2332,13 +2172,6 @@
   (:printer byte ((op #b10011011)))
   (:emitter
    (emit-byte segment #b10011011)))
-
-;;; FIXME: It would be better to make the disassembler understand the prefix as part
-;;; of the instructions...
-(define-instruction lock (segment)
-  (:printer byte ((op #b11110000)))
-  (:emitter
-   (bug "LOCK prefix used as a standalone instruction")))
 
 ;;;; miscellaneous hackery
 
