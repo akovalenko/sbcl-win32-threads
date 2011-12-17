@@ -1626,12 +1626,12 @@ static DWORD os_protect_modes[8] = {
 static DWORD os_mmap_noexec_modes[8] = {
     PAGE_NOACCESS,
     PAGE_READONLY,
-    PAGE_READWRITE,
-    PAGE_READWRITE,
+    PAGE_WRITECOPY,
+    PAGE_WRITECOPY,
     PAGE_NOACCESS,
     PAGE_READONLY,
-    PAGE_READWRITE,
-    PAGE_READWRITE,
+    PAGE_WRITECOPY,
+    PAGE_WRITECOPY,
 };
 
 static DWORD os_mmap_exec_modes[8] = {
