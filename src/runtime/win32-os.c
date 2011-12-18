@@ -1641,8 +1641,8 @@ static DWORD os_mmap_exec_modes[8] = {
     PAGE_WRITECOPY,
     PAGE_EXECUTE,
     PAGE_EXECUTE_READ,
-    PAGE_EXECUTE_READWRITE,
-    PAGE_EXECUTE_READWRITE,
+    PAGE_EXECUTE_WRITECOPY,
+    PAGE_EXECUTE_WRITECOPY,
 };
 
 static DWORD* os_mmap_protect_modes = os_protect_modes;
@@ -2031,7 +2031,11 @@ os_protect(os_vm_address_t address, os_vm_size_t length, os_vm_prot_t prot)
         }
 #else
         AVER(VirtualProtect(address, length, os_mmap_protect_modes[prot],
-                            &old_prot));
+                            &old_prot)
+             || ((prot == OS_VM_PROT_ALL)&&
+                 (os_mmap_exec_modes[prot] = PAGE_EXECUTE_READWRITE,
+                  VirtualProtect(address, length, os_mmap_protect_modes[prot],
+                                 &old_prot))));
 #endif
     } else {
         if (mwwFlag && in_range_p(address, DYNAMIC_SPACE_START, dynamic_space_size)) {
