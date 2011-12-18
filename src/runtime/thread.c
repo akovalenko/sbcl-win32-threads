@@ -1205,10 +1205,6 @@ static inline boolean maybe_become_stw_initiator(boolean interrupt)
         /* We hold mx_gptransition. Is there no STW initiator yet? */
         if (!gc_dispatcher.th_stw_initiator) {
             odxprint(misc,"NULL STW IN GPTRANSITION, REPLACING",self);
-            /* Then we are... */
-            gc_dispatcher.th_stw_initiator = self;
-            gc_dispatcher.interrupt = interrupt;
-
             /* hold mx_gcing until we restart the world */
             pthread_mutex_lock(&gc_dispatcher.mx_gcing);
 
@@ -1218,6 +1214,16 @@ static inline boolean maybe_become_stw_initiator(boolean interrupt)
             /* we unmap it; other threads running Lisp code will now
                trap. */
             unmap_gc_page();
+
+            /* This thread becomes stop-the-world initiator. As long as we have
+             * an unlocked fast path around, it's important to avoid setting
+             * th_stw_initiator =before= unmap_gc_page, to ensure that no
+             * gc-triggering thread has a chance to run past its pseudo-atomic
+             * section and continue consing while we take mx_gcing and
+             * mx_gpunmapped. Eliminating fast path entirely is another possible
+             * option. */
+            gc_dispatcher.th_stw_initiator = self;
+            gc_dispatcher.interrupt = interrupt;
 
             /* stop counter; the world is not stopped yet. */
             gc_dispatcher.stopped = 0;
