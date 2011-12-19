@@ -259,6 +259,10 @@ static inline pthread_mutex_t* thread_qrl(struct thread* th)
 {
     return ((void *)th->alien_stack_start + ALIEN_STACK_SIZE);
 }
+static inline pthread_mutex_t* thread_qcont(struct thread* th)
+{
+    return ((void *)th->alien_stack_start + ALIEN_STACK_SIZE + sizeof(pthread_mutex_t));
+}
 #endif
 
 static int
@@ -303,7 +307,7 @@ initial_thread_trampoline(struct thread *th)
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
 #define THREAD_CSP_PAGE_SIZE BACKEND_PAGE_BYTES
 #define THREAD_STATE_LOCK_SIZE \
-    (sizeof(pthread_mutex_t))
+    (2*sizeof(pthread_mutex_t))
 #else
 #define THREAD_CSP_PAGE_SIZE 0
 #define THREAD_STATE_LOCK_SIZE \
@@ -718,6 +722,7 @@ create_thread_struct(lispobj initial_function) {
     th->os_attr=malloc(sizeof(pthread_attr_t));
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
     pthread_mutex_init(thread_qrl(th),NULL);
+    pthread_mutex_init(thread_qcont(th),NULL);
 #else
     th->state_sem=(os_sem_t *)((void *)th->alien_stack_start + ALIEN_STACK_SIZE);
     th->state_not_running_sem=(os_sem_t *)
@@ -1377,6 +1382,8 @@ void gc_stop_the_world()
             for_each_thread(p) {
                 if (p==self)
                     continue;
+                pthread_mutex_lock(thread_qcont(p));
+                pthread_mutex_unlock(thread_qcont(p));
                 if (SymbolTlValue(GC_SAFE,p)!=T) {
                     /* Wait for thread to `park'. NB it _always_ does
                        it with pending interrupt, so CSP locking is
@@ -1496,9 +1503,11 @@ static inline void thread_pitstop(os_context_t *ctxptr)
     if (inhibitor) {
         SetTlSymbolValue(STOP_FOR_GC_PENDING,T,self);
         /* Free qrl to let know we're ready... */
+        pthread_mutex_lock(thread_qcont(self));
         pthread_mutex_unlock(thread_qrl(self));
         pthread_mutex_lock(&gc_dispatcher.mx_gpunmapped);
         pthread_mutex_lock(thread_qrl(self));
+        pthread_mutex_unlock(thread_qcont(self));
         pthread_mutex_unlock(&gc_dispatcher.mx_gpunmapped);
         /* Enable FF-CSP recording (not hurt: will gc at pit-stop, and
            pit-stop always waits for GC end) */
@@ -1576,9 +1585,11 @@ static inline void thread_edge(os_context_t *ctxptr)
             pthread_mutex_unlock(&gc_dispatcher.mx_gcing);
         } else {
             SetTlSymbolValue(STOP_FOR_GC_PENDING,T,self);
+            pthread_mutex_lock(thread_qcont(self));
             pthread_mutex_unlock(thread_qrl(self));
             pthread_mutex_lock(&gc_dispatcher.mx_gpunmapped);
             pthread_mutex_lock(thread_qrl(self));
+            pthread_mutex_unlock(thread_qcont(self));
             pthread_mutex_unlock(&gc_dispatcher.mx_gpunmapped);
         }
     }
