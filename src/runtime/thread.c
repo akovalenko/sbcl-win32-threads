@@ -520,6 +520,7 @@ new_thread_trampoline(struct thread *th)
     if(th->tls_cookie>=0) arch_os_thread_cleanup(th);
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
     pthread_mutex_destroy(thread_qrl(th));
+    pthread_mutex_destroy(thread_qcont(th));
 #else
     os_sem_destroy(th->state_sem);
     os_sem_destroy(th->state_not_running_sem);
