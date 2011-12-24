@@ -266,8 +266,7 @@ initial_thread_trampoline(struct thread *th)
 #ifdef LISP_FEATURE_SB_THREAD
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
 #define THREAD_CSP_PAGE_SIZE BACKEND_PAGE_BYTES
-#define THREAD_STATE_LOCK_SIZE \
-    (2*sizeof(pthread_mutex_t))
+#define THREAD_STATE_LOCK_SIZE 0
 #else
 #define THREAD_CSP_PAGE_SIZE 0
 #define THREAD_STATE_LOCK_SIZE \
