@@ -266,12 +266,11 @@ initial_thread_trampoline(struct thread *th)
 #ifdef LISP_FEATURE_SB_THREAD
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
 #define THREAD_CSP_PAGE_SIZE BACKEND_PAGE_BYTES
-#define THREAD_STATE_LOCK_SIZE 0
 #else
 #define THREAD_CSP_PAGE_SIZE 0
+#endif
 #define THREAD_STATE_LOCK_SIZE \
     ((sizeof(os_sem_t))+(sizeof(os_sem_t))+(sizeof(os_sem_t)))
-#endif
 #else
 #define THREAD_STATE_LOCK_SIZE 0
 #define THREAD_CSP_PAGE_SIZE 0
@@ -909,9 +908,6 @@ create_thread_struct(lispobj initial_function) {
            sizeof(th->private_events.events[0]); ++i) {
       th->private_events.events[i] = CreateEvent(NULL,FALSE,FALSE,NULL);
     }
-    th->gc_safepoint_context = 0;
-    th->csp_around_foreign_call = 0;
-    th->pc_around_foreign_call = 0;
     th->synchronous_io_handle_and_flag = 0;
 #endif
     th->stepping = NIL;
