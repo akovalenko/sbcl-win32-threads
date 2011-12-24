@@ -228,43 +228,6 @@ static int run_lisp_function(lispobj function)
     return funcall0(function);
 }
 
-#ifdef LISP_FEATURE_SB_THREAD
-/* For safepoint-based builds, together with thread's
-   csp_around_foreign_call pointer target, thread_qrl(thread) makes
-   `quickly revokable lock'. Unlike most mutexes, this one is normally
-   locked; by convention, other thread may read and use the thread's
-   FFI-CSP location _either_ when the former holds the lock(mutex)
-   _or_ when page permissions for FFI-CSP location were set to
-   read-only.
-
-   Combined semantic of QRL is not the same as the semantic of mutex
-   returned by this function; rather, the mutex, when released by
-   the owning thread, provides an edge-triggered notification of QRL release,
-   which is represented by writing non-null *csp_around_foreign_call.
-
-   When owner thread is `in Lisp' (i.e. a heap mutator), its FFI-CSP
-   contains null, otherwise it points to the top of C stack that
-   should be preserved by GENCGC. If another thread needs to wait for
-   mutator state change with `in Lisp => in C' direction, it disables
-   FFI-CSP overwrite using page protection, and takes the mutex
-   returned by thread_qrl(). Page fault handler normally ends up in a
-   routine releasing this mutex and waiting for some appropriate event
-   to take it back.
-
-   This way, each thread may modify its own FFI-CSP content freely
-   without memory barriers (paying with exception handling overhead
-   whenever a contention happens).
-*/
-static inline pthread_mutex_t* thread_qrl(struct thread* th)
-{
-    return ((void *)th->alien_stack_start + ALIEN_STACK_SIZE);
-}
-static inline pthread_mutex_t* thread_qcont(struct thread* th)
-{
-    return ((void *)th->alien_stack_start + ALIEN_STACK_SIZE + sizeof(pthread_mutex_t));
-}
-#endif
-
 static int
 initial_thread_trampoline(struct thread *th)
 {
@@ -281,9 +244,6 @@ initial_thread_trampoline(struct thread *th)
     function = th->no_tls_value_marker;
     th->no_tls_value_marker = NO_TLS_VALUE_MARKER_WIDETAG;
     if(arch_os_thread_init(th)==0) return 1;
-#ifdef LISP_FEATURE_SB_THREAD
-    pthread_mutex_lock(thread_qrl(th));
-#endif
     link_thread(th);
     th->os_thread=thread_self();
 #ifndef LISP_FEATURE_WIN32
@@ -432,6 +392,133 @@ schedule_thread_post_mortem(struct thread *corpse)
 
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
 
+
+typedef enum {
+    GC_NONE=0,
+    GC_FLIGHT,
+    GC_MESSAGE,
+    GC_INVOKED,
+    GC_COLLECT,
+    GC_NPHASES
+}  gc_phase_t;
+
+/* Planned state progressions:
+ * 
+ * none -> flight: unmap_gc_page(). No blockers (GC_NONE can be left at any
+ * moment).
+ * 
+ * flight -> message: happens when a master thread enters its trap. The only
+ * blocker for flight mode is the master thread itself (GC_FLIGHT can't be left
+ * until the master thread traps).
+ *
+ * message -> invoked: happens after each (other) thread is notified, i.e. it
+ * will eventually stop (already stopped). map_gc_page(). Each thread with empty
+ * CSP disagrees to leave GC_MESSAGE phase. 
+ *
+ * invoked -> collect: happens when every gc-inhibitor comes to completion
+ * (that's normally pending interrupt trap). NB gc_stop_the_world, if it happens
+ * in non-master thread, "takes over" as a master, also deregistering itself as
+ * a blocker (i.e. it's ready to leave GC_INVOKED, but now it objects to leaving
+ * GC_COLLECT; this "usurpation" doesn't require any change to GC_COLLECT
+ * counter: for the counter, it's immaterial _which_ thread is waiting).
+ * 
+ * collect -> none: happens at gc_start_the_world (that should always happen in
+ * the master). Any thread waiting until GC end now continues. */
+
+struct gc_state {
+    /* Flag: conditions are initialized */
+    boolean initialized;
+
+    /* Per-process lock for gc_state */
+    pthread_mutex_t lock;
+
+    /* Conditions: one per phase */
+    pthread_cond_t phase_cond[GC_NPHASES];
+    
+    /* For each [current or future] phase, a number of threads not yet ready to
+     * leave it */
+    int phase_wait[GC_NPHASES];
+
+    /* Master thread controlling the topmost stop/gc/start sequence */
+    struct thread* master;
+
+    /* Current GC phase */
+    gc_phase_t phase;
+};
+
+static struct gc_state gc_state = {
+    .lock = PTHREAD_MUTEX_INITIALIZER,
+    .phase = GC_NONE,
+};
+
+
+/* set_thread_csp_access -- alter page permissions for not-in-Lisp
+   flag (Lisp Stack Top) of the thread `p'. The flag may be modified
+   if `writable' is true.
+
+   Return true if there is a non-null value in the flag.
+
+   When a thread enters C code or leaves it, a per-thread location is
+   modified. That machine word serves as a not-in-Lisp flag; for
+   convenience, when in C, it's filled with a topmost stack location
+   that may contain Lisp data. When thread is in Lisp, the word
+   contains NULL.
+
+   GENCGC uses each thread's flag value for conservative garbage collection.
+
+   There is a full VM page reserved for this word; page permissions
+   are switched to read-only for race-free examine + wait + use
+   scenarios. */
+
+static inline boolean set_thread_csp_access(struct thread* p, boolean writable)
+{
+    os_protect(p->csp_around_foreign_call,sizeof(lispobj),
+               writable? (OS_VM_PROT_READ|OS_VM_PROT_WRITE)
+               : (OS_VM_PROT_READ));
+    return !!*p->csp_around_foreign_call;
+}
+
+static inline void gc_state_lock()
+{
+    odxprint(safepoints,"GC state [%p] to be locked",gc_state.lock);
+    gc_assert(0==pthread_mutex_lock(&gc_state.lock));
+    if (gc_state.master) {
+        fprintf(stderr,"GC state lock glitch [%p] in thread %p phase %d\n",
+                gc_state.master,arch_os_get_current_thread(),gc_state.phase);
+        odxprint(safepoints,"GC state lock glitch [%p]",gc_state.master);
+    }
+    gc_assert(!gc_state.master);
+    gc_state.master = arch_os_get_current_thread();
+    if (!gc_state.initialized) {
+        int i;
+        for (i=GC_NONE; i<GC_NPHASES; ++i)
+            pthread_cond_init(&gc_state.phase_cond[i],NULL);
+        gc_state.initialized = 1;
+    }
+    odxprint(safepoints,"GC state [%p] locked in phase %d",gc_state.lock, gc_state.phase);
+}
+
+static inline void gc_state_unlock()
+{
+    odxprint(safepoints,"GC state to be unlocked in phase %d",gc_state.phase);
+    gc_assert(arch_os_get_current_thread()==gc_state.master);
+    gc_state.master = NULL;
+    gc_assert(0==pthread_mutex_unlock(&gc_state.lock));
+    odxprint(safepoints,"%s","GC state unlocked");
+}
+
+static inline void gc_state_wait(gc_phase_t phase)
+{
+    struct thread* self = arch_os_get_current_thread();
+    odxprint(safepoints,"Waiting for %d -> %d [%d holders]",gc_state.phase,phase,gc_state.phase_wait[gc_state.phase]);
+    gc_assert(gc_state.master == self);
+    gc_state.master = NULL;
+    while(gc_state.phase != phase)
+        pthread_cond_wait(&gc_state.phase_cond[phase],&gc_state.lock);
+    gc_assert(gc_state.master == NULL);
+    gc_state.master = self;
+}
+
 #endif
 
 /* this is the first thing that runs in the child (which is why the
@@ -476,18 +563,21 @@ new_thread_trampoline(struct thread *th)
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
     *th->csp_around_foreign_call = (lispobj)&function;
     odxprint(safepoints, "New thread to be linked: %p\n", th);
-    pthread_mutex_lock(thread_qrl(th));
 #endif
     lock_ret = pthread_mutex_lock(&all_threads_lock);
     gc_assert(lock_ret == 0);
+
     link_thread(th);
+    
     lock_ret = pthread_mutex_unlock(&all_threads_lock);
-
-
+    
     odxprint(safepoints, "...Linked: %p\n", th);
     gc_assert(lock_ret == 0);
 
 #ifdef LISP_FEATURE_SB_GC_SAFEPOINT
+    gc_state_lock();
+    gc_state_wait(GC_NONE);
+    gc_state_unlock();
     BEGIN_GC_UNSAFE_CODE;
 #endif
     result = run_lisp_function(function);
@@ -513,15 +603,10 @@ new_thread_trampoline(struct thread *th)
     unlink_thread(th);
     lock_ret = pthread_mutex_unlock(&all_threads_lock);
     gc_assert(lock_ret == 0);
-
-    pthread_mutex_unlock(thread_qrl(th));
 #endif  /* safepoints */
 
     if(th->tls_cookie>=0) arch_os_thread_cleanup(th);
-#ifdef LISP_FEATURE_SB_GC_SAFEPOINT
-    pthread_mutex_destroy(thread_qrl(th));
-    pthread_mutex_destroy(thread_qcont(th));
-#else
+#ifndef LISP_FEATURE_SB_GC_SAFEPOINT
     os_sem_destroy(th->state_sem);
     os_sem_destroy(th->state_not_running_sem);
     os_sem_destroy(th->state_not_stopped_sem);
@@ -721,10 +806,7 @@ create_thread_struct(lispobj initial_function) {
 
 #ifdef LISP_FEATURE_SB_THREAD
     th->os_attr=malloc(sizeof(pthread_attr_t));
-#ifdef LISP_FEATURE_SB_GC_SAFEPOINT
-    pthread_mutex_init(thread_qrl(th),NULL);
-    pthread_mutex_init(thread_qcont(th),NULL);
-#else
+#ifndef LISP_FEATURE_SB_GC_SAFEPOINT
     th->state_sem=(os_sem_t *)((void *)th->alien_stack_start + ALIEN_STACK_SIZE);
     th->state_not_running_sem=(os_sem_t *)
         ((void *)th->state_sem + (sizeof(os_sem_t)));
@@ -1096,526 +1178,252 @@ const char * t_nil_s(lispobj symbol)
   return t_nil_str(SymbolValue(symbol, self));
 }
 
-
-/* Several ideas on interthread signalling should be
-   tried. Implementation below was chosen for its moderate size and
-   relative simplicity.
-
-   Mutex is the only (conventional) system synchronization primitive
-   used by it. Some of the code below looks weird with this
-   limitation; rwlocks, Windows Event Objects, or perhaps pthread
-   barriers could be used to improve clarity.
-
-   No condvars here: our pthreads_win32 is great, but it doesn't
-   provide wait morphing optimization; let's avoid extra context
-   switches and extra contention. */
-
-struct gc_dispatcher {
-
-    /* Held by the first thread that decides to signal all others, for
-       the entire period while common GC safepoint page is
-       unmapped. This thread is called `STW (stop-the-world)
-       initiator' below. */
-    pthread_mutex_t mx_gpunmapped;
-
-    /* Held by STW initiator while it updates th_stw_initiator and
-       takes other locks in this structure */
-    pthread_mutex_t mx_gptransition;
-
-    /* Held by STW initiator until the world should be started (GC
-       complete, interrupts delivered). */
-    pthread_mutex_t mx_gcing;
-
-    /* Held by a SUB-GC's gc_stop_the_world() when thread in SUB-GC
-       holds the GC Lisp-level mutex, but _couldn't_ become STW
-       initiator (i.e. another thread is already stopping the
-       world). */
-    pthread_mutex_t mx_subgc;
-
-    /* First thread (at this round) that decided to stop the world */
-    struct thread *th_stw_initiator;
-
-    /* Thread running SUB-GC under the `supervision' of STW
-       initiator */
-    struct thread *th_subgc;
-
-    /* Stop counter. Nested gc-stop-the-world and gc-start-the-world
-       work without thundering herd. */
-    int stopped;
-
-    /* Interrupt flag: Iff true, current STW initiator is delivering
-       interrupts and not GCing. */
-    boolean interrupt;
-
-} gc_dispatcher = {
-    /* mutexes lazy initialized, other data initially zeroed */
-    .mx_gpunmapped = PTHREAD_MUTEX_INITIALIZER,
-    .mx_gptransition = PTHREAD_MUTEX_INITIALIZER,
-    .mx_gcing = PTHREAD_MUTEX_INITIALIZER,
-    .mx_subgc = PTHREAD_MUTEX_INITIALIZER,
-};
-
-
-/* set_thread_csp_access -- alter page permissions for not-in-Lisp
-   flag (Lisp Stack Top) of the thread `p'. The flag may be modified
-   if `writable' is true.
-
-   Return true if there is a non-null value in the flag.
-
-   When a thread enters C code or leaves it, a per-thread location is
-   modified. That machine word serves as a not-in-Lisp flag; for
-   convenience, when in C, it's filled with a topmost stack location
-   that may contain Lisp data. When thread is in Lisp, the word
-   contains NULL.
-
-   GENCGC uses each thread's flag value for conservative garbage collection.
-
-   There is a full VM page reserved for this word; page permissions
-   are switched to read-only for race-free examine + wait + use
-   scenarios. */
-static inline boolean set_thread_csp_access(struct thread* p, boolean writable)
-{
-    os_protect(p->csp_around_foreign_call,sizeof(lispobj),
-               writable? (OS_VM_PROT_READ|OS_VM_PROT_WRITE)
-               : (OS_VM_PROT_READ));
-    return !!*p->csp_around_foreign_call;
+static inline gc_phase_t gc_phase_next(gc_phase_t old) {
+    return (old+1) % GC_NPHASES;
 }
 
-
-/* maybe_become_stw_initiator -- if there is no stop-the-world action
-   in progress, begin it by unmapping GC page, and record current
-   thread as STW initiator.
-
-   `interrupt' flag affects some subtleties of stop/start methods:
-   waiting for other threads allowing GC; setting and clearing
-   STOP_FOR_GC_PENDING, GC_PENDING, INTERRUPT_PENDING, etc.
-
-   Return true if current thread becomes a GC initiator, or already
-   _is_ a STW initiator.
-
-   Unlike gc_stop_the_world and gc_start_the_world (that should be
-   used in matching pairs), maybe_become_stw_initiator is idempotent
-   within a stop-restart cycle. With this call, a thread may `reserve
-   the right' to stop the world as early as it wants. */
-
-static inline boolean maybe_become_stw_initiator(boolean interrupt)
+static inline void gc_notify()
 {
-    struct thread* self = arch_os_get_current_thread();
-
-    /* Double-checked locking. Possible word tearing on some
-       architectures, FIXME FIXME, but let's think of it when GENCGC
-       and threaded SBCL is ported to them. */
-    if (!gc_dispatcher.th_stw_initiator) {
-        odxprint(misc,"NULL STW BEFORE GPTRANSITION",self);
-        pthread_mutex_lock(&gc_dispatcher.mx_gptransition);
-        /* We hold mx_gptransition. Is there no STW initiator yet? */
-        if (!gc_dispatcher.th_stw_initiator) {
-            odxprint(misc,"NULL STW IN GPTRANSITION, REPLACING",self);
-            /* hold mx_gcing until we restart the world */
-            pthread_mutex_lock(&gc_dispatcher.mx_gcing);
-
-            /* and mx_gpunmapped until we remap common GC page */
-            pthread_mutex_lock(&gc_dispatcher.mx_gpunmapped);
-
-            /* we unmap it; other threads running Lisp code will now
-               trap. */
-            unmap_gc_page();
-
-            /* This thread becomes stop-the-world initiator. As long as we have
-             * an unlocked fast path around, it's important to avoid setting
-             * th_stw_initiator =before= unmap_gc_page, to ensure that no
-             * gc-triggering thread has a chance to run past its pseudo-atomic
-             * section and continue consing while we take mx_gcing and
-             * mx_gpunmapped. Eliminating fast path entirely is another possible
-             * option. */
-            gc_dispatcher.th_stw_initiator = self;
-            gc_dispatcher.interrupt = interrupt;
-
-            /* stop counter; the world is not stopped yet. */
-            gc_dispatcher.stopped = 0;
-        }
-        pthread_mutex_unlock(&gc_dispatcher.mx_gptransition);
-    }
-    return gc_dispatcher.th_stw_initiator == self;
-}
-
-
-/* maybe_let_the_world_go -- if current thread is a STW initiator,
-   unlock internal GC structures, and return true. */
-static inline boolean maybe_let_the_world_go()
-{
-    struct thread* self = arch_os_get_current_thread();
-    if (gc_dispatcher.th_stw_initiator == self) {
-        pthread_mutex_lock(&gc_dispatcher.mx_gptransition);
-        if (gc_dispatcher.th_stw_initiator == self) {
-            gc_dispatcher.th_stw_initiator = NULL;
-        }
-        pthread_mutex_unlock(&gc_dispatcher.mx_gcing);
-        pthread_mutex_unlock(&gc_dispatcher.mx_gptransition);
-        return 1;
-    } else {
-        return 0;
-    }
-}
-
-
-/* gc_stop_the_world -- become STW initiator (waiting for other GCs to
-   complete if necessary), and make sure all other threads are either
-   stopped or gc-safe (i.e. running foreign calls).
-
-   If GC initiator already exists, gc_stop_the_world() either waits
-   for its completion, or cooperates with it: e.g. concurrent pending
-   interrupt handler allows (SUB-GC) to complete under its
-   `supervision'.
-
-   Code sections bounded by gc_stop_the_world and gc_start_the_world
-   may be nested; inner calls don't stop or start threads,
-   decrementing or incrementing the stop counter instead. */
-void gc_stop_the_world()
-{
-    struct thread* self = arch_os_get_current_thread(), *p;
-    boolean interrupt;
-    if (SymbolTlValue(GC_INHIBIT,self)!=T) {
-        /* If GC is enabled, this thread may wait for current STW
-           initiator without causing deadlock. */
-        if (!maybe_become_stw_initiator(0)) {
-            pthread_mutex_lock(&gc_dispatcher.mx_gcing);
-            maybe_become_stw_initiator(0);
-            pthread_mutex_unlock(&gc_dispatcher.mx_gcing);
-        }
-        /* Now _this thread_ should be STW initiator */
-        gc_assert(self == gc_dispatcher.th_stw_initiator);
-    } else {
-        /* GC inhibited; e.g. we are inside SUB-GC */
-        if (!maybe_become_stw_initiator(0)) {
-            /* Some trouble. Inside SUB-GC, holding the Lisp-side
-               mutex, but some other thread is stopping the world. */
-            if (gc_dispatcher.interrupt) {
-                /* Interrupt. Wait until it's delivered */
-                pthread_mutex_lock(&gc_dispatcher.mx_gcing);
-                /* Warning: mx_gcing is held recursively. */
-                gc_assert(maybe_become_stw_initiator(0));
-                pthread_mutex_unlock(&gc_dispatcher.mx_gcing);
-            } else {
-                /* In SUB-GC, holding mutex; other thread wants to
-                   GC. */
-                if (gc_dispatcher.th_subgc == self) {
-                    /* There is an outer gc_stop_the_world() by _this_
-                       thread, running subordinately to initiator.
-                       Just increase stop counter. */
-                    ++gc_dispatcher.stopped;
-                    return;
-                }
-                /* Register as subordinate collector thread: take
-                   mx_subgc */
-                pthread_mutex_lock(&gc_dispatcher.mx_subgc);
-                ++gc_dispatcher.stopped;
-
-                /* Unlocking thread's own thread_qrl() designates
-                   `time to examine me' to other threads. */
-                pthread_mutex_unlock(thread_qrl(self));
-
-                /* STW (GC) initiator thread will see our thread needs
-                   to finish GC. It will stop the world and itself,
-                   and unlock its qrl. */
-                pthread_mutex_lock(thread_qrl(gc_dispatcher.th_stw_initiator));
-                return;
-            }
-        }
-    }
-    interrupt = gc_dispatcher.interrupt; /* Interrupt or GC? */
-    if (!gc_dispatcher.stopped++) {
-        /* Outermost stop: signal other threads */
-        pthread_mutex_lock(&all_threads_lock);
-        /* Phase 1: ensure all threads are aware of the need to stop,
-           or locked in the foreign code. */
-        for_each_thread(p) {
-            pthread_mutex_t *p_qrl = thread_qrl(p);
-            if (p==self)
-                continue;
-
-            /* Read-protect p's flag */
-            if (!set_thread_csp_access(p,0)) {
-                odxprint(safepoints,"taking qrl %p of %p", p_qrl, p);
-                /* Thread is in Lisp, so it should trap (either in
-                   Lisp or in Lisp->FFI transition). Trap handler
-                   unlocks thread_qrl(p); when it happens, we're safe
-                   to examine that thread. */
-                pthread_mutex_lock(p_qrl);
-                odxprint(safepoints,"taken qrl %p of %p", p_qrl, p);
-                /* Mark thread for the future: should we collect, or
-                   wait for its final permission? */
-                if (SymbolTlValue(GC_INHIBIT,p)!=T) {
-                    SetTlSymbolValue(GC_SAFE,T,p);
-                } else {
-                    SetTlSymbolValue(GC_SAFE,NIL,p);
-                }
-                pthread_mutex_unlock(p_qrl);
-            } else {
-                /* In C; we just disabled writing. */
-                if (!interrupt) {
-                    if (SymbolTlValue(GC_INHIBIT,p)==T) {
-                        /* GC inhibited there */
-                        SetTlSymbolValue(STOP_FOR_GC_PENDING,T,p);
-                        /* Enable writing.  Such threads trap by
-                           pending interrupt when WITHOUT-GCING
-                           section ends */
-                        set_thread_csp_access(p,1);
-                        SetTlSymbolValue(GC_SAFE,NIL,p);
-                    } else {
-                        /* Thread allows concurrent GC. It runs in C
-                           (not a mutator), its in-Lisp flag is
-                           read-only (so it traps on return). */
-                        SetTlSymbolValue(GC_SAFE,T,p);
-                    }
-                }
-            }
-        }
-        /* All threads are ready (GC_SAFE == T) or notified (GC_SAFE == NIL). */
-        map_gc_page();
-        pthread_mutex_unlock(&gc_dispatcher.mx_gpunmapped);
-        /* Threads with GC inhibited -- continued */
-        odxprint(safepoints,"after remapping GC page %p",self);
-
-        SetTlSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
-        if (!interrupt) {
-            struct thread* priority_gc = NULL;
-            for_each_thread(p) {
-                if (p==self)
-                    continue;
-                pthread_mutex_lock(thread_qcont(p));
-                pthread_mutex_unlock(thread_qcont(p));
-                if (SymbolTlValue(GC_SAFE,p)!=T) {
-                    /* Wait for thread to `park'. NB it _always_ does
-                       it with pending interrupt, so CSP locking is
-                       not needed */
-                    odxprint(safepoints,"waiting final parking %p (qrl %p)",p, thread_qrl(p));
-                    pthread_mutex_lock(thread_qrl(p));
-                    if (SymbolTlValue(GC_INHIBIT,p)==T) {
-                        /* Concurrent GC invoked manually */
-                        gc_assert(!priority_gc); /* Should be at most one at a time */
-                        priority_gc = p;
-                    }
-                    pthread_mutex_unlock(thread_qrl(p));
-                }
-            }
-            if (priority_gc) {
-                /* This thread is managing the entire process, so it
-                   has to allow manually-invoked GC to complete */
-                if (!set_thread_csp_access(self,1)) {
-                    /* Create T.O.S. */
-                    *self->csp_around_foreign_call = (lispobj)__builtin_frame_address(0);
-                    /* Unlock myself */
-                    pthread_mutex_unlock(thread_qrl(self));
-                    /* Priority GC should take over, holding
-                       mx_subgc until it's done. */
-                    pthread_mutex_lock(&gc_dispatcher.mx_subgc);
-                    /* Lock myself */
-                    pthread_mutex_lock(thread_qrl(self));
-                    *self->csp_around_foreign_call = 0;
-                    SetTlSymbolValue(GC_PENDING,NIL,self);
-                    pthread_mutex_unlock(&gc_dispatcher.mx_subgc);
-                } else {
-                    /* Unlock myself */
-                    pthread_mutex_unlock(thread_qrl(self));
-                    /* Priority GC should take over, holding
-                       mx_subgc until it's done. */
-                    pthread_mutex_lock(&gc_dispatcher.mx_subgc);
-                    /* Lock myself */
-                    pthread_mutex_lock(thread_qrl(self));
-                    /* Unlock sub-gc */
-                    pthread_mutex_unlock(&gc_dispatcher.mx_subgc);
-                }
-            }
-        }
-    }
-}
-
-
-/* gc_start_the_world() -- restart all other threads if the call
-   matches the _outermost_ gc_stop_the_world(), or decrement the stop
-   counter. */
-void gc_start_the_world()
-{
-    struct thread* self = arch_os_get_current_thread(), *p;
-    boolean interrupt = gc_dispatcher.interrupt;
-    if (gc_dispatcher.th_stw_initiator != self) {
-        odxprint(misc,"Unmapper %p self %p",gc_dispatcher.th_stw_initiator,self);
-        gc_assert (gc_dispatcher.th_subgc == self);
-        if (--gc_dispatcher.stopped == 1) {
-            gc_dispatcher.th_subgc = NULL;
-            pthread_mutex_unlock(&gc_dispatcher.mx_subgc);
-            /* GC initiator may continue now */
-            pthread_mutex_unlock(thread_qrl(gc_dispatcher.th_stw_initiator));
-        }
-        return;
-    }
-
-    gc_assert(gc_dispatcher.th_stw_initiator == self);
-
-    if (!--gc_dispatcher.stopped) {
-        for_each_thread(p) {
-            if (!interrupt) {
-                SetTlSymbolValue(STOP_FOR_GC_PENDING,NIL,p);
-                SetTlSymbolValue(GC_PENDING,NIL,p);
-            }
-            if (SymbolTlValue(INTERRUPT_PENDING,p)!=T ||
-                SymbolTlValue(INTERRUPTS_ENABLED,p)!=T)
-                set_thread_csp_access(p,1);
-        }
-        pthread_mutex_unlock(&all_threads_lock);
-        /* Release everyone */
-        maybe_let_the_world_go();
-    }
-}
-
-
-/* in_race_p() -- return TRUE if no other thread is inside SUB-GC with
-   GC-PENDING :IN-PROGRESS. Used to prevent deadlock between manual
-   SUB-GC, auto-gc and interrupt. */
-static inline boolean in_race_p()
-{
-    struct thread* self = arch_os_get_current_thread(), *p;
-    boolean result = 0;
+    struct thread *self = arch_os_get_current_thread(), *p;
+    odxprint(safepoints,"%s","global notification");
     pthread_mutex_lock(&all_threads_lock);
     for_each_thread(p) {
-        if (p!=self &&
-            SymbolTlValue(GC_PENDING,p)!=T &&
-            SymbolTlValue(GC_PENDING,p)!=NIL) {
-            result = 1;
-            break;
+        if (p==self)
+            continue;
+        odxprint(safepoints,"notifying thread %p",p);
+        if (!set_thread_csp_access(p,0)) {
+            gc_state.phase_wait[GC_MESSAGE]++;
+            odxprint(safepoints,"unnotified threads: %d with added %p",
+                     gc_state.phase_wait[GC_MESSAGE],p);
+        } else {
+            if (SymbolTlValue(GC_INHIBIT,p)==T) {
+                gc_state.phase_wait[GC_INVOKED]++;
+                odxprint(safepoints,"notified threads: %d with added %p",
+                         gc_state.phase_wait[GC_INVOKED],p);
+                SetTlSymbolValue(STOP_FOR_GC_PENDING,T,p);
+                set_thread_csp_access(p,1);
+            }
         }
     }
     pthread_mutex_unlock(&all_threads_lock);
-    if (result) {
+}
+
+static inline void gc_done()
+{
+    struct thread *self = arch_os_get_current_thread(), *p;
+    boolean inhibit = (SymbolTlValue(GC_INHIBIT,self)==T);
+    
+    odxprint(safepoints,"%s","global denotification");
+    pthread_mutex_lock(&all_threads_lock);
+    for_each_thread(p) {
+        if (inhibit)
+            SetTlSymbolValue(GC_PENDING,NIL,p);
+        set_thread_csp_access(p,1);
+    }
+    pthread_mutex_unlock(&all_threads_lock);
+}
+
+static inline void gc_handle_phase()
+{
+    odxprint(safepoints,"Entering phase %d",gc_state.phase);
+    switch (gc_state.phase) {
+    case GC_FLIGHT:
+        unmap_gc_page();
+        break;
+    case GC_MESSAGE:
+        gc_notify();
+        break;
+    case GC_INVOKED:
         map_gc_page();
-        pthread_mutex_unlock(&gc_dispatcher.mx_gpunmapped);
-        maybe_let_the_world_go();
-    }
-    return result;
-}
-
-static inline void thread_pitstop(os_context_t *ctxptr)
-{
-    struct thread* self = arch_os_get_current_thread(), *p;
-    boolean inhibitor = (SymbolTlValue(GC_INHIBIT,self)==T);
-
-    odxprint(safepoints,"pitstop [%p]", ctxptr);
-    if (inhibitor) {
-        SetTlSymbolValue(STOP_FOR_GC_PENDING,T,self);
-        /* Free qrl to let know we're ready... */
-        pthread_mutex_lock(thread_qcont(self));
-        pthread_mutex_unlock(thread_qrl(self));
-        pthread_mutex_lock(&gc_dispatcher.mx_gpunmapped);
-        pthread_mutex_lock(thread_qrl(self));
-        pthread_mutex_unlock(thread_qcont(self));
-        pthread_mutex_unlock(&gc_dispatcher.mx_gpunmapped);
-        /* Enable FF-CSP recording (not hurt: will gc at pit-stop, and
-           pit-stop always waits for GC end) */
-        set_thread_csp_access(self,1);
-    } else {
-        if (self == gc_dispatcher.th_stw_initiator && gc_dispatcher.stopped) {
-            set_thread_csp_access(self,1);
-            check_pending_gc();
-            return;
-        }
-        if ((SymbolTlValue(GC_PENDING,self)!=NIL) &&
-            maybe_become_stw_initiator(0) && !in_race_p()) {
-            gc_stop_the_world();
-            set_thread_csp_access(self,1);
-            check_pending_gc();
-            gc_start_the_world();
-        } else {
-            /* An innocent thread which is not an initiator _and_ is
-               not objecting. */
-            odxprint(safepoints,"pitstop yielding [%p]", ctxptr);
-            if (!set_thread_csp_access(self,1)) {
-                *self->csp_around_foreign_call = (lispobj)ctxptr;
-                pthread_mutex_unlock(thread_qrl(self));
-                pthread_mutex_lock(&gc_dispatcher.mx_gcing);
-                *self->csp_around_foreign_call = 0;
-                pthread_mutex_lock(thread_qrl(self));
-                pthread_mutex_unlock(&gc_dispatcher.mx_gcing);
-            } else {
-                pthread_mutex_lock(&gc_dispatcher.mx_gcing);
-                set_thread_csp_access(self,1);
-                BEGIN_GC_UNSAFE_CODE;
-                pthread_mutex_unlock(&gc_dispatcher.mx_gcing);
-                while(check_pending_interrupts(ctxptr));
-                END_GC_UNSAFE_CODE;
-                return;
-            }
-        }
-    }
-    while(check_pending_interrupts(ctxptr));
-}
-
-static inline void thread_edge(os_context_t *ctxptr)
-{
-    struct thread *self = arch_os_get_current_thread();
-    set_thread_csp_access(self,1);
-    if (os_get_csp(self)) {
-        if (!self->pc_around_foreign_call)
-            return;             /* trivialize */
-        odxprint(safepoints,"edge leaving [%p]", ctxptr);
-        if (SymbolTlValue(GC_INHIBIT,self)!=T) {
-            if (SymbolTlValue(INTERRUPT_PENDING,self)==T &&
-                SymbolTlValue(INTERRUPTS_ENABLED,self)==T) {
-                pthread_mutex_lock(&gc_dispatcher.mx_gcing);
-                set_thread_csp_access(self,1);
-                BEGIN_GC_UNSAFE_CODE;
-                pthread_mutex_unlock(&gc_dispatcher.mx_gcing);
-                while(check_pending_interrupts(ctxptr));
-                END_GC_UNSAFE_CODE;
-            } else {
-                pthread_mutex_lock(&gc_dispatcher.mx_gcing);
-                odxprint(safepoints,"edge leaving [%p] took gcing", ctxptr);
-                pthread_mutex_unlock(&gc_dispatcher.mx_gcing);
-                odxprint(safepoints,"edge leaving [%p] released gcing", ctxptr);
-            }
-        }
-    } else {
-        /* Entering. */
-        odxprint(safepoints,"edge entering [%p]", ctxptr);
-        while(check_pending_interrupts(ctxptr));
-        *self->csp_around_foreign_call = (lispobj)ctxptr;
-        if (SymbolTlValue(GC_INHIBIT,self)!=T) {
-            pthread_mutex_unlock(thread_qrl(self));
-            pthread_mutex_lock(&gc_dispatcher.mx_gcing);
-            pthread_mutex_lock(thread_qrl(self));
-            pthread_mutex_unlock(&gc_dispatcher.mx_gcing);
-        } else {
-            SetTlSymbolValue(STOP_FOR_GC_PENDING,T,self);
-            pthread_mutex_lock(thread_qcont(self));
-            pthread_mutex_unlock(thread_qrl(self));
-            pthread_mutex_lock(&gc_dispatcher.mx_gpunmapped);
-            pthread_mutex_lock(thread_qrl(self));
-            pthread_mutex_unlock(thread_qcont(self));
-            pthread_mutex_unlock(&gc_dispatcher.mx_gpunmapped);
-        }
+        break;
+    case GC_COLLECT:
+        break;
+    case GC_NONE:
+        gc_done();
+        break;
+    default:
+        break;
     }
 }
+/* become ready to leave the <old> phase, but unready to leave the <new> phase;
+ * `old' can be GC_NONE, it means this thread weren't blocking any state.  `cur'
+ * can be GC_NONE, it means this thread wouldn't block GC_NONE, but still wait
+ * for it. */
+static inline void gc_advance(gc_phase_t cur, gc_phase_t old) {
+    odxprint(safepoints,"GC advance request %d -> %d in phase %d",old,cur,gc_state.phase);
+    if (cur == old)
+        return;
+    if (cur == gc_state.phase)
+        return;
+    if (old < gc_state.phase)
+        old = GC_NONE;
+    if (old != GC_NONE) {
+        gc_state.phase_wait[old]--;
+        odxprint(safepoints,"%d holders of phase %d without me",gc_state.phase_wait[old],old);
+    }
+    if (cur != GC_NONE) {
+        gc_state.phase_wait[cur]++;
+        odxprint(safepoints,"%d holders of phase %d with me",gc_state.phase_wait[cur],cur);
+    }
+    /* roll forth as long as there's no waiters */
+    while (gc_state.phase_wait[gc_state.phase]==0
+           && gc_state.phase != cur) {
+        gc_state.phase = gc_phase_next(gc_state.phase);
+        odxprint(safepoints,"no blockers, direct advance to %d",gc_state.phase);
+        gc_handle_phase();
+        pthread_cond_broadcast(&gc_state.phase_cond[gc_state.phase]);
+    }
+    odxprint(safepoints,"going to wait for %d threads",gc_state.phase_wait[gc_state.phase]);
+    gc_state_wait(cur);
+}
 
-
-/* thread_register_gc_trigger --
-
-   Called by GENCGC in each thread where GC_PENDING becomes T because
-   allocated memory size has crossed the threshold in
-   auto_gc_trigger. For the new collective GC sequence, its first call
-   marks a process-wide beginning of GC.
-*/
 void thread_register_gc_trigger()
 {
-    struct thread* self = arch_os_get_current_thread();
-    /* This function should be called instead of former
-       set_pseudo_atomic_interrupted(), e.g. never with true
-       GC_INHIBIT */
-    gc_assert(SymbolTlValue(GC_INHIBIT,self)!=T);
-
-    /* unmap GC page, signal other threads... */
-    maybe_become_stw_initiator(0);
+    odxprint(safepoints,"%s","GC triggered");
+    gc_state_lock();
+    if (gc_state.phase == GC_NONE) {
+        gc_advance(GC_FLIGHT,GC_NONE);
+    }
+    gc_state_unlock();
 }
 
+void thread_in_lisp_raised(os_context_t *ctxptr)
+{
+    struct thread *self = arch_os_get_current_thread();
+    boolean inhibit = (SymbolTlValue(GC_INHIBIT,self)==T);
+    odxprint(safepoints,"GC page access in phase %d inhibit %d",gc_state.phase,inhibit);
+    gc_state_lock();
+    if (inhibit) {
+        if (gc_state.phase != GC_INVOKED) {
+            gc_state_wait(GC_MESSAGE);
+            SetTlSymbolValue(STOP_FOR_GC_PENDING,T,self);
+            gc_advance(GC_INVOKED,GC_MESSAGE);
+        }
+    } else {
+        if (gc_state.phase == GC_FLIGHT) {
+            if (SymbolTlValue(GC_PENDING,self)==T) {
+                odxprint(safepoints,"%s","Picked up GC in flight");
+                *self->csp_around_foreign_call = (word_t)ctxptr;
+                gc_advance(GC_COLLECT,GC_FLIGHT);
+                if (gc_state.phase_wait[GC_COLLECT]!=1) {
+                    SetTlSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
+                    gc_advance(GC_NONE,GC_COLLECT);
+                    *self->csp_around_foreign_call = 0;
+                    gc_state_unlock();
+                    while(check_pending_interrupts(ctxptr));
+                    return;
+                } else {
+                    *self->csp_around_foreign_call = 0;
+                    gc_state_unlock();
+                    if (!check_pending_gc()) {
+                        gc_state_lock();
+                        if (gc_state.phase == GC_COLLECT)
+                            gc_advance(GC_COLLECT,GC_NONE);
+                        gc_state_unlock();
+                    }
+                    while(check_pending_interrupts(ctxptr));
+                    return;
+                }
+            } else {
+                odxprint(safepoints,"%s","Assisting GC in flight");
+                *self->csp_around_foreign_call = (word_t)ctxptr;
+                gc_advance(GC_NONE,GC_NONE); /* wait for completion */
+                *self->csp_around_foreign_call = 0;
+            }
+        } else {
+            SetTlSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
+            if (gc_state.phase == GC_MESSAGE ||
+                gc_state.phase == GC_INVOKED) {
+                SetTlSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
+                set_thread_csp_access(self,1);
+                *self->csp_around_foreign_call = (word_t)ctxptr;
+                gc_advance(GC_NONE,gc_state.phase);
+                *self->csp_around_foreign_call = 0;
+            }
+        }
+    }
+    gc_state_unlock();
+    while(check_pending_interrupts(ctxptr));
+    return;
+}
+
+void thread_in_safety_transition(os_context_t *ctxptr)
+{
+    struct thread *self = arch_os_get_current_thread();
+    boolean inhibit = (SymbolTlValue(GC_INHIBIT,self)==T);
+    odxprint(safepoints,"%s","GC safety transition");
+    gc_state_lock();
+    if (set_thread_csp_access(self,1)) {
+        if (inhibit) {
+            if (gc_state.phase != GC_NONE) {
+                gc_state_wait(GC_INVOKED);
+            }
+            gc_state_unlock();
+        } else {
+            gc_state_wait(GC_NONE);
+            gc_state_unlock();
+            while(check_pending_interrupts(ctxptr));
+        }
+    } else {
+        gc_state_unlock();
+        thread_in_lisp_raised(ctxptr);
+    }
+}
+
+void thread_interrupted(os_context_t *ctxptr)
+{
+    struct thread *self = arch_os_get_current_thread();
+    boolean inhibit = (SymbolTlValue(GC_INHIBIT,self)==T);
+    odxprint(safepoints,"%s","pending interrupt trap");
+    gc_state_lock();
+    if (gc_state.phase == GC_NONE) {
+        if (SymbolTlValue(GC_PENDING,self)==T) {
+            gc_advance(GC_FLIGHT,GC_NONE); /* now in-flight */
+        }
+    }
+    gc_state_unlock();
+    if (set_thread_csp_access(self,1)) {
+        thread_in_safety_transition(ctxptr);
+    } else {
+        thread_in_lisp_raised(ctxptr);
+        check_pending_gc();
+        while(check_pending_interrupts(ctxptr));
+    }
+}
+
+void gc_stop_the_world()
+{
+    odxprint(safepoints,"%s","stop the world");
+    gc_state_lock();
+    switch (gc_state.phase) {
+    case GC_NONE:
+        gc_advance(GC_COLLECT,GC_NONE);
+        break;
+    case GC_COLLECT:
+        break;
+    case GC_MESSAGE:
+        gc_advance(GC_COLLECT,GC_MESSAGE);
+        break;
+    case GC_INVOKED:
+        gc_advance(GC_COLLECT,GC_INVOKED);
+        break;
+    case GC_FLIGHT:
+        gc_advance(GC_COLLECT,GC_FLIGHT);
+        break;
+    default:
+        break;
+    }
+    gc_state_unlock();
+    SetTlSymbolValue(STOP_FOR_GC_PENDING,NIL,arch_os_get_current_thread());
+}
+
+void gc_start_the_world()
+{
+    odxprint(safepoints,"%s","start the world");
+    gc_state_lock();
+    gc_advance(GC_NONE,GC_COLLECT);
+    gc_state_unlock();
+}
 
 
 /* wake_thread(thread) -- ensure an interrupt delivery to
@@ -1639,27 +1447,15 @@ void wake_thread(struct thread * thread)
     wake_thread_io(thread);
     pthread_mutex_unlock(&all_threads_lock);
 
-    if (maybe_become_stw_initiator(1) && !in_race_p()) {
-        gc_stop_the_world();
-        gc_start_the_world();
+    gc_state_lock();
+    if (gc_state.phase == GC_NONE) {
+        gc_advance(GC_INVOKED,GC_NONE);
+        gc_advance(GC_NONE,GC_INVOKED);
     }
+    gc_state_unlock();
+
     pthread_mutex_lock(&all_threads_lock);
     return;
-}
-
-void thread_in_safety_transition(os_context_t *ctx)
-{
-    thread_edge(ctx);
-}
-
-void thread_in_lisp_raised(os_context_t *ctx)
-{
-    thread_pitstop(ctx);
-}
-
-void thread_interrupted(os_context_t *ctx)
-{
-    thread_pitstop(ctx);
 }
 
 #endif
