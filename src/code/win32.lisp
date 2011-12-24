@@ -340,7 +340,7 @@
           (close-handle timer))))))
 
 (defun sb!unix:nanosleep (sec nsec)
-  (microsleep (+ (* sec 1000000) (* nsec 1000))))
+  (microsleep (+ (* sec 1000000) (ceiling nsec 1000))))
 
 #!+sb-unicode
 (progn
