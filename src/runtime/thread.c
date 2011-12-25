@@ -1191,7 +1191,8 @@ static inline void gc_notify()
             odxprint(safepoints,"unnotified threads: %d with added %p",
                      gc_state.phase_wait[GC_MESSAGE],p);
         } else {
-            if (SymbolTlValue(GC_INHIBIT,p)==T) {
+            if (SymbolTlValue(GC_INHIBIT,p)==T||
+                (SymbolTlValue(GC_PENDING,p)!=T&&SymbolTlValue(GC_PENDING,p)!=NIL)) {
                 gc_state.phase_wait[GC_INVOKED]++;
                 odxprint(safepoints,"notified threads: %d with added %p",
                          gc_state.phase_wait[GC_INVOKED],p);
@@ -1207,7 +1208,7 @@ static inline void gc_done()
 {
     struct thread *self = arch_os_get_current_thread(), *p;
     boolean inhibit = (SymbolTlValue(GC_INHIBIT,self)==T);
-    
+
     odxprint(safepoints,"%s","global denotification");
     pthread_mutex_lock(&all_threads_lock);
     for_each_thread(p) {
@@ -1285,7 +1286,8 @@ void thread_register_gc_trigger()
 void thread_in_lisp_raised(os_context_t *ctxptr)
 {
     struct thread *self = arch_os_get_current_thread();
-    boolean inhibit = (SymbolTlValue(GC_INHIBIT,self)==T);
+    boolean inhibit = (SymbolTlValue(GC_INHIBIT,self)==T)||
+        (SymbolTlValue(GC_PENDING,self)!=T&&SymbolTlValue(GC_PENDING,self)!=NIL);
 
     odxprint(safepoints,"GC page access in phase %d inhibit %d",gc_state.phase,inhibit);
     gc_state_lock();
@@ -1299,7 +1301,7 @@ void thread_in_lisp_raised(os_context_t *ctxptr)
         if (gc_state.phase == GC_FLIGHT) {
             if (SymbolTlValue(GC_PENDING,self)==T) {
                 odxprint(safepoints,"%s","Picked up GC in flight");
-                gc_advance(GC_INVOKED,GC_FLIGHT);
+                gc_advance(GC_COLLECT,GC_FLIGHT);
                 gc_state_unlock();
                 if (!check_pending_gc()) {
                     gc_state_lock();
@@ -1338,7 +1340,8 @@ void thread_in_lisp_raised(os_context_t *ctxptr)
 void thread_in_safety_transition(os_context_t *ctxptr)
 {
     struct thread *self = arch_os_get_current_thread();
-    boolean inhibit = (SymbolTlValue(GC_INHIBIT,self)==T);
+    boolean inhibit = (SymbolTlValue(GC_INHIBIT,self)==T)
+        ||(SymbolTlValue(GC_PENDING,self)!=T&&SymbolTlValue(GC_PENDING,self)!=NIL);
 
     odxprint(safepoints,"%s","GC safety transition");
     gc_state_lock();
@@ -1349,7 +1352,10 @@ void thread_in_safety_transition(os_context_t *ctxptr)
             }
             gc_state_unlock();
         } else {
-            gc_state_wait(GC_NONE);
+            if (SymbolTlValue(GC_PENDING,self)!=T&&SymbolTlValue(GC_PENDING,self)!=NIL)
+                gc_state_wait(GC_INVOKED);
+            else 
+                gc_state_wait(GC_NONE);
             gc_state_unlock();
             while(check_pending_interrupts(ctxptr));
         }
