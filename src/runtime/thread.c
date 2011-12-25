@@ -1286,6 +1286,7 @@ void thread_in_lisp_raised(os_context_t *ctxptr)
 {
     struct thread *self = arch_os_get_current_thread();
     boolean inhibit = (SymbolTlValue(GC_INHIBIT,self)==T);
+
     odxprint(safepoints,"GC page access in phase %d inhibit %d",gc_state.phase,inhibit);
     gc_state_lock();
     if (inhibit) {
@@ -1298,27 +1299,19 @@ void thread_in_lisp_raised(os_context_t *ctxptr)
         if (gc_state.phase == GC_FLIGHT) {
             if (SymbolTlValue(GC_PENDING,self)==T) {
                 odxprint(safepoints,"%s","Picked up GC in flight");
-                *self->csp_around_foreign_call = (word_t)ctxptr;
-                gc_advance(GC_COLLECT,GC_FLIGHT);
-                if (gc_state.phase_wait[GC_COLLECT]!=1) {
-                    SetTlSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
-                    gc_advance(GC_NONE,GC_COLLECT);
-                    *self->csp_around_foreign_call = 0;
-                    gc_state_unlock();
-                    while(check_pending_interrupts(ctxptr));
-                    return;
-                } else {
-                    *self->csp_around_foreign_call = 0;
-                    gc_state_unlock();
-                    if (!check_pending_gc()) {
-                        gc_state_lock();
-                        if (gc_state.phase == GC_COLLECT)
-                            gc_advance(GC_COLLECT,GC_NONE);
-                        gc_state_unlock();
+                gc_advance(GC_INVOKED,GC_FLIGHT);
+                gc_state_unlock();
+                if (!check_pending_gc()) {
+                    gc_state_lock();
+                    if (gc_state.phase == GC_INVOKED) {
+                        *self->csp_around_foreign_call = (word_t)ctxptr;
+                        gc_advance(GC_NONE,GC_INVOKED);
+                        *self->csp_around_foreign_call = 0;
                     }
-                    while(check_pending_interrupts(ctxptr));
-                    return;
+                    gc_state_unlock();
                 }
+                while(check_pending_interrupts(ctxptr));
+                return;
             } else {
                 odxprint(safepoints,"%s","Assisting GC in flight");
                 *self->csp_around_foreign_call = (word_t)ctxptr;
@@ -1346,6 +1339,7 @@ void thread_in_safety_transition(os_context_t *ctxptr)
 {
     struct thread *self = arch_os_get_current_thread();
     boolean inhibit = (SymbolTlValue(GC_INHIBIT,self)==T);
+
     odxprint(safepoints,"%s","GC safety transition");
     gc_state_lock();
     if (set_thread_csp_access(self,1)) {
@@ -1369,6 +1363,7 @@ void thread_interrupted(os_context_t *ctxptr)
 {
     struct thread *self = arch_os_get_current_thread();
     boolean inhibit = (SymbolTlValue(GC_INHIBIT,self)==T);
+
     odxprint(safepoints,"%s","pending interrupt trap");
     gc_state_lock();
     if (gc_state.phase == GC_NONE) {
