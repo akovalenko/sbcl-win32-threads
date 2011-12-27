@@ -1359,7 +1359,6 @@ void thread_in_lisp_raised(os_context_t *ctxptr)
         gc_state_unlock();
         check_pending_gc();
         while(check_pending_interrupts(ctxptr));
-        return;
     } else {
         gc_advance(phase,gc_state.phase);
         if (phase == GC_INVOKED) {
