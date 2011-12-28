@@ -396,7 +396,6 @@ typedef enum {
     GC_FLIGHT,
     GC_MESSAGE,
     GC_INVOKED,
-    GC_PRESTOP,
     GC_QUIET,
     GC_SETTLED,
     GC_COLLECT,
@@ -1181,19 +1180,15 @@ static inline gc_phase_t gc_phase_next(gc_phase_t old) {
 
 static inline gc_phase_t thread_gc_phase(struct thread* p)
 {
-    boolean inhibit = (SymbolTlValue(GC_INHIBIT,p)==T)||
-        (SymbolTlValue(IN_WITHOUT_GCING,p)==T &&
-         SymbolTlValue(STOP_FOR_GC_PENDING,p)!=T);
+    boolean inhibit = (SymbolTlValue(GC_INHIBIT,p)==T);
     
     boolean inprogress =
         (SymbolTlValue(GC_PENDING,p)!=T&& SymbolTlValue(GC_PENDING,p)!=NIL)||
-        (SymbolTlValue(IN_WITHOUT_GCING,p)==T &&
-         SymbolTlValue(STOP_FOR_GC_PENDING,p)==T);
+        (SymbolTlValue(IN_WITHOUT_GCING,p)==IN_WITHOUT_GCING);
 
     return
-        inprogress ?
-        (gc_state.phase == GC_SETTLED || gc_state.phase == GC_COLLECT ?
-         GC_NONE : GC_QUIET) : (inhibit ? GC_INVOKED : GC_NONE);
+        inprogress ? (gc_state.phase == GC_SETTLED || gc_state.phase == GC_COLLECT ?
+                      GC_NONE : GC_QUIET) : (inhibit ? GC_INVOKED : GC_NONE);
 }
 
 static inline void thread_gc_promote(struct thread* p, gc_phase_t cur, gc_phase_t old) {
@@ -1203,7 +1198,7 @@ static inline void thread_gc_promote(struct thread* p, gc_phase_t cur, gc_phase_
         gc_state.phase_wait[cur]++;
         set_thread_csp_access(p,1);
     }
-    if (cur == GC_INVOKED)
+    if (cur != GC_NONE)
         SetTlSymbolValue(STOP_FOR_GC_PENDING,T,p);
 }
 
@@ -1255,8 +1250,6 @@ static inline void gc_handle_phase()
         map_gc_page();
         break;
     case GC_QUIET:
-        break;
-    case GC_PRESTOP:
         break;
     case GC_SETTLED:
         gc_notify();
@@ -1328,22 +1321,10 @@ void thread_in_lisp_raised(os_context_t *ctxptr)
         SymbolTlValue(GC_INHIBIT,self)!=T &&
         SymbolTlValue(IN_SAFEPOINT,self)!=T &&
         SymbolTlValue(IN_WITHOUT_GCING,self)!=T) {
-        gc_advance(GC_PRESTOP,GC_FLIGHT);
-        if (gc_state.phase_wait[GC_QUIET]==0) {
-            gc_advance(GC_QUIET,GC_PRESTOP);
-            gc_state_unlock();
-            gc_assert(check_pending_gc());
-            while(check_pending_interrupts(ctxptr));
-        } else {
-            set_thread_csp_access(self,1);
-            SetTlSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
-            *self->csp_around_foreign_call = (word_t)ctxptr;
-            gc_advance(GC_NONE,GC_PRESTOP);
-            *self->csp_around_foreign_call = 0;
-            gc_state_unlock();
-            check_pending_gc();
-            while(check_pending_interrupts(ctxptr));
-        }
+        gc_advance(GC_QUIET,GC_FLIGHT);
+        gc_state_unlock();
+        gc_assert(check_pending_gc());
+        while(check_pending_interrupts(ctxptr));
         return;
     }
     if (gc_state.phase == GC_FLIGHT) {
@@ -1361,9 +1342,7 @@ void thread_in_lisp_raised(os_context_t *ctxptr)
         while(check_pending_interrupts(ctxptr));
     } else {
         gc_advance(phase,gc_state.phase);
-        if (phase == GC_INVOKED) {
-            SetTlSymbolValue(STOP_FOR_GC_PENDING,T,self);
-        }
+        SetTlSymbolValue(STOP_FOR_GC_PENDING,T,self);
         gc_state_unlock();
     }
 }
@@ -1422,12 +1401,10 @@ void gc_stop_the_world()
     gc_state_lock();
     switch(gc_state.phase) {
     case GC_NONE:
-        gc_advance(GC_QUIET,GC_NONE);
-        break;
     case GC_FLIGHT:
+        gc_advance(GC_QUIET,gc_state.phase);
     case GC_MESSAGE:
     case GC_INVOKED:
-    case GC_PRESTOP:
         gc_state_wait(GC_QUIET);
         break;
     case GC_QUIET:
@@ -1447,6 +1424,8 @@ void gc_start_the_world()
 {
     odxprint(safepoints,"%s","start the world");
     gc_state_lock();
+    SetTlSymbolValue(IN_WITHOUT_GCING,IN_WITHOUT_GCING,
+                     arch_os_get_current_thread());
     gc_advance(GC_NONE,GC_COLLECT);
     gc_state_unlock();
 }
