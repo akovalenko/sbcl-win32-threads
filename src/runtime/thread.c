@@ -1180,11 +1180,12 @@ static inline gc_phase_t gc_phase_next(gc_phase_t old) {
 
 static inline gc_phase_t thread_gc_phase(struct thread* p)
 {
-    boolean inhibit = (SymbolTlValue(GC_INHIBIT,p)==T);
+    boolean inhibit = (SymbolTlValue(GC_INHIBIT,p)==T)||
+        (SymbolTlValue(IN_WITHOUT_GCING,p)==IN_WITHOUT_GCING);
     
     boolean inprogress =
-        (SymbolTlValue(GC_PENDING,p)!=T&& SymbolTlValue(GC_PENDING,p)!=NIL)||
-        (SymbolTlValue(IN_WITHOUT_GCING,p)==IN_WITHOUT_GCING);
+        (SymbolTlValue(GC_PENDING,p)!=T&& SymbolTlValue(GC_PENDING,p)!=NIL);
+
 
     return
         inprogress ? (gc_state.phase == GC_SETTLED || gc_state.phase == GC_COLLECT ?
