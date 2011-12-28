@@ -1197,7 +1197,6 @@ static inline void thread_gc_promote(struct thread* p, gc_phase_t cur, gc_phase_
         gc_state.phase_wait[old]--;
     if (cur != GC_NONE) {
         gc_state.phase_wait[cur]++;
-        set_thread_csp_access(p,1);
     }
     if (cur != GC_NONE)
         SetTlSymbolValue(STOP_FOR_GC_PENDING,T,p);
@@ -1404,6 +1403,7 @@ void gc_stop_the_world()
     case GC_NONE:
     case GC_FLIGHT:
         gc_advance(GC_QUIET,gc_state.phase);
+        break;
     case GC_MESSAGE:
     case GC_INVOKED:
         gc_state_wait(GC_QUIET);
