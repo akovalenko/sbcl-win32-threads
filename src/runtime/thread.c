@@ -1321,7 +1321,7 @@ void thread_in_lisp_raised(os_context_t *ctxptr)
         SymbolTlValue(GC_PENDING,self)==T &&
         SymbolTlValue(GC_INHIBIT,self)!=T &&
         SymbolTlValue(IN_SAFEPOINT,self)!=T &&
-        SymbolTlValue(IN_WITHOUT_GCING,self)!=T) {
+        thread_gc_phase(self)==GC_NONE) {
         gc_advance(GC_QUIET,GC_FLIGHT);
         gc_state_unlock();
         gc_assert(check_pending_gc());
