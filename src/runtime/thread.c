@@ -515,7 +515,7 @@ static inline void gc_state_wait(gc_phase_t phase)
              gc_state.phase,phase,gc_state.phase_wait[gc_state.phase]);
     gc_assert(gc_state.master == self);
     gc_state.master = NULL;
-    while(gc_state.phase != phase && !(phase == GC_QUIET && gc_state.phase == GC_SETTLED))
+    while(gc_state.phase != phase && !(phase == GC_QUIET && (gc_state.phase > GC_QUIET)))
         pthread_cond_wait(&gc_state.phase_cond[phase],&gc_state.lock);
     gc_assert(gc_state.master == NULL);
     gc_state.master = self;
@@ -1189,8 +1189,9 @@ static inline gc_phase_t thread_gc_phase(struct thread* p)
         (SymbolTlValue(GC_PENDING,p)!=T&& SymbolTlValue(GC_PENDING,p)!=NIL);
 
     return
-        inprogress ? (gc_state.phase == GC_SETTLED || gc_state.phase == GC_COLLECT ?
-                      GC_NONE : GC_QUIET) : (inhibit ? GC_INVOKED : GC_NONE);
+        inprogress ? (gc_state.collector && (gc_state.collector != p)
+                      ? GC_NONE : GC_QUIET)
+        : (inhibit ? GC_INVOKED : GC_NONE);
 }
 
 static inline void thread_gc_promote(struct thread* p, gc_phase_t cur, gc_phase_t old) {
@@ -1345,6 +1346,7 @@ void thread_in_lisp_raised(os_context_t *ctxptr)
             gc_advance(GC_NONE,GC_QUIET);
         } else {
             *self->csp_around_foreign_call = 0;
+            SetTlSymbolValue(GC_PENDING,T,self);
         }
         gc_state_unlock();
         check_pending_gc();
@@ -1359,7 +1361,10 @@ void thread_in_lisp_raised(os_context_t *ctxptr)
         SetTlSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
         set_thread_csp_access(self,1);
         *self->csp_around_foreign_call = (word_t)ctxptr;
-        gc_advance(GC_NONE,gc_state.phase); /* wait for completion */
+        if (gc_state.phase <= GC_SETTLED)
+            gc_advance(phase,gc_state.phase);
+        else
+            gc_state_wait(phase);
         *self->csp_around_foreign_call = 0;
         gc_state_unlock();
         check_pending_gc();
@@ -1386,7 +1391,10 @@ void thread_in_safety_transition(os_context_t *ctxptr)
         if (phase == GC_NONE) {
             SetTlSymbolValue(STOP_FOR_GC_PENDING,NIL,self);
             *self->csp_around_foreign_call = (word_t)ctxptr;
-            gc_advance(phase,gc_state.phase);
+            if (gc_state.phase <= GC_SETTLED)
+                gc_advance(phase,gc_state.phase);
+            else
+                gc_state_wait(phase);
             *self->csp_around_foreign_call = 0;
         } else {
             gc_advance(phase,gc_state.phase);
@@ -1424,7 +1432,8 @@ void gc_stop_the_world()
     odxprint(safepoints,"%s","stop the world");
     gc_state_lock();
     gc_state.collector = self;
-
+    gc_state.phase_wait[GC_QUIET]++;
+    
     switch(gc_state.phase) {
     case GC_NONE:
         gc_advance(GC_QUIET,gc_state.phase);
