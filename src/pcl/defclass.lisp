@@ -298,6 +298,7 @@
   ;; actual type as a compile-time side-effect would probably be a bad
   ;; idea and (2) anyway we don't need to modify it in order to make
   ;; NAME be recognized as a valid type name)
+  (with-single-package-locked-error (:symbol name "proclaiming ~S as a class"))
   (unless (info :type :kind name)
     ;; Tell the compiler to expect a class with the given NAME, by
     ;; writing a kind of minimal placeholder type information. This
