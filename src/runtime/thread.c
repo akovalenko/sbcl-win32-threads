@@ -1319,9 +1319,12 @@ static inline void gc_advance(gc_phase_t cur, gc_phase_t old) {
 
 void thread_register_gc_trigger()
 {
+    struct thread *self = arch_os_get_current_thread();
     odxprint(safepoints,"%s","GC triggered");
     gc_state_lock();
-    if (gc_state.phase == GC_NONE) {
+    if (gc_state.phase == GC_NONE &&
+        SymbolTlValue(IN_SAFEPOINT,self)!=T &&
+        thread_gc_phase(self)==GC_NONE) {
         gc_advance(GC_FLIGHT,GC_NONE);
     }
     gc_state_unlock();
@@ -1336,9 +1339,8 @@ void thread_in_lisp_raised(os_context_t *ctxptr)
 
     if (gc_state.phase == GC_FLIGHT &&
         SymbolTlValue(GC_PENDING,self)==T &&
-        SymbolTlValue(GC_INHIBIT,self)!=T &&
-        SymbolTlValue(IN_SAFEPOINT,self)!=T &&
-        thread_gc_phase(self)==GC_NONE) {
+        thread_gc_phase(self)==GC_NONE &&
+        thread_may_gc() && SymbolTlValue(IN_SAFEPOINT,self)!=T) {
         *self->csp_around_foreign_call = (word_t)ctxptr;
         gc_advance(GC_QUIET,GC_FLIGHT);
         set_thread_csp_access(self,1);
@@ -1398,8 +1400,7 @@ void thread_in_safety_transition(os_context_t *ctxptr)
             *self->csp_around_foreign_call = 0;
         } else {
             gc_advance(phase,gc_state.phase);
-            if (phase == GC_INVOKED)
-                SetTlSymbolValue(STOP_FOR_GC_PENDING,T,self);
+            SetTlSymbolValue(STOP_FOR_GC_PENDING,T,self);
         }
         gc_state_unlock();
     }
