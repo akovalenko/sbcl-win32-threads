@@ -153,6 +153,10 @@
            (let ((a (make-array '(8) :element-type '(unsigned-byte 32))))
              (assert (= 8 (read-sequence a r)))
              a)))
+       #!+(and win32 sb-dynamic-core)
+       (progn
+         (/show0 "Getting randomness from CryptGenRandom")
+         (sb!win32:crypt-gen-random 32))
        ;; When /dev/urandom is not available, we make do with time and pid
        ;; Thread ID and/or address of a CONS cell would be even better, but...
        (progn

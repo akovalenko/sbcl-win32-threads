@@ -16,5 +16,6 @@
 (progn
   (load-shared-object "kernel32.dll")
   (load-shared-object "msvcrt.dll")
+  (load-shared-object "advapi32.dll")
   (load-shared-object "ws2_32.dll")
   (load-shared-object "shell32.dll"))
