@@ -243,7 +243,7 @@ main(int argc, char *argv[])
     defconstant("STD_OUTPUT_HANDLE", STD_OUTPUT_HANDLE);
     defconstant("STD_ERROR_HANDLE", STD_ERROR_HANDLE);
 
-    printf(";;; WinCrypt");
+    printf(";;; WinCrypt\n");
     defconstant("crypt-verifycontext", CRYPT_VERIFYCONTEXT);
     defconstant("crypt-silent", CRYPT_SILENT);
     defconstant("prov-rsa-full", PROV_RSA_FULL);
