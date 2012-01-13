@@ -3,7 +3,7 @@
 	xmlns:asmv3="urn:schemas-microsoft-com:asm.v3">
     <assemblyIdentity
 	    version="1.0.55.0"
-	    processorArchitecture="AMD64"
+	    processorArchitecture="x86"
 	    name="CommonLisp.Sbcl.runtime"
 	    type="win32"
 	/>
