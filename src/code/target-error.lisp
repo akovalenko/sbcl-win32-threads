@@ -32,6 +32,7 @@
 
 (defvar *handler-clusters* (initial-handler-clusters))
 
+(declaim (inline make-restart))
 (defstruct (restart (:copier nil) (:predicate nil))
   (name (missing-arg) :type symbol :read-only t)
   (function (missing-arg) :type function)

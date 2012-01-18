@@ -415,12 +415,12 @@ evaluated as a PROGN."
    This allows FIND-RESTART, etc., to recognize restarts that are not related
    to the error currently being debugged. See also RESTART-CASE."
   (let ((n-cond (gensym)))
-    `(let ((*condition-restarts*
-            (cons (let ((,n-cond ,condition-form))
-                    (cons ,n-cond
-                          (append ,restarts-form
-                                  (cdr (assoc ,n-cond *condition-restarts*)))))
-                  *condition-restarts*)))
+    `(dx-let ((*condition-restarts*
+               (cons (let ((,n-cond ,condition-form))
+                       (cons ,n-cond
+                             (append ,restarts-form
+                                     (cdr (assoc ,n-cond *condition-restarts*)))))
+                     *condition-restarts*)))
        ,@body)))
 
 (defmacro-mundanely restart-bind (bindings &body forms)
@@ -428,22 +428,42 @@ evaluated as a PROGN."
   "Executes forms in a dynamic context where the given restart bindings are
    in effect. Users probably want to use RESTART-CASE. When clauses contain
    the same restart name, FIND-RESTART will find the first such clause."
-  `(let ((*restart-clusters*
-          (cons (list
-                 ,@(mapcar (lambda (binding)
-                             (unless (or (car binding)
-                                         (member :report-function
-                                                 binding
-                                                 :test #'eq))
-                               (warn "Unnamed restart does not have a ~
+  (let (dx-fun)
+    (setf bindings
+          (flet ((dxify (thing)
+                   (typecase thing
+                     ((cons (eql lambda))
+                      (setf thing `(function ,thing))))
+                   (typecase thing
+                     ((cons (eql function)
+                            (cons
+                             (cons (eql lambda))))
+                      `(function
+                        ,(caar (push (list* (gensym "LAMBDA")
+                                            (rest (second thing)))
+                                     dx-fun))))
+                     (t thing))))
+            (mapcar (lambda (binding)
+                      (cons (first binding)
+                            (mapcar #'dxify (rest binding))))
+                    bindings)))
+    `(dx-flet ,dx-fun
+       (dx-let ((*restart-clusters*
+                 (cons (list
+                        ,@(mapcar (lambda (binding)
+                                    (unless (or (car binding)
+                                                (member :report-function
+                                                        binding
+                                                        :test #'eq))
+                                      (warn "Unnamed restart does not have a ~
                                       report function: ~S"
-                                     binding))
-                             `(make-restart :name ',(car binding)
-                                            :function ,(cadr binding)
-                                            ,@(cddr binding)))
-                           bindings))
-                *restart-clusters*)))
-     ,@forms))
+                                            binding))
+                                    `(make-restart :name ',(car binding)
+                                                   :function ,(cadr binding)
+                                                   ,@(cddr binding)))
+                                  bindings))
+                       *restart-clusters*)))
+         ,@forms))))
 
 ;;; Wrap the RESTART-CASE expression in a WITH-CONDITION-RESTARTS if
 ;;; appropriate. Gross, but it's what the book seems to say...
