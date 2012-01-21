@@ -158,7 +158,7 @@
 (defstruct (process (:copier nil))
   pid                 ; PID of child process
   %status             ; either :RUNNING, :STOPPED, :EXITED, or :SIGNALED
-  exit-code           ; either exit code or signal
+  %exit-code          ; either exit code or signal
   core-dumped         ; T if a core image was dumped
   #-win32 pty                 ; stream to child's pty, or NIL
   input               ; stream to child's input, or NIL
@@ -172,7 +172,7 @@
   (print-unreadable-object (process stream :type t)
     (let ((status (process-status process)))
      (if (eq :exited status)
-         (format stream "~S ~S" status (process-exit-code process))
+         (format stream "~S ~S" status (process-%exit-code process))
          (format stream "~S ~S" (process-pid process) status)))
     process))
 
@@ -182,6 +182,13 @@
 
 #+sb-doc
 (setf (documentation 'process-pid 'function) "The pid of the child process.")
+
+(defun process-exit-code (process)
+  #+sb-doc
+  "Return the exit code of PROCESS."
+  (or (process-%exit-code process)
+      (progn (get-processes-status-changes)
+             (process-%exit-code process))))
 
 (defun process-status (process)
   #+sb-doc
@@ -851,7 +858,7 @@ Users Manual for details about the PROCESS structure."#-win32"
                                                     :pid child)
                                       #+win32 (if wait
                                                   (list :%status :exited
-                                                        :exit-code child)
+                                                        :%exit-code child)
                                                   (list :%status :running
                                                         :pid child))))
                                (push proc *active-processes*)))))))
