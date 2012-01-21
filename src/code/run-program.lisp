@@ -295,7 +295,7 @@ PROCESS."
             ((and (eql pid (process-pid process))
                   (= signal sb-unix:sigcont))
              (setf (process-%status process) :running)
-             (setf (process-exit-code process) nil)
+             (setf (process-%exit-code process) nil)
              (when (process-status-hook process)
                (funcall (process-status-hook process) process))
              t)
@@ -348,7 +348,7 @@ status slot."
                              (waitpid (process-pid proc) t t)
                            (when pid
                              (setf (process-%status proc) what)
-                             (setf (process-exit-code proc) code)
+                             (setf (process-%exit-code proc) code)
                              (setf (process-core-dumped proc) core)
                              (when (process-status-hook proc)
                                (push proc exited))
@@ -361,7 +361,7 @@ status slot."
                                  (sb-win32::get-exit-code-process pid)
                                (when (and (plusp ok) (/= code 259))
                                  (setf (process-%status proc) :exited
-                                       (process-exit-code proc) code)
+                                       (process-%exit-code proc) code)
                                  (when (process-status-hook proc)
                                    (push proc exited))
                                  t)))))
