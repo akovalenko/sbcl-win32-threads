@@ -618,11 +618,11 @@ evaluated as a PROGN."
   (let ((name (sb!xc:gensym "HANDLER"))
         (condition (sb!xc:gensym "CONDITION")))
     `(dx-flet ((,name (,condition)
-                 (typecase ,condition
-                   ,@(mapcar (lambda (binding)
+                 ,@(mapcar (lambda (binding)
                                (destructuring-bind (type handler) binding
-                                 `(,type (funcall ,handler ,condition))))
-                      bindings))))
+                                 `(typecase ,condition
+                                    (,type (funcall ,handler ,condition)))))
+                      bindings)))
        (let ((*handler-clusters*
                (cons (function ,name)
                      *handler-clusters*)))
