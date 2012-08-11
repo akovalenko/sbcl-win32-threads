@@ -1410,19 +1410,20 @@ See also: RETURN-FROM-THREAD, ABORT-THREAD."
                       ;; could be sharing them)
                       (catch 'sb!impl::toplevel-catcher
                         (catch 'sb!impl::%end-of-the-world
-                          (with-simple-restart
-                              (terminate-thread
-                               (format nil
-                                       "~~@<Terminate this thread (~A)~~@:>"
-                                       *current-thread*))
-                            (without-interrupts
+                          (catch '%abort-thread
+                            (with-simple-restart
+                                (terminate-thread
+                                 (format nil
+                                         "~~@<Terminate this thread (~A)~~@:>"
+                                         *current-thread*))
+                              (without-interrupts
                                 (unwind-protect
                                      (with-local-interrupts
-                                         ;; Now that most things have a chance
-                                         ;; to work properly without messing up
-                                         ;; other threads, it's time to enable
-                                         ;; signals.
-                                         (sb!unix::unblock-deferrable-signals)
+                                       ;; Now that most things have a chance
+                                       ;; to work properly without messing up
+                                       ;; other threads, it's time to enable
+                                       ;; signals.
+                                       (sb!unix::unblock-deferrable-signals)
                                        #!+win32
                                        ;; FPU state, on win32 at least, is
                                        ;; per-thread and it isn't
