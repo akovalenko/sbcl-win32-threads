@@ -14,6 +14,19 @@
  * files for more information.
  */
 
+#include "sbcl.h"
+
+#ifndef LISP_FEATURE_WIN32
+#ifdef LISP_FEATURE_LINUX
+/* For madvise */
+#define _BSD_SOURCE
+#include <sys/mman.h>
+#undef _BSD_SOURCE
+#else
+#include <sys/mman.h>
+#endif
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,16 +35,6 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
-
-#include "sbcl.h"
-
-#ifndef LISP_FEATURE_WIN32
-#ifdef LISP_FEATURE_LINUX
-/* For madvise */
-# define _BSD_SOURCE
-#endif
-#include <sys/mman.h>
-#endif
 
 #include "os.h"
 #include "runtime.h"

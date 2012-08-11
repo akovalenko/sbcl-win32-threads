@@ -374,6 +374,13 @@
   ;; Kept here so that when the thread dies we can release the whole
   ;; memory we reserved.
   (os-address :c-type "void *" :length #!+alpha 2 #!-alpha 1)
+  ;; Keep these next four slots close to the beginning of the structure.
+  ;; Doing so reduces code size for x86-64 allocation sequences and
+  ;; special variable manipulations.
+  #!+gencgc (alloc-region :c-type "struct alloc_region" :length 5)
+  #!+(or x86 x86-64 sb-thread) (pseudo-atomic-bits)
+  (binding-stack-start :c-type "lispobj *" :length #!+alpha 2 #!-alpha 1)
+  (binding-stack-pointer :c-type "lispobj *" :length #!+alpha 2 #!-alpha 1)
   #!+sb-thread
   (os-attr :c-type "pthread_attr_t *" :length #!+alpha 2 #!-alpha 1)
   #!+(and sb-thread (not sb-gc-safepoint))
@@ -386,8 +393,6 @@
   (state-not-stopped-sem :c-type "os_sem_t *" :length #!+alpha 2 #!-alpha 1)
   #!+(and sb-thread (not sb-gc-safepoint))
   (state-not-stopped-waitcount :c-type "int" :length 1)
-  (binding-stack-start :c-type "lispobj *" :length #!+alpha 2 #!-alpha 1)
-  (binding-stack-pointer :c-type "lispobj *" :length #!+alpha 2 #!-alpha 1)
   (control-stack-start :c-type "lispobj *" :length #!+alpha 2 #!-alpha 1)
   (control-stack-end :c-type "lispobj *" :length #!+alpha 2 #!-alpha 1)
   (control-stack-guard-page-protected)
@@ -401,7 +406,6 @@
   ;; starting, running, suspended, dead
   (state :c-type "lispobj")
   (tls-cookie)                          ;  on x86, the LDT index
-  #!+(or x86 x86-64 sb-thread) (pseudo-atomic-bits)
   (interrupt-data :c-type "struct interrupt_data *"
                   :length #!+alpha 2 #!-alpha 1)
   (stepping)
@@ -417,8 +421,10 @@
   ;; Same as above for the location of the current control stack
   ;; pointer.  This is also used on threaded x86oids to allow LDB to
   ;; print an approximation of the CSP as needed.
-  #!+(and sb-thread)
+  #!+sb-thread
   (control-stack-pointer :c-type "lispobj *")
+  #!+mach-exception-handler
+  (mach-port-name :c-type "mach_port_name_t")
   ;; KLUDGE: On alpha, until STEPPING we have been lucky and the 32
   ;; bit slots came in pairs. However the C compiler will align
   ;; interrupt_contexts on a double word boundary. This logic should

@@ -16,18 +16,8 @@
   "When (TYPEP condition *BREAK-ON-SIGNALS*) is true, then calls to SIGNAL will
    enter the debugger prior to signalling that condition.")
 
-(defun signal (datum &rest arguments)
-  #!+sb-doc
-  "Invokes the signal facility on a condition formed from DATUM and
-   ARGUMENTS. If the condition is not handled, NIL is returned. If
-   (TYPEP condition *BREAK-ON-SIGNALS*) is true, the debugger is invoked
-   before any signalling is done."
-  (let ((condition (coerce-to-condition datum
-                                        arguments
-                                        'simple-condition
-                                        'signal))
-        (*handler-clusters* *handler-clusters*)
-        (old-bos *break-on-signals*)
+(defun maybe-break-on-signal (condition)
+  (let ((old-bos *break-on-signals*)
         (bos-actually-breaking nil))
     (when old-bos
       ;; When *break-on-signals* is not nil, it makes sense to establish a
@@ -44,60 +34,66 @@
               (setf bos-actually-breaking t)
               (break "~A~%BREAK was entered because of *BREAK-ON-SIGNALS* ~
                     (now rebound to NIL)."
-                     condition)))
-        ;; Give the user a chance to unset *BREAK-ON-SIGNALS* on the
-        ;; way out.
-        ;;
-        ;; (e.g.: Consider a long compilation. After a failed compile
-        ;; the user sets *BREAK-ON-SIGNALS* to T, and select the
-        ;; RECOMPILE restart. Once the user diagnoses and fixes the
-        ;; problem, he selects RECOMPILE again... and discovers that
-        ;; he's entered the *BREAK-ON-SIGNALS* hell with no escape,
-        ;; unless we provide this restart.)
-        (reassign (new-value)
-          :report
-          (lambda (stream)
-            (format stream
-                    (if bos-actually-breaking
-                        "Return from BREAK and assign a new value to ~
-                     *BREAK-ON-SIGNALS*."
-                        "Assign a new value to *BREAK-ON-SIGNALS* and ~
-                     continue with signal handling.")))
-          :interactive
-          (lambda ()
-            (let (new-value)
-              (loop
-                (format *query-io*
-                        "Enter new value for *BREAK-ON-SIGNALS*. ~
-                      Current value is ~S.~%~
-                      > "
-                        old-bos)
-                (force-output *query-io*)
-                (let ((*break-on-signals* nil))
-                  (setf new-value (eval (read *query-io*)))
-                  (if (typep new-value 'type-specifier)
-                      (return)
-                      (format *query-io*
-                              "~S is not a valid value for *BREAK-ON-SIGNALS* ~
-                            (must be a type-specifier).~%"
-                              new-value))))
-              (list new-value)))
-          (setf *break-on-signals* new-value))))
+                   condition)))
+      ;; Give the user a chance to unset *BREAK-ON-SIGNALS* on the
+      ;; way out.
+      ;;
+      ;; (e.g.: Consider a long compilation. After a failed compile
+      ;; the user sets *BREAK-ON-SIGNALS* to T, and select the
+      ;; RECOMPILE restart. Once the user diagnoses and fixes the
+      ;; problem, he selects RECOMPILE again... and discovers that
+      ;; he's entered the *BREAK-ON-SIGNALS* hell with no escape,
+      ;; unless we provide this restart.)
+      (reassign (new-value)
+        :report
+        (lambda (stream)
+          (format stream
+                  (if bos-actually-breaking
+                      "Return from BREAK and assign a new value to ~
+                       *BREAK-ON-SIGNALS*."
+                      "Assign a new value to *BREAK-ON-SIGNALS* and ~
+                       continue with signal handling.")))
+        :interactive
+        (lambda ()
+          (let (new-value)
+            (loop
+              (format *query-io*
+                      "Enter new value for *BREAK-ON-SIGNALS*. ~
+                       Current value is ~S.~%~
+                       > "
+                      old-bos)
+              (force-output *query-io*)
+              (let ((*break-on-signals* nil))
+                (setf new-value (eval (read *query-io*)))
+                (if (typep new-value 'type-specifier)
+                    (return)
+                    (format *query-io*
+                            "~S is not a valid value for *BREAK-ON-SIGNALS* ~
+                             (must be a type-specifier).~%"
+                            new-value))))
+            (list new-value)))
+        (setf *break-on-signals* new-value))))))
+
+(defun signal (datum &rest arguments)
+  #!+sb-doc
+  "Invokes the signal facility on a condition formed from DATUM and
+   ARGUMENTS. If the condition is not handled, NIL is returned. If
+   (TYPEP condition *BREAK-ON-SIGNALS*) is true, the debugger is invoked
+   before any signalling is done."
+  (let ((condition (coerce-to-condition datum
+                                        arguments
+                                        'simple-condition
+                                        'signal))
+        (*handler-clusters* *handler-clusters*)
+        (sb!debug:*stack-top-hint* (or sb!debug:*stack-top-hint* 'signal)))
+    (when *break-on-signals*
+      (maybe-break-on-signal condition))
     (loop
       (unless *handler-clusters*
         (return))
       (let ((cluster (pop *handler-clusters*)))
         (funcall (the function cluster) condition)))
     nil))
-
-;;; a shared idiom in ERROR, CERROR, and BREAK: The user probably
-;;; doesn't want to hear that the error "occurred in" one of these
-;;; functions, so we try to point the top of the stack to our caller
-;;; instead.
-(eval-when (:compile-toplevel :execute)
-  (defmacro-mundanely maybe-find-stack-top-hint ()
-    `(or sb!debug:*stack-top-hint*
-         (nth-value 1 (find-caller-name-and-frame)))))
 
 (defun error (datum &rest arguments)
   #!+sb-doc
@@ -113,16 +109,13 @@
 
   (infinite-error-protect
     (let ((condition (coerce-to-condition datum arguments
-                                          'simple-error 'error)))
+                                          'simple-error 'error))
+          (sb!debug:*stack-top-hint* (or sb!debug:*stack-top-hint* 'error)))
       (/show0 "done coercing DATUM to CONDITION")
       (/show0 "signalling CONDITION from within ERROR")
-      (let ((sb!debug:*stack-top-hint* nil))
-        (signal condition))
+      (signal condition)
       (/show0 "done signalling CONDITION within ERROR")
-      ;; Finding the stack top hint is pretty expensive, so don't do
-      ;; it until we know we need the debugger.
-      (let ((sb!debug:*stack-top-hint* (maybe-find-stack-top-hint)))
-        (invoke-debugger condition)))))
+      (invoke-debugger condition))))
 
 (defun cerror (continue-string datum &rest arguments)
   (infinite-error-protect
@@ -133,9 +126,8 @@
                                             'simple-error
                                             'cerror)))
         (with-condition-restarts condition (list (find-restart 'continue))
-          (let ((sb!debug:*stack-top-hint* nil))
-            (signal condition))
-          (let ((sb!debug:*stack-top-hint* (maybe-find-stack-top-hint)))
+          (let ((sb!debug:*stack-top-hint* (or sb!debug:*stack-top-hint* 'cerror)))
+            (signal condition)
             (invoke-debugger condition))))))
   nil)
 
@@ -147,7 +139,7 @@
 (defun %break (what &optional (datum "break") &rest arguments)
   (infinite-error-protect
     (with-simple-restart (continue "Return from ~S." what)
-      (let ((sb!debug:*stack-top-hint* (maybe-find-stack-top-hint)))
+      (let ((sb!debug:*stack-top-hint* (or sb!debug:*stack-top-hint* '%break)))
         (invoke-debugger
          (coerce-to-condition datum arguments 'simple-condition what)))))
   nil)
@@ -157,7 +149,8 @@
   "Print a message and invoke the debugger without allowing any possibility
 of condition handling occurring."
   (declare (optimize (sb!c::rest-conversion 0)))
-  (let ((*debugger-hook* nil)) ; as specifically required by ANSI
+  (let ((*debugger-hook* nil) ; as specifically required by ANSI
+        (sb!debug:*stack-top-hint* (or sb!debug:*stack-top-hint* 'break)))
     (apply #'%break 'break datum arguments)))
 
 (defun warn (datum &rest arguments)

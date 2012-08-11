@@ -401,14 +401,16 @@ status slot."
     ;; First try to use the Unix98 pty api.
     (let* ((master-name (coerce (format nil "/dev/ptmx") 'base-string))
            (master-fd (sb-unix:unix-open master-name
-                                         sb-unix:o_rdwr
+                                         (logior sb-unix:o_rdwr
+                                                 sb-unix:o_noctty)
                                          #o666)))
       (when master-fd
         (grantpt master-fd)
         (unlockpt master-fd)
         (let* ((slave-name (ptsname master-fd))
                (slave-fd (sb-unix:unix-open slave-name
-                                            sb-unix:o_rdwr
+                                            (logior sb-unix:o_rdwr
+                                                    sb-unix:o_noctty)
                                             #o666)))
           (when slave-fd
             (return-from find-a-pty
@@ -423,13 +425,15 @@ status slot."
         (let* ((master-name (coerce (format nil "/dev/pty~C~X" char digit)
                                     'base-string))
                (master-fd (sb-unix:unix-open master-name
-                                             sb-unix:o_rdwr
+                                             (logior sb-unix:o_rdwr
+                                                     sb-unix:o_noctty)
                                              #o666)))
           (when master-fd
             (let* ((slave-name (coerce (format nil "/dev/tty~C~X" char digit)
                                        'base-string))
                    (slave-fd (sb-unix:unix-open slave-name
-                                                sb-unix:o_rdwr
+                                                (logior sb-unix:o_rdwr
+                                                        sb-unix:o_noctty)
                                                 #o666)))
               (when slave-fd
                 (return-from find-a-pty
@@ -522,14 +526,18 @@ status slot."
     (setf (sap-ref-sap vec-sap vec-index-offset) (int-sap 0))
     (values vec-sap (sap+ vec-sap bytes-per-word) total-bytes)))
 
-(defmacro with-c-strvec ((var str-list) &body body)
-  (with-unique-names (sap size)
-    `(multiple-value-bind (,sap ,var ,size)
-         (string-list-to-c-strvec ,str-list)
-       (unwind-protect
-            (progn
-              ,@body)
-         (sb-sys:deallocate-system-memory ,sap ,size)))))
+(defmacro with-c-strvec ((var str-list &key null) &body body)
+  (once-only ((null null))
+    (with-unique-names (sap size)
+      `(multiple-value-bind (,sap ,var ,size)
+           (if ,null
+               (values nil (sb-sys:int-sap 0))
+               (string-list-to-c-strvec ,str-list))
+         (unwind-protect
+              (progn
+                ,@body)
+           (unless ,null
+             (sb-sys:deallocate-system-memory ,sap ,size)))))))
 
 (sb-alien:define-alien-routine spawn
     #-win32 sb-alien:int
@@ -632,9 +640,8 @@ status slot."
                     &key
                     #-win32 (env nil env-p)
                     #-win32 (environment
-                             (if env-p
-                                 (unix-environment-sbcl-from-cmucl env)
-                                 (posix-environ))
+                             (when env-p
+                               (unix-environment-sbcl-from-cmucl env))
                              environment-p)
                     (wait t)
                     search
@@ -787,6 +794,8 @@ Users Manual for details about the PROCESS structure."#-win32"
                                         ;; hard-coded symbols here.
                                         (values stdout output-stream)
                                         (get-descriptor-for ,@args))))
+                           (unless ,fd
+                             (return-from run-program))
                            ,@body))
                       (with-open-pty (((pty-name pty-stream) (pty cookie))
                                       &body body)
@@ -796,10 +805,13 @@ Users Manual for details about the PROCESS structure."#-win32"
                       (with-args-vec ((vec args) &body body)
                         `(with-c-strvec (,vec ,args)
                            ,@body))
-                      (with-environment-vec ((vec env) &body body)
-                        #+win32 `(let (,vec)
-                                   ,@body)
-                        #-win32 `(with-c-strvec (,vec ,env) ,@body)))
+                      (with-environment-vec ((vec) &body body)
+                        #+win32 `(let (,vec) ,@body)
+                        #-win32
+                        `(with-c-strvec
+                             (,vec environment
+                              :null (not (or environment environment-p)))
+                           ,@body)))
              (with-fd-and-stream-for ((stdin input-stream) :input
                                       input cookie
                                       :direction :input
@@ -826,7 +838,7 @@ Users Manual for details about the PROCESS structure."#-win32"
                            (with-no-with (#+fds-are-windows-handles (args-vec))
                              (with-args-vec (args-vec simple-args)
                                (with-no-with (#+win32 (environment-vec))
-                                 (with-environment-vec (environment-vec environment)
+                                 (with-environment-vec (environment-vec)
                                    (setq child
                                          #+fds-are-windows-handles
                                          (sb-win32::mswin-spawn
@@ -998,6 +1010,12 @@ Users Manual for details about the PROCESS structure."#-win32"
         (get-stream-fd-and-external-format
          (two-way-stream-output-stream stream) direction))))))
 
+(defun get-temporary-directory ()
+  #-win32 (or (sb-ext:posix-getenv "TMPDIR")
+              "/tmp")
+  #+win32 (or (sb-ext:posix-getenv "TEMP")
+              "C:/Temp"))
+
 
 ;;; Find a file descriptor to use for object given the direction.
 ;;; Returns the descriptor. If object is :STREAM, returns the created
@@ -1016,10 +1034,14 @@ Users Manual for details about the PROCESS structure."#-win32"
   ;; run afoul of disk quotas or to choke on small /tmp file systems.
   (flet ((make-temp-fd ()
            (multiple-value-bind (fd name/errno)
-               (sb-unix:sb-mkstemp "/tmp/.run-program-XXXXXX" #o0600)
+               (sb-unix:sb-mkstemp (format nil "~a/.run-program-XXXXXX"
+                                           (get-temporary-directory))
+                                   #o0600)
              (unless fd
                (error "could not open a temporary file: ~A"
                       (strerror name/errno)))
+             ;; Can't unlink an opened file on Windows
+             #-win32
              (unless (sb-unix:unix-unlink name/errno)
                (sb-unix:unix-close fd)
                (error "failed to unlink ~A" name/errno))
@@ -1096,90 +1118,90 @@ Users Manual for details about the PROCESS structure."#-win32"
                         (values fd nil))
                        (t
                         (error "couldn't duplicate file descriptor: ~A"
-                               (strerror errno)))))))
-            ((streamp object)
-             (ecase direction
-               (:input
-                  (block nil
-                    ;; If we can get an fd for the stream, let the child
-                    ;; process use the fd for its descriptor.  Otherwise,
-                    ;; we copy data from the stream into a temp file, and
-                    ;; give the temp file's descriptor to the
-                    ;; child.
-                    (multiple-value-bind (fd stream format)
-                        (get-stream-fd-and-external-format object :input)
-                      (declare (ignore format))
-                      (when fd
-                        (return (values fd stream))))
-                    ;; FIXME: if we can't get the file descriptor, since
-                    ;; the stream might be interactive or otherwise
-                    ;; block-y, we can't know whether we can copy the
-                    ;; stream's data to a temp file, so if RUN-PROGRAM was
-                    ;; called with :WAIT NIL, we should probably error.
-                    ;; However, STRING-STREAMs aren't fd-streams, but
-                    ;; they're not prone to blocking; any user-defined
-                    ;; streams that "read" from some in-memory data will
-                    ;; probably be similar to STRING-STREAMs.  So maybe we
-                    ;; should add a STREAM-INTERACTIVE-P generic function
-                    ;; for problems like this?  Anyway, the machinery is
-                    ;; here, if you feel like filling in the details.
-                    #|
-                    (when (and (null wait) #<some undetermined criterion>)
-                    (error "~@<don't know how to get an fd for ~A, and so ~
-                    can't ensure that copying its data to the ~
-                    child process won't hang~:>" object))
-                    |#
-                    (let ((fd (make-temp-fd))
-                          (et (stream-element-type object)))
-                      (cond ((member et '(character base-char))
-                             (loop
-                               (multiple-value-bind
-                                     (line no-cr)
-                                   (read-line object nil nil)
-                                 (unless line
-                                   (return))
-                                 (let ((vector (string-to-octets
-                                                line
-                                                :external-format external-format)))
-                                   (sb-unix:unix-write
-                                    fd vector 0 (length vector)))
-                                 (if no-cr
-                                     (return)
-                                     (sb-unix:unix-write
-                                      fd #.(string #\Newline) 0 1)))))
-                            ((member et '(:default (unsigned-byte 8))
-                                     :test 'equal)
-                             (loop with buf = (make-array 256 :element-type '(unsigned-byte 8))
-                                   for p = (read-sequence buf object)
-                                   until (zerop p)
-                                   do (sb-unix:unix-write fd buf 0 p)))
-                            (t
-                             (error "Don't know how to copy from stream of element-type ~S"
-                                    et)))
-                      (sb-unix:unix-lseek fd 0 sb-unix:l_set)
-                      (push fd *close-in-parent*)
-                      (return (values fd nil)))))
-               (:output
-                  (block nil
-                    ;; Similar to the :input trick above, except we
-                    ;; arrange to copy data from the stream.  This is
-                    ;; slightly saner than the input case, since we don't
-                    ;; buffer to a file, but I think we may still lose if
-                    ;; there's unflushed data in the stream buffer and we
-                    ;; give the file descriptor to the child.
-                    (multiple-value-bind (fd stream format)
-                        (get-stream-fd-and-external-format object :output)
-                      (declare (ignore format))
-                      (when fd
-                        (return (values fd stream))))
-                    (multiple-value-bind (read-fd write-fd)
-                        (sb-unix:unix-pipe)
-                      (unless read-fd
-                        (error "couldn't create pipe: ~S" (strerror write-fd)))
-                      (copy-descriptor-to-stream read-fd object cookie
-                                                 external-format)
-                      (push read-fd *close-on-error*)
-                      (push write-fd *close-in-parent*)
-                      (return (values write-fd nil)))))))
-            (t
-             (error "invalid option to RUN-PROGRAM: ~S" object))))))
+                               (strerror errno))))))))
+          ((streamp object)
+           (ecase direction
+             (:input
+              (block nil
+                ;; If we can get an fd for the stream, let the child
+                ;; process use the fd for its descriptor.  Otherwise,
+                ;; we copy data from the stream into a temp file, and
+                ;; give the temp file's descriptor to the
+                ;; child.
+                (multiple-value-bind (fd stream format)
+                    (get-stream-fd-and-external-format object :input)
+                  (declare (ignore format))
+                  (when fd
+                    (return (values fd stream))))
+                ;; FIXME: if we can't get the file descriptor, since
+                ;; the stream might be interactive or otherwise
+                ;; block-y, we can't know whether we can copy the
+                ;; stream's data to a temp file, so if RUN-PROGRAM was
+                ;; called with :WAIT NIL, we should probably error.
+                ;; However, STRING-STREAMs aren't fd-streams, but
+                ;; they're not prone to blocking; any user-defined
+                ;; streams that "read" from some in-memory data will
+                ;; probably be similar to STRING-STREAMs.  So maybe we
+                ;; should add a STREAM-INTERACTIVE-P generic function
+                ;; for problems like this?  Anyway, the machinery is
+                ;; here, if you feel like filling in the details.
+                #|
+                (when (and (null wait) #<some undetermined criterion>)
+                  (error "~@<don't know how to get an fd for ~A, and so ~
+                             can't ensure that copying its data to the ~
+                             child process won't hang~:>" object))
+                |#
+                (let ((fd (make-temp-fd))
+                      (et (stream-element-type object)))
+                  (cond ((member et '(character base-char))
+                         (loop
+                           (multiple-value-bind
+                                 (line no-cr)
+                               (read-line object nil nil)
+                             (unless line
+                               (return))
+                             (let ((vector (string-to-octets
+                                            line
+                                            :external-format external-format)))
+                               (sb-unix:unix-write
+                                fd vector 0 (length vector)))
+                             (if no-cr
+                               (return)
+                               (sb-unix:unix-write
+                                fd #.(string #\Newline) 0 1)))))
+                        ((member et '(:default (unsigned-byte 8))
+                                 :test 'equal)
+                         (loop with buf = (make-array 256 :element-type '(unsigned-byte 8))
+                               for p = (read-sequence buf object)
+                               until (zerop p)
+                               do (sb-unix:unix-write fd buf 0 p)))
+                        (t
+                         (error "Don't know how to copy from stream of element-type ~S"
+                                et)))
+                  (sb-unix:unix-lseek fd 0 sb-unix:l_set)
+                  (push fd *close-in-parent*)
+                  (return (values fd nil)))))
+             (:output
+              (block nil
+                ;; Similar to the :input trick above, except we
+                ;; arrange to copy data from the stream.  This is
+                ;; slightly saner than the input case, since we don't
+                ;; buffer to a file, but I think we may still lose if
+                ;; there's unflushed data in the stream buffer and we
+                ;; give the file descriptor to the child.
+                (multiple-value-bind (fd stream format)
+                    (get-stream-fd-and-external-format object :output)
+                  (declare (ignore format))
+                  (when fd
+                    (return (values fd stream))))
+                (multiple-value-bind (read-fd write-fd)
+                    (sb-unix:unix-pipe)
+                  (unless read-fd
+                    (error "couldn't create pipe: ~S" (strerror write-fd)))
+                  (copy-descriptor-to-stream read-fd object cookie
+                                             external-format)
+                  (push read-fd *close-on-error*)
+                  (push write-fd *close-in-parent*)
+                  (return (values write-fd nil)))))))
+          (t
+           (error "invalid option to RUN-PROGRAM: ~S" object)))))

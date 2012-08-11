@@ -263,7 +263,7 @@
   (:args (function :scs (descriptor-reg) :target result)
          (fdefn :scs (descriptor-reg)))
   (:temporary (:sc unsigned-reg) raw)
-  (:temporary (:sc byte-reg) type)
+  (:temporary (:sc unsigned-reg) type)
   (:results (result :scs (descriptor-reg)))
   (:generator 38
     (load-type type function (- fun-pointer-lowtag))
@@ -271,7 +271,7 @@
           (make-ea :byte :base function
                    :disp (- (* simple-fun-code-offset n-word-bytes)
                             fun-pointer-lowtag)))
-    (inst cmp type simple-fun-header-widetag)
+    (inst cmp (reg-in-size type :byte) simple-fun-header-widetag)
     (inst jmp :e NORMAL-FUN)
     (inst lea raw (make-fixup "closure_tramp" :foreign))
     NORMAL-FUN
@@ -307,7 +307,7 @@
       (loadw tls-index symbol symbol-tls-index-slot other-pointer-lowtag)
       (inst add bsp (* binding-size n-word-bytes))
       (store-binding-stack-pointer bsp)
-      (inst or tls-index tls-index)
+      (inst test tls-index tls-index)
       (inst jmp :ne tls-index-valid)
       (inst mov tls-index symbol)
       (inst lea temp-reg-tn
@@ -390,7 +390,7 @@
 
     LOOP
     (loadw symbol bsp (- binding-symbol-slot binding-size))
-    (inst or symbol symbol)
+    (inst test symbol symbol)
     (inst jmp :z SKIP)
     ;; Bind stack debug sentinels have the unbound marker in the symbol slot
     (inst cmp symbol unbound-marker-widetag)

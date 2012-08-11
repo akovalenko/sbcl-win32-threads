@@ -37,14 +37,15 @@
   (impure-runner (impure-cload-files) #'cload-test)
   #-win32 (impure-runner (sh-files) #'sh-test)
   (report)
-  (sb-ext:quit :unix-status (if (unexpected-failures)
-                                1
-                                104)))
+  (sb-ext:exit :code (if (unexpected-failures)
+                         1
+                         104)))
 
 (defun report ()
   (terpri)
   (format t "Finished running tests.~%")
-  (let ((skipcount 0))
+  (let ((skipcount 0)
+        (*print-pretty* nil))
     (cond (*all-failures*
            (format t "Status:~%")
            (dolist (fail (reverse *all-failures*))
@@ -146,7 +147,7 @@
           (skip-file ()
             (format t ">>>~a<<<~%" test-util::*failures*)))
         (test-util:report-test-status)
-        (sb-ext:quit :unix-status 104)))))
+        (sb-ext:exit :code 104)))))
 
 (defun impure-runner (files test-fun)
   (format t "// Running impure tests (~a)~%" test-fun)
@@ -211,7 +212,7 @@
                                       :output *error-output*)))
      (let ((*failures* nil))
        (test-util:report-test-status))
-     (sb-ext:quit :unix-status (process-exit-code process))))
+     (sb-ext:exit :code (process-exit-code process))))
 
 (defun accept-test-file (file)
   (if *accept-files*

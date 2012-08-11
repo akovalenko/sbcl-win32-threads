@@ -107,21 +107,28 @@
       (second name)
       `(named-lambda ,name)))
 
+(defvar *source-form-context-alist* nil)
+
 ;;; Return the first two elements of FORM if FORM is a list. Take the
 ;;; CAR of the second form if appropriate.
 (defun source-form-context (form)
-  (cond ((atom form) nil)
-        ((>= (length form) 2)
-         (let* ((context-fun-default (lambda (x)
-                                       (declare (ignore x))
-                                       (list (first form) (second form))))
-                (context-fun (gethash (first form)
-                                      *source-context-methods*
-                                      context-fun-default)))
-           (declare (type function context-fun))
-           (funcall context-fun (rest form))))
-        (t
-         form)))
+  (flet ((get-it (form)
+           (cond ((atom form) nil)
+                 ((>= (length form) 2)
+                  (let* ((context-fun-default
+                           (lambda (x)
+                             (declare (ignore x))
+                             (list (first form) (second form))))
+                         (context-fun
+                           (gethash (first form)
+                                    *source-context-methods*
+                                    context-fun-default)))
+                    (declare (type function context-fun))
+                    (funcall context-fun (rest form))))
+                 (t
+                  form))))
+    (get-it (or (cdr (assoc form *source-form-context-alist* :test #'eq))
+                form))))
 
 ;;; Given a source path, return the original source form and a
 ;;; description of the interesting aspects of the context in which it
@@ -274,9 +281,9 @@
 ;;;
 ;;; We suppress printing of messages identical to the previous, but
 ;;; record the number of times that the message is repeated.
-(defmacro print-compiler-message (stream format-string format-args)
-  `(with-compiler-io-syntax
-     (%print-compiler-message ,stream ,format-string ,format-args)))
+(defun print-compiler-message (stream format-string format-args)
+  (with-compiler-io-syntax
+    (%print-compiler-message stream format-string format-args)))
 
 (defun %print-compiler-message (stream format-string format-args)
   (declare (type simple-string format-string))

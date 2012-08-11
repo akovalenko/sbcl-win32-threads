@@ -14,11 +14,23 @@
 (in-package :cl-user)
 
 (defpackage :thread-test
-  (:use :cl :sb-thread))
+  (:use :cl :sb-thread :sb-ext))
 
 (in-package :thread-test)
 
 (use-package :test-util)
+
+(with-test (:name atomic-update
+            :skipped-on '(not :sb-thread))
+  (let ((x (cons :count 0)))
+    (mapc #'sb-thread:join-thread
+          (loop repeat 1000
+                collect (sb-thread:make-thread
+                         (lambda ()
+                           (loop repeat 1000
+                                 do (atomic-update (cdr x) #'1+)
+                                    (sleep 0.00001))))))
+    (assert (equal x '(:count . 1000000)))))
 
 (with-test (:name mutex-owner)
   ;; Make sure basics are sane on unithreaded ports as well
@@ -402,14 +414,14 @@
     (assert (and (null value)
                  error))))
 
-(with-test (:name (:wait-for :basics))
+(with-test (:name (:wait-for :basics) :fails-on :win32)
   (assert (not (sb-ext:wait-for nil :timeout 0.1)))
   (assert (eql 42 (sb-ext:wait-for 42)))
   (let ((n 0))
     (assert (eql 100 (sb-ext:wait-for (when (= 100 (incf n))
                                         n))))))
 
-(with-test (:name (:wait-for :deadline))
+(with-test (:name (:wait-for :deadline) :fails-on :win32)
   (assert (eq :ok
               (sb-sys:with-deadline (:seconds 10)
                 (assert (not (sb-ext:wait-for nil :timeout 0.1)))
@@ -421,7 +433,7 @@
                     (error "oops"))
                 (sb-sys:deadline-timeout () :deadline)))))
 
-(with-test (:name (:condition-wait :timeout :one-thread))
+(with-test (:name (:condition-wait :timeout :one-thread) :fails-on :win32)
   (let ((mutex (make-mutex))
         (waitqueue (make-waitqueue)))
     (assert (not (with-mutex (mutex)
@@ -454,7 +466,7 @@
       (unless (eql 50 ok)
         (error "Wanted 50, got ~S" ok)))))
 
-(with-test (:name (:wait-on-semaphore :timeout :one-thread))
+(with-test (:name (:wait-on-semaphore :timeout :one-thread) :fails-on :win32)
   (let ((sem (make-semaphore))
         (n 0))
     (signal-semaphore sem 10)
@@ -473,7 +485,7 @@
                    collect (make-thread
                             (lambda ()
                               (sleep (random 0.02))
-                              (wait-on-semaphore sem :timeout 0.01)))))))
+                              (wait-on-semaphore sem :timeout 0.5)))))))
     (loop repeat 5
           do (signal-semaphore sem 2))
     (let ((ok (count-if #'join-thread threads)))
@@ -549,3 +561,36 @@
     (signal-semaphore sem)
     (try-semaphore sem 1 note)
     (assert (semaphore-notification-status note))))
+
+(with-test (:name (:return-from-thread :normal-thread)
+            :skipped-on '(not :sb-thread))
+  (let* ((thread (make-thread (lambda ()
+                                (return-from-thread (values 1 2 3))
+                                :foo)))
+         (values (multiple-value-list (join-thread thread))))
+    (unless (equal (list 1 2 3) values)
+      (error "got ~S, wanted (1 2 3)" values))))
+
+(with-test (:name (:return-from-thread :main-thread))
+  (assert (main-thread-p))
+  (assert (eq :oops
+              (handler-case
+                  (return-from-thread t)
+                (thread-error ()
+                  :oops)))))
+
+(with-test (:name (:abort-thread :normal-thread)
+            :skipped-on '(not :sb-thread))
+  (let ((thread (make-thread (lambda ()
+                               (abort-thread)
+                               :foo))))
+    (assert (eq :aborted! (join-thread thread :default :aborted!)))))
+
+(with-test (:name (:abort-thread :main-thread))
+  (assert (main-thread-p))
+  (assert (eq :oops
+              (handler-case
+                  (abort-thread)
+                (thread-error ()
+                  :oops)))))
+

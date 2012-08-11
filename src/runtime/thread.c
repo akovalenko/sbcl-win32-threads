@@ -631,14 +631,7 @@ new_thread_trampoline(struct thread *th)
 #endif
 
 #ifdef LISP_FEATURE_MACH_EXCEPTION_HANDLER
-    FSHOW((stderr, "Deallocating mach port %x\n", THREAD_STRUCT_TO_EXCEPTION_PORT(th)));
-    mach_port_move_member(current_mach_task,
-                          THREAD_STRUCT_TO_EXCEPTION_PORT(th),
-                          MACH_PORT_NULL);
-    mach_port_deallocate(current_mach_task,
-                         THREAD_STRUCT_TO_EXCEPTION_PORT(th));
-    mach_port_destroy(current_mach_task,
-                      THREAD_STRUCT_TO_EXCEPTION_PORT(th));
+    mach_lisp_thread_destroy(th);
 #endif
 
     schedule_thread_post_mortem(th);

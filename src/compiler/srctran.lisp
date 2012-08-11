@@ -345,9 +345,10 @@
 (defun set-bound (x open-p)
   (if (and x open-p) (list x) x))
 
-;;; Apply the function F to a bound X. If X is an open bound, then
-;;; the result will be open. IF X is NIL, the result is NIL.
-(defun bound-func (f x)
+;;; Apply the function F to a bound X. If X is an open bound and the
+;;; function is declared strictly monotonic, then the result will be
+;;; open. IF X is NIL, the result is NIL.
+(defun bound-func (f x strict)
   (declare (type function f))
   (and x
        (handler-case
@@ -359,7 +360,7 @@
              (if (and (floatp y)
                       (float-infinity-p y))
                  nil
-                 (set-bound y (consp x)))))
+                 (set-bound y (and strict (consp x))))))
          ;; Some numerical operations will signal SIMPLE-TYPE-ERROR, e.g.
          ;; in the course of converting a bignum to a float.  Default to
          ;; NIL in that case.
@@ -464,9 +465,19 @@
                                   `(and (not (fp-zero-p ,xb))
                                         (not (fp-zero-p ,yb))))))))))))
 
+(defun coercion-loses-precision-p (val type)
+  (typecase val
+    (single-float)
+    (double-float (subtypep type 'single-float))
+    (rational (subtypep type 'float))
+    (t (bug "Unexpected arguments to bounds coercion: ~S ~S" val type))))
+
 (defun coerce-for-bound (val type)
   (if (consp val)
-      (list (coerce-for-bound (car val) type))
+      (let ((xbound (coerce-for-bound (car val) type)))
+        (if (coercion-loses-precision-p (car val) type)
+            xbound
+            (list xbound)))
       (cond
         ((subtypep type 'double-float)
          (if (<= most-negative-double-float val most-positive-double-float)
@@ -480,7 +491,10 @@
 (defun coerce-and-truncate-floats (val type)
   (when val
     (if (consp val)
-        (list (coerce-and-truncate-floats (car val) type))
+        (let ((xbound (coerce-for-bound (car val) type)))
+          (if (coercion-loses-precision-p (car val) type)
+              xbound
+              (list xbound)))
         (cond
           ((subtypep type 'double-float)
            (if (<= most-negative-double-float val most-positive-double-float)
@@ -529,7 +543,7 @@
                  :high (copy-interval-limit (interval-high x))))
 
 ;;; Given a point P contained in the interval X, split X into two
-;;; interval at the point P. If CLOSE-LOWER is T, then the left
+;;; intervals at the point P. If CLOSE-LOWER is T, then the left
 ;;; interval contains P. If CLOSE-UPPER is T, the right interval
 ;;; contains P. You can specify both to be T or NIL.
 (defun interval-split (p x &optional close-lower close-upper)
@@ -781,8 +795,8 @@
 ;;; the negative of an interval
 (defun interval-neg (x)
   (declare (type interval x))
-  (make-interval :low (bound-func #'- (interval-high x))
-                 :high (bound-func #'- (interval-low x))))
+  (make-interval :low (bound-func #'- (interval-high x) t)
+                 :high (bound-func #'- (interval-low x) t)))
 
 ;;; Add two intervals.
 (defun interval-add (x y)
@@ -891,13 +905,17 @@
 
 ;;; Apply the function F to the interval X. If X = [a, b], then the
 ;;; result is [f(a), f(b)]. It is up to the user to make sure the
-;;; result makes sense. It will if F is monotonic increasing (or
-;;; non-decreasing).
-(defun interval-func (f x)
+;;; result makes sense. It will if F is monotonic increasing (or, if
+;;; the interval is closed, non-decreasing).
+;;;
+;;; (Actually most uses of INTERVAL-FUNC are coercions to float types,
+;;; which are not monotonic increasing, so default to calling
+;;; BOUND-FUNC with a non-strict argument).
+(defun interval-func (f x &optional increasing)
   (declare (type function f)
            (type interval x))
-  (let ((lo (bound-func f (interval-low x)))
-        (hi (bound-func f (interval-high x))))
+  (let ((lo (bound-func f (interval-low x) increasing))
+        (hi (bound-func f (interval-high x) increasing)))
     (make-interval :low lo :high hi)))
 
 ;;; Return T if X < Y. That is every number in the interval X is
@@ -969,14 +987,13 @@
 ;;; Compute the square of an interval.
 (defun interval-sqr (x)
   (declare (type interval x))
-  (interval-func (lambda (x) (* x x))
-                 (interval-abs x)))
+  (interval-func (lambda (x) (* x x)) (interval-abs x)))
 
 ;;;; numeric DERIVE-TYPE methods
 
 ;;; a utility for defining derive-type methods of integer operations. If
 ;;; the types of both X and Y are integer types, then we compute a new
-;;; integer type with bounds determined Fun when applied to X and Y.
+;;; integer type with bounds determined by FUN when applied to X and Y.
 ;;; Otherwise, we use NUMERIC-CONTAGION.
 (defun derive-integer-type-aux (x y fun)
   (declare (type function fun))
@@ -2326,7 +2343,7 @@
   (if (and divisor-low divisor-high)
       ;; We know the range of the divisor, and the remainder must be
       ;; smaller than the divisor. We can tell the sign of the
-      ;; remainer if we know the sign of the number.
+      ;; remainder if we know the sign of the number.
       (let ((divisor-max (1- (max (abs divisor-low) (abs divisor-high)))))
         `(integer ,(if (or (null number-low)
                            (minusp number-low))
@@ -2337,7 +2354,7 @@
                        divisor-max
                        0)))
       ;; The divisor is potentially either very positive or very
-      ;; negative. Therefore, the remainer is unbounded, but we might
+      ;; negative. Therefore, the remainder is unbounded, but we might
       ;; be able to tell something about the sign from the number.
       `(integer ,(if (and number-low (not (minusp number-low)))
                      ;; The number we are dividing is positive.
@@ -3043,6 +3060,19 @@
                (reoptimize-component (node-component node) :maybe))
              (cut-node (node &aux did-something)
                (when (and (not (block-delete-p (node-block node)))
+                          (ref-p node)
+                          (constant-p (ref-leaf node)))
+                 (let* ((constant-value (constant-value (ref-leaf node)))
+                        (new-value (if signedp
+                                       (mask-signed-field width constant-value)
+                                       (ldb (byte width 0) constant-value))))
+                   (unless (= constant-value new-value)
+                     (change-ref-leaf node (make-constant new-value))
+                     (setf (lvar-%derived-type (node-lvar node)) (make-values-type :required (list (ctype-of new-value))))
+                     (setf (block-reoptimize (node-block node)) t)
+                     (reoptimize-component (node-component node) :maybe)
+                     (return-from cut-node t))))
+               (when (and (not (block-delete-p (node-block node)))
                           (combination-p node)
                           (eq (basic-combination-kind node) :known))
                  (let* ((fun-ref (lvar-use (combination-fun node)))
@@ -3117,9 +3147,23 @@
                 (best-modular-version width nil)
               (when w
                 ;; FIXME: This should be (CUT-TO-WIDTH NODE KIND WIDTH SIGNEDP).
-                (cut-to-width x kind width signedp)
-                (cut-to-width y kind width signedp)
-                nil ; After fixing above, replace with T.
+                ;;
+                ;; FIXME: I think the FIXME (which is from APD) above
+                ;; implies that CUT-TO-WIDTH should do /everything/
+                ;; that's required, including reoptimizing things
+                ;; itself that it knows are necessary.  At the moment,
+                ;; CUT-TO-WIDTH sets up some new calls with
+                ;; combination-type :FULL, which later get noticed as
+                ;; known functions and properly converted.
+                ;;
+                ;; We cut to W not WIDTH if SIGNEDP is true, because
+                ;; signed constant replacement needs to know which bit
+                ;; in the field is the signed bit.
+                (let ((xact (cut-to-width x kind (if signedp w width) signedp))
+                      (yact (cut-to-width y kind (if signedp w width) signedp)))
+                  (declare (ignore xact yact))
+                  nil) ; After fixing above, replace with T, meaning
+                       ; "don't reoptimize this (LOGAND) node any more".
                 ))))))))
 
 (defoptimizer (mask-signed-field optimizer) ((width x) node)
@@ -3132,8 +3176,9 @@
             (multiple-value-bind (w kind)
                 (best-modular-version width t)
               (when w
-                ;; FIXME: This should be (CUT-TO-WIDTH NODE KIND WIDTH T).
-                (cut-to-width x kind width t)
+                ;; FIXME: This should be (CUT-TO-WIDTH NODE KIND W T).
+                ;; [ see comment above in LOGAND optimizer ]
+                (cut-to-width x kind w t)
                 nil ; After fixing above, replace with T.
                 ))))))))
 
@@ -3559,6 +3604,24 @@
   (def round)
   (def floor)
   (def ceiling))
+
+(macrolet ((def (name &optional float)
+             (let ((x (if float '(float x) 'x)))
+               `(deftransform ,name ((x y) (integer (constant-arg (member 1 -1)))
+                                     *)
+                  "fold division by 1"
+                  `(values ,(if (minusp (lvar-value y))
+                                '(%negate ,x)
+                                ',x)  0)))))
+  (def truncate)
+  (def round)
+  (def floor)
+  (def ceiling)
+  (def ftruncate t)
+  (def fround t)
+  (def ffloor t)
+  (def fceiling t))
+
 
 ;;;; character operations
 
@@ -3844,7 +3907,7 @@
 (define-source-transform > (&rest args) (multi-compare '> args nil 'real))
 ;;; We cannot do the inversion for >= and <= here, since both
 ;;;   (< NaN X) and (> NaN X)
-;;; are false, and we don't have type-inforation available yet. The
+;;; are false, and we don't have type-information available yet. The
 ;;; deftransforms for two-argument versions of >= and <= takes care of
 ;;; the inversion to > and < when possible.
 (define-source-transform <= (&rest args) (multi-compare '<= args nil 'real))

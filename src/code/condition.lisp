@@ -264,7 +264,8 @@
                   (condition-classoid type)
                   (class
                    ;; Punt to CLOS.
-                   (return-from make-condition (apply #'make-instance type args)))
+                   (return-from make-condition
+                     (apply #'make-instance type args)))
                   (classoid
                    (error 'simple-type-error
                           :datum type
@@ -275,7 +276,8 @@
                    (error 'simple-type-error
                           :datum type
                           :expected-type 'condition-class
-                          :format-control "Bad type argument:~%  ~S"
+                          :format-control
+                          "~s doesn't designate a condition class."
                           :format-arguments (list type)))))
          (res (make-condition-object args)))
     (setf (%instance-layout res) (classoid-layout class))
@@ -586,7 +588,8 @@
            ;; is a lambda referring to condition slot accessors:
            ;; they're not proclaimed as functions before it has run if
            ;; we're under EVAL or loaded as source.
-           (%set-condition-report ',name ,report))))))
+           (%set-condition-report ',name ,report)
+           ',name)))))
 
 ;;;; various CONDITIONs specified by ANSI
 
@@ -766,52 +769,44 @@
   (:report (lambda (condition stream)
              (%report-reader-error condition stream :simple t))))
 
+(defun stream-error-position-info (stream &optional position)
+  (unless (interactive-stream-p stream)
+    (let ((now (file-position-or-nil-for-error stream))
+          (pos position))
+      (when (and (not pos) now (plusp now))
+        ;; FILE-POSITION is the next character -- error is at the previous one.
+        (setf pos (1- now)))
+      (let (lineno colno)
+        (when (and pos
+                   (< pos sb!xc:array-dimension-limit)
+                   (file-position stream :start))
+          (let ((string
+                  (make-string pos :element-type (stream-element-type stream))))
+            (when (= pos (read-sequence string stream))
+              ;; Lines count from 1, columns from 0. It's stupid and traditional.
+              (setq lineno (1+ (count #\Newline string))
+                    colno (- pos (or (position #\Newline string :from-end t) 0)))))
+          (file-position-or-nil-for-error stream now))
+        (remove-if-not #'second
+                       (list (list :line lineno)
+                             (list :column colno)
+                             (list :file-position pos)))))))
+
 ;;; base REPORTing of a READER-ERROR
 ;;;
 ;;; When SIMPLE, we expect and use SIMPLE-CONDITION-ish FORMAT-CONTROL
 ;;; and FORMAT-ARGS slots.
-(defun %report-reader-error (condition stream &key simple)
-  (let* ((error-stream (stream-error-stream condition))
-         (pos (file-position-or-nil-for-error error-stream)))
-    (when (and pos (plusp pos))
-      ;; FILE-POSITION is the next character -- error is at the previous one.
-      (decf pos))
-    (let (lineno colno)
-      (when (and pos
-                 (< pos sb!xc:array-dimension-limit)
-                 ;; KLUDGE: lseek() (which is what FILE-POSITION
-                 ;; reduces to on file-streams) is undefined on
-                 ;; "some devices", which in practice means that it
-                 ;; can claim to succeed on /dev/stdin on Darwin
-                 ;; and Solaris.  This is obviously bad news,
-                 ;; because the READ-SEQUENCE below will then
-                 ;; block, not complete, and the report will never
-                 ;; be printed.  As a workaround, we exclude
-                 ;; interactive streams from this attempt to report
-                 ;; positions.  -- CSR, 2003-08-21
-                 (not (interactive-stream-p error-stream))
-                 (file-position error-stream :start))
-        (let ((string
-               (make-string pos
-                            :element-type (stream-element-type
-                                           error-stream))))
-          (when (= pos (read-sequence string error-stream))
-            ;; Lines count from 1, columns from 0. It's stupid and traditional.
-            (setq lineno (1+ (count #\Newline string))
-                  colno (- pos (or (position #\Newline string :from-end t) 0)))))
-        (file-position-or-nil-for-error error-stream pos))
-      (pprint-logical-block (stream nil)
-        (if simple
-            (apply #'format stream
-                   (simple-condition-format-control condition)
-                   (simple-condition-format-arguments condition))
-            (prin1 (class-name (class-of condition)) stream))
-        (format stream "~2I~@[~_~_~:{~:(~A~): ~S~:^, ~:_~}~]~_~_Stream: ~S"
-                (remove-if-not #'second
-                               (list (list :line lineno)
-                                     (list :column colno)
-                                     (list :file-position pos)))
-                error-stream)))))
+(defun %report-reader-error (condition stream &key simple position)
+  (let ((error-stream (stream-error-stream condition)))
+    (pprint-logical-block (stream nil)
+      (if simple
+          (apply #'format stream
+                 (simple-condition-format-control condition)
+                 (simple-condition-format-arguments condition))
+          (prin1 (class-name (class-of condition)) stream))
+      (format stream "~2I~@[~_~_~:{~:(~A~): ~S~:^, ~:_~}~]~_~_Stream: ~S"
+              (stream-error-position-info error-stream position)
+              error-stream))))
 
 ;;;; special SBCL extension conditions
 
@@ -1010,8 +1005,9 @@
   ((name :initarg :name :reader implicit-generic-function-name))
   (:report
    (lambda (condition stream)
-     (format stream "~@<Implicitly creating new generic function ~S.~:@>"
-             (implicit-generic-function-name condition)))))
+     (let ((*package* (find-package :keyword)))
+       (format stream "~@<Implicitly creating new generic function ~S.~:@>"
+               (implicit-generic-function-name condition))))))
 
 (define-condition extension-failure (reference-condition simple-error)
   ())
@@ -1225,7 +1221,7 @@ SB-EXT:PACKAGE-LOCKED-ERROR-SYMBOL."))
 
 (define-condition simple-package-error (simple-condition package-error) ())
 
-(define-condition simple-reader-package-error (simple-reader-error) ())
+(define-condition simple-reader-package-error (simple-reader-error package-error) ())
 
 (define-condition reader-eof-error (end-of-file)
   ((context :reader reader-eof-error-context :initarg :context))
@@ -1631,7 +1627,7 @@ the usual naming convention (names like *FOO*) for special variables"
 
 (define-condition deprecation-condition ()
   ((name :initarg :name :reader deprecated-name)
-   (replacement :initarg :replacement :reader deprecated-name-replacement)
+   (replacements :initarg :replacements :reader deprecated-name-replacements)
    (since :initarg :since :reader deprecated-since)
    (runtime-error :initarg :runtime-error :reader deprecated-name-runtime-error)))
 
@@ -1639,14 +1635,21 @@ the usual naming convention (names like *FOO*) for special variables"
   (let ((*package* (find-package :keyword)))
     (if *print-escape*
         (print-unreadable-object (condition stream :type t)
-          (format stream "~S is deprecated~@[, use ~S~]"
+          (apply #'format
+                 stream "~S is deprecated.~
+                         ~#[~; Use ~S instead.~; ~
+                               Use ~S or ~S instead.~:; ~
+                               Use~@{~#[~; or~] ~S~^,~} instead.~]"
                   (deprecated-name condition)
-                  (deprecated-name-replacement condition)))
-        (format stream "~@<~S has been deprecated as of SBCL ~A~
-                        ~@[, use ~S instead~].~:@>"
+                  (deprecated-name-replacements condition)))
+        (apply #'format
+               stream "~@<~S has been deprecated as of SBCL ~A.~
+                       ~#[~; Use ~S instead.~; ~
+                             Use ~S or ~S instead.~:; ~
+                             Use~@{~#[~; or~] ~S~^,~:_~} instead.~]~:@>"
                 (deprecated-name condition)
                 (deprecated-since condition)
-                (deprecated-name-replacement condition)))))
+                (deprecated-name-replacements condition)))))
 
 (define-condition early-deprecation-warning (style-warning deprecation-condition)
   ())
@@ -1746,5 +1749,14 @@ not exists.")
 condition, stepping into the current form. Signals a CONTROL-ERROR is
 the restart does not exist."))
 
-(/show0 "condition.lisp end of file")
+;;; Compiler macro magic
 
+(define-condition compiler-macro-keyword-problem ()
+  ((argument :initarg :argument :reader compiler-macro-keyword-argument))
+  (:report (lambda (condition stream)
+             (format stream "~@<Argument ~S in keyword position is not ~
+                             a self-evaluating symbol, preventing compiler-macro ~
+                             expansion.~@:>"
+                     (compiler-macro-keyword-argument condition)))))
+
+(/show0 "condition.lisp end of file")

@@ -1,11 +1,137 @@
 ;;;; -*- coding: utf-8; fill-column: 78 -*-
-changes relative to sbcl-1.0.55:
+changes in sbcl-1.0.58 relative to sbcl-1.0.57:
+  * enhancement: implicit generic function warnings now specify the package
+    in which the new generic function is being created.
+  * enhancement: SB-EXT:ATOMIC-UPDATE makes it easy to perform non-destructive
+    updates of CAS-able places (similar to Clojure's swap!).
+  * enhancement: run-program no longer decodes and re-encodes environment when
+    :environment argument is not provided. (lp#985904)
+  * enhancement: errors during compiler-macro expansion no longer cause
+    runtime errors, only a compile-time warning, otherwise behaving as if
+    the compiler macro had declined to expand.
+  * optimization: On x86-64, code alignment of block headers is done with
+    multi-byte NOPs now instead of repetitions of the single-byte NOP.
+  * optimization: MAP-INTO is substantially faster when the target sequence is
+    of unknown type; mapping into lists is no longer O(N^2). (thanks to James
+    M. Lawrence)
+  * optimization: the compiler no longer heap-conses to check exits in cases
+    where the exit function is dynamic extent, or when it can prove the exit
+    function cannot escape.
+  * optimization: SB-SEQUENCE:DOSEQUENCE is faster on vectors of unknown
+    element type, and vectors that aren't SIMPLE-ARRAYs.
+  * optimization: CL:SORT and CL:STABLE-SORT are more efficient in execution
+    speed (around 1/3 the time in some cases), and a little better in terms of
+    comparison calls. (Thanks to Takeru Ohta)
+  * bug fix: On SPARC, a limitation on the number of code constants emittable
+    by the compiler has been lifted, allowing certain long functions to
+    compiled and assembled which had previously been unsupported; fixes
+    cl-bench on this ISA (lp#1008996).
+  * bug fix: potential for infinite recursion during compilation of CLOS slot
+    typechecks when dependency graph had loops. (lp#1001799)
+  * bug fix: error forms reported with some program-errors were not escaped
+    properly.
+  * bug fix: functions from EVAL are now on more equal footing with functions
+    from COMPILE. (lp#1000783, lp#851170, lp#922408)
+  * bug fix: ENSURE-GENERIC-METHOD-COMBINATION accepts method combination
+    objects as its :METHOD-COMBINATION argument, not just lists designating
+    method combinations. (lp#936513)
+  * bug fix: run-program no longer unconditionally uses /tmp/ for temporary
+    files. (lp#968837).
+  * bug fix: restore build on solaris/sparc. (lp#1008506)
+  * bug fix: an issue with LDB in the PowerPC backend has been resolved;
+    this fixes an issue found with cl-postgres (thanks to Tomas Hlavaty).
+  * bug fix: compiler-macro lambda-lists specifying non-keyword symbols
+    as keyword arguments no longer accidentally match unevaluated symbols
+    against them.
+  * bug fix: FORMAT used to loop infinitely in some cases when a COLINC
+    parameter was zero, now it signals an error. (lp#905817, fixed since
+    1.0.56.19)
+  * bug fix: run-program with :pty t no longer makes the pty as the process's
+    controling terminal.
+
+changes in sbcl-1.0.57 relative to sbcl-1.0.56:
+  * RANDOM enhancements and bug fixes:
+    ** bug fix: the range and distribution of random integers could be
+       catastrophically wrong when the compiler derived the type of its
+       argument as a disjoint set of small integers.
+    ** bug fix: the distribution of random integers is now completely
+       uniform even when the specified limit is not a power of two.
+       (Previously some values could be about 0.1 % more probable than
+       others in the worst case.) (lp#309467)
+    ** RANDOM on large integer arguments is generally faster and conses
+       less than before; this is visible for fixnums above a length of
+       about 24 bits, but extremely so for bignums: the old implementation
+       used time and space quadratical in the size of the argument there,
+       the new one is linear.
+  * enhancement: redesigned protocol for quitting SBCL. SB-EXT:EXIT is the new
+    main entry point, SB-EXT:QUIT is deprecated.
+  * enhancement: additions to the SB-THREAD API: RETURN-FROM-THREAD,
+    ABORT-THREAD, MAIN-THREAD-P, and MAIN-THREAD.
+  * enhancement: FASL loading no longer grabs the world-lock.
+  * enhancement: GENCGC reclaims space more aggressively when objects being
+    allocated are a large fraction of the total available heap space.
+    (lp#936304)
+  * enhancement: backtraces show the correct number of arguments for frames
+    called with too many arguments.
+  * enhancement: support for abort(3), exit(3), and _exit(2) has been added to
+    SB-POSIX.
+  * enhancement: ASDF has been updated 2.21.
+  * optimization: fewer uses of full calls to signed modular functions.
+    (lp#903821)
+  * optimization: typechecking alien values is typically 5 x faster.
+  * optimization: FDEFINITION, SYMBOL-FUNCTION, MACRO-FUNCTION, and FBOUNDP
+    are 20% faster.
+  * bug fix: file compilation performance issues when dumping subtypes
+    of CHARACTER (lp#994487)
+  * bug fix: fixed disassembly of some SSE instructions on x86-64.
+  * bug fix: SB-SIMPLE-STREAMS signals an error for bogus :CLASS arguments in
+    OPEN. (lp#969352, thanks to Kambiz Darabi)
+  * bug fix: CASE normal-clauses do not allow T and OTHERWISE as keys.
+    (lp#959687)
+  * bug fix: (SETF (FIND-CLASS X) NIL) removed proper name of the underlying
+    classoid even if X was not the proper name of the class. (lp#941102)
+  * bug fix: declaration leakage between lexical environments due to careless
+    use of NCONC in MAKE-LEXENV. (lp#924276)
+  * bug fix: ENSURE-DIRECTORIES-EXIST now works when
+    *default-pathname-defaults* contains NAME or TYPE components.
+  * bug fix: PPRINT couldn't print improper lists with CARs being some symbols
+    from CL package, e.g. (loop . 10).
+  * bug fix: run-program with existent or non-existent files for :output or
+    :input when :if-output-exists or :if-input-does-not-exist are NIL properly
+    returns NIL instead of signalling an obscure error.
+  * bug fix: fix miscompilation of some logand forms with large constant
+    arguments.  (lp#974406)
+  * bug fix: account for funcallable-instance objects properly in ROOM.
+  * bug fix: incorrect octets reported for c-string decoding errors.
+    (lp#985505)
+  * bug fix: miscompilation of LDB on the PowerPC platform.  (thanks to Bruce
+    O'Neel)
+  * bug fix: better input error reporting for COMPILE-FILE. (lp#493380)
+  * bug fix: default size of non-nursery generations has been shrunk on GENCGC,
+    allowing faster release of memory back to the OS. (lp#991293)
+  * bug fix: WITH-DEADLINE (:SECONDS NIL :OVERRIDE T) now drops any
+    existing deadline for the dynamic scope of its body.
+  * bug fix: compiler-internal interval arithmetic needed to be more
+    conservative about open intervals when operated on by monotonic but not
+    strictly-monotonic functions.  (lp#975528)
+  * bug fix: copy-tree caused stack exhaustion on long linear lists, and now
+    it's also slightly faster. (lp#998926)
+  * bug fix: better error messages for malformed declarations.
+    (lp#1000239)
+  * bug fix: define-condition didn't return the name of the defined condition.
+  * documentation:
+    ** improved docstrings: REPLACE (lp#965592)
+
+changes in sbcl-1.0.56 relative to sbcl-1.0.55:
   * bug fix: fix copy-structure.  When copying from stack to heap, garbage
     could end up in the heap making GC unhappy.
     (Thanks to James Knight, lp#911027)
   * enhancements
     ** SBCL can now be built using Clang.
+    ** ASDF has been updated 2.20.
   * bug fix: compiler errors when weakening hairy integer types. (lp#913232)
+  * bug fix: don't complain about a too-hairy lexical environment for inlining
+    when the function has never been requested for inlining.  (lp#963530)
 
 changes in sbcl-1.0.55 relative to sbcl-1.0.54:
   * enhancements to building SBCL using make.sh:
@@ -55,6 +181,8 @@ changes in sbcl-1.0.55 relative to sbcl-1.0.54:
   * optimization: the compiler no longer refuses to coerce large fixnums to
     single floats inline, except on x86 where this limitation is still
     necessary.
+  * optimization: truncation operations on integers with constant divisor
+    arguments 1 and -1 are optimized away.
   * bug fix: deadlock detection could report the same deadlock twice, for
     two different threads. Now a single deadlock is reported exactly once.
   * bug fix: interval-arithmetic division during type derivation did not
@@ -99,6 +227,7 @@ changes in sbcl-1.0.55 relative to sbcl-1.0.54:
     forms of MAKE-ARRAY with dynamic-extent. (lp#902351)
   * bug fix: some of the compile-time side-effects of DEFCLASS were not caught
     by package locks.
+  * bug fix: Proper handling of --dynamic-space-size option on 32 bit platforms.
 
 changes in sbcl-1.0.54 relative to sbcl-1.0.53:
   * minor incompatible changes:

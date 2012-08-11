@@ -17,6 +17,7 @@
   (:export #:assert-consing
            #:assert-no-consing
            #:compiler-derived-type
+           #:count-full-calls
            #:find-value-cell-values
            #:find-code-constants
            #:find-named-callees
@@ -100,21 +101,6 @@
     (unwind-protect
          (progn
            (with-open-file (f lisp :direction :output)
-             (dolist (form toplevel-forms)
-               (prin1 form f)))
-           (multiple-value-bind (fasl warn fail) (compile-file lisp)
-             (when load
-               (load fasl))
-             (values warn fail)))
-      (ignore-errors (delete-file lisp))
-      (ignore-errors (delete-file fasl)))))
-
-(defun file-compile (toplevel-forms &key load)
-  (let* ((lisp (merge-pathnames "file-compile-tmp.lisp"))
-         (fasl (compile-file-pathname lisp)))
-    (unwind-protect
-         (progn
-           (with-open-file (f lisp :direction :output)
              (if (stringp toplevel-forms)
                  (write-line toplevel-forms f)
                  (dolist (form toplevel-forms)
@@ -125,3 +111,16 @@
              (values warn fail)))
       (ignore-errors (delete-file lisp))
       (ignore-errors (delete-file fasl)))))
+
+;; Pretty horrible, but does the job
+(defun count-full-calls (name function)
+  (let ((code (with-output-to-string (s)
+                (disassemble function :stream s)))
+        (n 0))
+    (with-input-from-string (s code)
+      (loop for line = (read-line s nil nil)
+            while line
+            when (and (search name line)
+                      (search "#<FDEFINITION" line))
+            do (incf n)))
+    n))

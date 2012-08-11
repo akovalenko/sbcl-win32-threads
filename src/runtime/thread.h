@@ -337,8 +337,8 @@ void pop_gcing_safety(struct gcing_safety *from)
 
 
 #if defined(LISP_FEATURE_MACH_EXCEPTION_HANDLER)
-#define THREAD_STRUCT_TO_EXCEPTION_PORT(th) ((mach_port_t) th)
-#define EXCEPTION_PORT_TO_THREAD_STRUCT(th) ((struct thread *) th)
+extern kern_return_t mach_lisp_thread_init(struct thread *thread);
+extern kern_return_t mach_lisp_thread_destroy(struct thread *thread);
 #endif
 
 extern boolean is_some_thread_local_addr(os_vm_address_t addr);

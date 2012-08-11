@@ -62,12 +62,13 @@ provide bindings for printer control variables.")
 ;;; nestedness inside debugger command loops
 (defvar *debug-command-level* 0)
 
-;;; If this is bound before the debugger is invoked, it is used as the
-;;; stack top by the debugger.
+;;; If this is bound before the debugger is invoked, it is used as the stack
+;;; top by the debugger. It can either be the first interesting frame, or the
+;;; name of the last uninteresting frame.
 (defvar *stack-top-hint* nil)
 
-(defvar *stack-top* nil)
 (defvar *real-stack-top* nil)
+(defvar *stack-top* nil)
 
 (defvar *current-frame* nil)
 
@@ -331,11 +332,18 @@ thread, NIL otherwise."
 (defun clean-xep (name args)
   (values (second name)
           (if (consp args)
-              (let ((count (first args))
-                    (real-args (rest args)))
+              (let* ((count (first args))
+                     (real-args (rest args)))
                 (if (fixnump count)
-                    (subseq real-args 0
-                            (min count (length real-args)))
+                    ;; So, this is a cheap trick -- but makes backtraces for
+                    ;; too-many-arguments-errors much, much easier to to
+                    ;; understand. FIXME: For :EXTERNAL frames at least we
+                    ;; should be able to get the actual arguments, really.
+                    (loop repeat count
+                          for arg = (if real-args
+                                        (pop real-args)
+                                        (make-unprintable-object "unknown"))
+                          collect arg)
                     real-args))
               args)))
 
@@ -354,34 +362,33 @@ thread, NIL otherwise."
                       (make-unprintable-object "more unavailable arguments")))))
               args)))
 
+(defun clean-debug-fun-name (name &optional args)
+  ;; FIXME: do we need to deal with
+  ;; HAIRY-FUNCTION-ENTRY here? I can't make it or
+  ;; &AUX-BINDINGS appear in backtraces, so they are
+  ;; left alone for now. --NS 2005-02-28
+  (if (consp name)
+      (case (first name)
+        ((sb!c::xep sb!c::tl-xep)
+         (clean-xep name args))
+        ((sb!c::&more-processor)
+         (clean-&more-processor name args))
+        ((sb!c::hairy-arg-processor
+          sb!c::varargs-entry sb!c::&optional-processor)
+         (clean-debug-fun-name (second name) args))
+        (t
+         (values name args)))
+      (values name args)))
+
 (defun frame-call (frame)
-  (labels ((clean-name-and-args (name args)
-             (if (and (consp name) (not *show-entry-point-details*))
-                 ;; FIXME: do we need to deal with
-                 ;; HAIRY-FUNCTION-ENTRY here? I can't make it or
-                 ;; &AUX-BINDINGS appear in backtraces, so they are
-                 ;; left alone for now. --NS 2005-02-28
-                 (case (first name)
-                   ((eval)
-                    ;; The name of an evaluator thunk contains
-                    ;; the source context -- but that makes for a
-                    ;; confusing frame name, since it can look like an
-                    ;; EVAL call with a bogus argument.
-                    (values '#:eval-thunk nil))
-                   ((sb!c::xep sb!c::tl-xep)
-                    (clean-xep name args))
-                   ((sb!c::&more-processor)
-                    (clean-&more-processor name args))
-                   ((sb!c::hairy-arg-processor
-                     sb!c::varargs-entry sb!c::&optional-processor)
-                    (clean-name-and-args (second name) args))
-                   (t
-                    (values name args)))
-                 (values name args))))
+  (flet ((clean-name-and-args (name args)
+           (if (not *show-entry-point-details*)
+               (clean-debug-fun-name name args)
+               (values name args))))
     (let ((debug-fun (sb!di:frame-debug-fun frame)))
       (multiple-value-bind (name args)
           (clean-name-and-args (sb!di:debug-fun-name debug-fun)
-                                (frame-args-as-list frame))
+                               (frame-args-as-list frame))
         (values name args (sb!di:debug-fun-kind debug-fun))))))
 
 (defun ensure-printable-object (object)
@@ -549,35 +556,57 @@ thread, NIL otherwise."
       (progv (list variable) (list nil)
         (funcall old-hook condition old-hook)))))
 
+;;; We can bind *stack-top-hint* to a symbol, in which case this function will
+;;; resolve that hint lazily before we enter the debugger.
+(defun resolve-stack-top-hint ()
+  (let ((hint *stack-top-hint*)
+        (*stack-top-hint* nil))
+    (cond
+      ;; No hint, just keep the debugger guts out.
+      ((not hint)
+       (find-caller-name-and-frame))
+      ;; Interrupted. Look for the interrupted frame -- if we don't find one
+      ;; this falls back to the next case.
+      ((and (eq hint 'invoke-interruption)
+            (nth-value 1 (find-interrupted-name-and-frame))))
+      ;; Name of the first uninteresting frame.
+      ((symbolp hint)
+       (find-caller-of-named-frame hint))
+      ;; We already have a resolved hint.
+      (t
+       hint))))
+
 (defun invoke-debugger (condition)
   #!+sb-doc
   "Enter the debugger."
 
-  ;; call *INVOKE-DEBUGGER-HOOK* first, so that *DEBUGGER-HOOK* is not
-  ;; called when the debugger is disabled
-  (run-hook '*invoke-debugger-hook* condition)
-  (run-hook '*debugger-hook* condition)
+  (let ((*stack-top-hint* (resolve-stack-top-hint)))
 
-  ;; We definitely want *PACKAGE* to be of valid type.
-  ;;
-  ;; Elsewhere in the system, we use the SANE-PACKAGE function for
-  ;; this, but here causing an exception just as we're trying to handle
-  ;; an exception would be confusing, so instead we use a special hack.
-  (unless (and (packagep *package*)
-               (package-name *package*))
-    (setf *package* (find-package :cl-user))
-    (format *error-output*
-            "The value of ~S was not an undeleted PACKAGE. It has been
+    ;; call *INVOKE-DEBUGGER-HOOK* first, so that *DEBUGGER-HOOK* is not
+    ;; called when the debugger is disabled
+    (run-hook '*invoke-debugger-hook* condition)
+    (run-hook '*debugger-hook* condition)
+
+    ;; We definitely want *PACKAGE* to be of valid type.
+    ;;
+    ;; Elsewhere in the system, we use the SANE-PACKAGE function for
+    ;; this, but here causing an exception just as we're trying to handle
+    ;; an exception would be confusing, so instead we use a special hack.
+    (unless (and (packagep *package*)
+                 (package-name *package*))
+      (setf *package* (find-package :cl-user))
+      (format *error-output*
+              "The value of ~S was not an undeleted PACKAGE. It has been
 reset to ~S."
-            '*package* *package*))
+              '*package* *package*))
 
-  ;; Before we start our own output, finish any pending output.
-  ;; Otherwise, if the user tried to track the progress of his program
-  ;; using PRINT statements, he'd tend to lose the last line of output
-  ;; or so, which'd be confusing.
-  (flush-standard-output-streams)
+    ;; Before we start our own output, finish any pending output.
+    ;; Otherwise, if the user tried to track the progress of his program
+    ;; using PRINT statements, he'd tend to lose the last line of output
+    ;; or so, which'd be confusing.
+    (flush-standard-output-streams)
 
-  (funcall-with-debug-io-syntax #'%invoke-debugger condition))
+    (funcall-with-debug-io-syntax #'%invoke-debugger condition)))
 
 (defun %print-debugger-invocation-reason (condition stream)
   (format stream "~2&")
@@ -665,9 +694,9 @@ reset to ~S."
   (declare (ignore me))
   ;; There is no one there to interact with, so report the
   ;; condition and terminate the program.
-  (flet ((failure-quit (&key recklessly-p)
+  (flet ((failure-quit (&key abort)
            (/show0 "in FAILURE-QUIT (in --disable-debugger debugger hook)")
-           (quit :unix-status 1 :recklessly-p recklessly-p)))
+           (exit :code 1 :abort abort)))
     ;; This HANDLER-CASE is here mostly to stop output immediately
     ;; (and fall through to QUIT) when there's an I/O error. Thus,
     ;; when we're run under a shell script or something, we can die
@@ -717,7 +746,7 @@ reset to ~S."
         (ignore-errors
          (%primitive print
                      "Argh! error within --disable-debugger error handling"))
-        (failure-quit :recklessly-p t)))))
+        (failure-quit :abort t)))))
 
 (defvar *old-debugger-hook* nil)
 
@@ -1317,124 +1346,25 @@ and LDB (the low-level debugger).  See also ENABLE-DEBUGGER."
 
 ;;;; source location printing
 
-;;; We cache a stream to the last valid file debug source so that we
-;;; won't have to repeatedly open the file.
-;;;
-;;; KLUDGE: This sounds like a bug, not a feature. Opening files is fast
-;;; in the 1990s, so the benefit is negligible, less important than the
-;;; potential of extra confusion if someone changes the source during
-;;; a debug session and the change doesn't show up. And removing this
-;;; would simplify the system, which I like. -- WHN 19990903
-(defvar *cached-debug-source* nil)
-(declaim (type (or sb!di:debug-source null) *cached-debug-source*))
-(defvar *cached-source-stream* nil)
-(declaim (type (or stream null) *cached-source-stream*))
-
-;;; To suppress the read-time evaluation #. macro during source read,
-;;; *READTABLE* is modified. *READTABLE* is cached to avoid
-;;; copying it each time, and invalidated when the
-;;; *CACHED-DEBUG-SOURCE* has changed.
-(defvar *cached-readtable* nil)
-(declaim (type (or readtable null) *cached-readtable*))
-
 ;;; Stuff to clean up before saving a core
 (defun debug-deinit ()
-  (setf *cached-debug-source* nil
-        *cached-source-stream* nil
-        *cached-readtable* nil))
+  ;; Nothing to do right now. Once there was, maybe once there
+  ;; will be again.
+  )
 
-;;; We also cache the last toplevel form that we printed a source for
-;;; so that we don't have to do repeated reads and calls to
-;;; FORM-NUMBER-TRANSLATIONS.
-(defvar *cached-toplevel-form-offset* nil)
-(declaim (type (or index null) *cached-toplevel-form-offset*))
-(defvar *cached-toplevel-form*)
-(defvar *cached-form-number-translations*)
-
-;;; Given a code location, return the associated form-number
-;;; translations and the actual top level form. We check our cache ---
-;;; if there is a miss, we dispatch on the kind of the debug source.
-(defun get-toplevel-form (location)
-  (let ((d-source (sb!di:code-location-debug-source location)))
-    (if (and (eq d-source *cached-debug-source*)
-             (eql (sb!di:code-location-toplevel-form-offset location)
-                  *cached-toplevel-form-offset*))
-        (values *cached-form-number-translations* *cached-toplevel-form*)
-        (let* ((offset (sb!di:code-location-toplevel-form-offset location))
-               (res
-                (cond ((sb!di:debug-source-namestring d-source)
-                       (get-file-toplevel-form location))
-                      ((sb!di:debug-source-form d-source)
-                       (sb!di:debug-source-form d-source))
-                      (t (bug "Don't know how to use a DEBUG-SOURCE without ~
-                               a namestring or a form.")))))
-          (setq *cached-toplevel-form-offset* offset)
-          (values (setq *cached-form-number-translations*
-                        (sb!di:form-number-translations res offset))
-                  (setq *cached-toplevel-form* res))))))
-
-;;; Locate the source file (if it still exists) and grab the top level
-;;; form. If the file is modified, we use the top level form offset
-;;; instead of the recorded character offset.
-(defun get-file-toplevel-form (location)
-  (let* ((d-source (sb!di:code-location-debug-source location))
-         (tlf-offset (sb!di:code-location-toplevel-form-offset location))
-         (local-tlf-offset (- tlf-offset
-                              (sb!di:debug-source-root-number d-source)))
-         (char-offset
-          (aref (or (sb!di:debug-source-start-positions d-source)
-                    (error "no start positions map"))
-                local-tlf-offset))
-         (name (sb!di:debug-source-namestring d-source)))
-    (unless (eq d-source *cached-debug-source*)
-      (unless (and *cached-source-stream*
-                   (equal (pathname *cached-source-stream*)
-                          (pathname name)))
-        (setq *cached-readtable* nil)
-        (when *cached-source-stream* (close *cached-source-stream*))
-        (setq *cached-source-stream* (open name :if-does-not-exist nil))
-        (unless *cached-source-stream*
-          (error "The source file no longer exists:~%  ~A" (namestring name)))
-        (format *debug-io* "~%; file: ~A~%" (namestring name)))
-
-        (setq *cached-debug-source*
-              (if (= (sb!di:debug-source-created d-source)
-                     (file-write-date name))
-                  d-source nil)))
-
-    (cond
-     ((eq *cached-debug-source* d-source)
-      (file-position *cached-source-stream* char-offset))
-     (t
-      (format *debug-io*
-              "~%; File has been modified since compilation:~%;   ~A~@
-                 ; Using form offset instead of character position.~%"
-              (namestring name))
-      (file-position *cached-source-stream* 0)
-      (let ((*read-suppress* t))
-        (dotimes (i local-tlf-offset)
-          (read *cached-source-stream*)))))
-    (unless *cached-readtable*
-      (setq *cached-readtable* (copy-readtable))
-      (set-dispatch-macro-character
-       #\# #\.
-       (lambda (stream sub-char &rest rest)
-         (declare (ignore rest sub-char))
-         (let ((token (read stream t nil t)))
-           (format nil "#.~S" token)))
-       *cached-readtable*))
-    (let ((*readtable* *cached-readtable*))
-      (read *cached-source-stream*))))
-
-(defun code-location-source-form (location context)
-  (let* ((location (maybe-block-start-location location))
-         (form-num (sb!di:code-location-form-number location)))
-    (multiple-value-bind (translations form) (get-toplevel-form location)
-      (unless (< form-num (length translations))
-        (error "The source path no longer exists."))
-      (sb!di:source-path-context form
-                                 (svref translations form-num)
-                                 context))))
+(defun code-location-source-form (location context &optional (errorp t))
+  (let* ((start-location (maybe-block-start-location location))
+         (form-num (sb!di:code-location-form-number start-location)))
+    (multiple-value-bind (translations form)
+        (sb!di:get-toplevel-form start-location)
+      (cond ((< form-num (length translations))
+             (sb!di:source-path-context form
+                                        (svref translations form-num)
+                                        context))
+            (t
+             (funcall (if errorp #'error #'warn)
+                      "~@<Bogus form-number: the source file has ~
+                          probably changed too much to cope with.~:@>"))))))
 
 
 ;;; start single-stepping

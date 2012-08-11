@@ -331,6 +331,7 @@ See also the declarations SB-EXT:GLOBAL and SB-EXT:ALWAYS-BOUND."
                (go :restart)))))))
 
 (defmacro wait-for (test-form &key timeout)
+  #!+sb-doc
   "Wait until TEST-FORM evaluates to true, then return its primary value.
 If TIMEOUT is provided, waits at most approximately TIMEOUT seconds before
 returning NIL.
@@ -342,3 +343,65 @@ deadline.
 Experimental: subject to change without prior notice."
   `(dx-flet ((wait-for-test () (progn ,test-form)))
      (%wait-for #'wait-for-test ,timeout)))
+
+(defmacro with-progressive-timeout ((name &key seconds)
+                                    &body body)
+  #!+sb-doc
+  "Binds NAME as a local function for BODY. Each time #'NAME is called, it
+returns SECONDS minus the time that has elapsed since BODY was entered, or
+zero if more time than SECONDS has elapsed. If SECONDS is NIL, #'NAME
+returns NIL each time."
+  (with-unique-names (deadline time-left sec)
+    `(let* ((,sec ,seconds)
+            (,deadline
+              (when ,sec
+                (+ (get-internal-real-time)
+                   (round (* ,seconds internal-time-units-per-second))))))
+       (flet ((,name ()
+                (when ,deadline
+                  (let ((,time-left (- ,deadline (get-internal-real-time))))
+                    (if (plusp ,time-left)
+                        (* (coerce ,time-left 'single-float)
+                           ,(/ 1.0 internal-time-units-per-second))
+                        0)))))
+         ,@body))))
+
+(defmacro atomic-update (place update-fn &rest arguments &environment env)
+  #!+sb-doc
+  "Updates PLACE atomically to the value returned by calling function
+designated by UPDATE-FN with ARGUMENTS and the previous value of PLACE.
+
+PLACE may be read and UPDATE-FN evaluated and called multiple times before the
+update succeeds: atomicity in this context means that value of place did not
+change between the time it was read, and the time it was replaced with the
+computed value.
+
+PLACE can be any place supported by SB-EXT:COMPARE-AND-SWAP.
+
+Examples:
+
+  ;;; Conses T to the head of FOO-LIST.
+  (defstruct foo list)
+  (defvar *foo* (make-foo))
+  (atomic-update (foo-list *foo*) #'cons t)
+
+  (let ((x (cons :count 0)))
+     (mapc #'sb-thread:join-thread
+           (loop repeat 1000
+                 collect (sb-thread:make-thread
+                          (lambda ()
+                            (loop repeat 1000
+                                  do (atomic-update (cdr x) #'1+)
+                                     (sleep 0.00001))))))
+     ;; Guaranteed to be (:COUNT . 1000000) -- if you replace
+     ;; atomic update with (INCF (CDR X)) above, the result becomes
+     ;; unpredictable.
+     x)
+"
+  (multiple-value-bind (vars vals old new cas-form read-form)
+      (get-cas-expansion place env)
+    `(let* (,@(mapcar 'list vars vals)
+            (,old ,read-form))
+       (loop for ,new = (funcall ,update-fn ,@arguments ,old)
+             until (eq ,old (setf ,old ,cas-form))
+             finally (return ,new)))))

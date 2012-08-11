@@ -1,4 +1,3 @@
-CC?=gcc
 
 # We need to extend flags to the C compiler and the linker
 # here. sb-posix, sb-grovel, and sb-bsd-sockets depends upon these
@@ -27,7 +26,7 @@ export CC SBCL EXTRA_CFLAGS EXTRA_LDFLAGS
 
 all: $(EXTRA_ALL_TARGETS)
 	$(MAKE) -C ../asdf
-	$(SBCL) --eval '(defvar *system* "$(SYSTEM)")' --load ../asdf-stub.lisp --eval '(quit)'
+	$(SBCL) --eval '(defvar *system* "$(SYSTEM)")' --load ../asdf-stub.lisp --eval '(exit)'
 
 test: all
 	echo "(asdf:operate (quote asdf:load-op) :$(SYSTEM))" \

@@ -339,19 +339,27 @@
            (test-op (op)
              (let ((ub `(unsigned-byte ,sb-vm:n-word-bits))
                    (sb `(signed-byte ,sb-vm:n-word-bits)))
-               (loop for (x y type) in `((2 1 fixnum)
-                                         (2 1 ,ub)
-                                         (2 1 ,sb)
-                                         (,(1+ (ash 1 28)) ,(1- (ash 1 28)) fixnum)
-                                         (,(+ 3 (ash 1 30)) ,(+ 2 (ash 1 30)) ,ub)
-                                         (,(- -2 (ash 1 29)) ,(- 3 (ash 1 29)) ,sb)
-                                         ,@(when (> sb-vm:n-word-bits 32)
-                                             `((,(1+ (ash 1 29)) ,(1- (ash 1 29)) fixnum)
-                                               (,(1+ (ash 1 31)) ,(1- (ash 1 31)) ,ub)
-                                               (,(- -2 (ash 1 31)) ,(- 3 (ash 1 30)) ,sb)
-                                               (,(ash 1 40) ,(ash 1 39) fixnum)
-                                               (,(ash 1 40) ,(ash 1 39) ,ub)
-                                               (,(ash 1 40) ,(ash 1 39) ,sb))))
+               (loop for (x y type)
+                     in `((2 1 fixnum)
+                          (2 1 ,ub)
+                          (2 1 ,sb)
+                          (,(1+ (ash 1 28)) ,(1- (ash 1 28)) fixnum)
+                          (,(+ 3 (ash 1 30)) ,(+ 2 (ash 1 30)) ,ub)
+                          (,(- -2 (ash 1 29)) ,(- 3 (ash 1 29)) ,sb)
+                          ,@(when (> sb-vm:n-word-bits 32)
+                              `((,(1+ (ash 1 29)) ,(1- (ash 1 29)) fixnum)
+                                (,(1+ (ash 1 31)) ,(1- (ash 1 31)) ,ub)
+                                (,(- -2 (ash 1 31)) ,(- 3 (ash 1 30)) ,sb)
+                                (,(ash 1 40) ,(ash 1 39) fixnum)
+                                (,(ash 1 40) ,(ash 1 39) ,ub)
+                                (,(ash 1 40) ,(ash 1 39) ,sb)))
+                          ;; fixnums that can be represented as 32-bit
+                          ;; sign-extended immediates on x86-64
+                          ,@(when (and (> sb-vm:n-word-bits 32)
+                                       (< sb-vm:n-fixnum-tag-bits 3))
+                              `((,(1+ (ash 1 (- 31 sb-vm:n-fixnum-tag-bits)))
+                                 ,(1- (ash 1 (- 32 sb-vm:n-fixnum-tag-bits)))
+                                 fixnum))))
                      do
                   (test-case op x y type)
                   (test-case op x x type)))))
@@ -363,8 +371,12 @@
 ;; GCD used to sometimes return negative values. The following did, on 32 bit
 ;; builds.
 (with-test (:name :gcd)
+  ;; from lp#413680
   (assert (plusp (gcd 20286123923750474264166990598656
-                      680564733841876926926749214863536422912))))
+                      680564733841876926926749214863536422912)))
+  ;; from lp#516750
+  (assert (plusp (gcd 2596102012663483082521318626691873
+                      2596148429267413814265248164610048))))
 
 (with-test (:name :expt-zero-zero)
   ;; Check that (expt 0.0 0.0) and (expt 0 0.0) signal error, but (expt 0.0 0)
@@ -540,3 +552,35 @@
             (test base power '(complex double-float)))))
       (when (> n-broken 0)
         (error "Number of broken combinations: ~a" n-broken)))))
+
+(with-test (:name (:ldb :rlwinm :ppc))
+  (let ((one (compile nil '(lambda (a) (ldb (byte 9 27) a))))
+        (two (compile nil '(lambda (a)
+                            (declare (type (integer -3 57216651) a))
+                            (ldb (byte 9 27) a)))))
+    (assert (= 0 (- (funcall one 10) (funcall two 10))))))
+
+;; The ISQRT implementation is sufficiently complicated that it should
+;; be tested.
+(with-test (:name :isqrt)
+  (labels ((test (x)
+             (let* ((r (isqrt x))
+                    (r2 (expt r 2))
+                    (s2 (expt (1+ r) 2)))
+               (unless (and (<= r2 x)
+                            (> s2 x))
+                 (error "isqrt failure for ~a" x))))
+           (tests (x)
+             (test x)
+             (let ((x2 (expt x 2)))
+               (test x2)
+               (test (1+ x2))
+               (test (1- x2)))))
+    (loop for i from 1 to 200
+          for pow = (expt 2 (1- i))
+          for j = (+ pow (random pow))
+          do
+          (tests i)
+          (tests j))
+    (dotimes (i 10)
+      (tests (random (expt 2 (+ 1000 (random 10000))))))))

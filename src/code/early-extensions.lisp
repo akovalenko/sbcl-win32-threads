@@ -777,57 +777,6 @@
               (char= #\* (aref name 0))
               (char= #\* (aref name (1- (length name))))))))
 
-;;; This function is to be called just before a change which would affect the
-;;; symbol value. We don't absolutely have to call this function before such
-;;; changes, since such changes to constants are given as undefined behavior,
-;;; it's nice to do so. To circumvent this you need code like this:
-;;;
-;;;   (defvar foo)
-;;;   (defun set-foo (x) (setq foo x))
-;;;   (defconstant foo 42)
-;;;   (set-foo 13)
-;;;   foo => 13, (constantp 'foo) => t
-;;;
-;;; ...in which case you frankly deserve to lose.
-(defun about-to-modify-symbol-value (symbol action &optional (new-value nil valuep) bind)
-  (declare (symbol symbol))
-  (flet ((describe-action ()
-           (ecase action
-             (set "set SYMBOL-VALUE of ~S")
-             (progv "bind ~S")
-             (compare-and-swap "compare-and-swap SYMBOL-VALUE of ~S")
-             (defconstant "define ~S as a constant")
-             (makunbound "make ~S unbound"))))
-    (let ((kind (info :variable :kind symbol)))
-      (multiple-value-bind (what continue)
-          (cond ((eq :constant kind)
-                 (cond ((eq symbol t)
-                        (values "Veritas aeterna. (can't ~@?)" nil))
-                       ((eq symbol nil)
-                        (values "Nihil ex nihil. (can't ~@?)" nil))
-                       ((keywordp symbol)
-                        (values "Can't ~@?." nil))
-                       (t
-                        (values "Constant modification: attempt to ~@?." t))))
-                ((and bind (eq :global kind))
-                 (values "Can't ~@? (global variable)." nil)))
-        (when what
-          (if continue
-              (cerror "Modify the constant." what (describe-action) symbol)
-              (error what (describe-action) symbol)))
-        (when valuep
-          ;; :VARIABLE :TYPE is in the db only if it is declared, so no need to
-          ;; check.
-          (let ((type (info :variable :type symbol)))
-            (unless (sb!kernel::%%typep new-value type nil)
-              (let ((spec (type-specifier type)))
-                (error 'simple-type-error
-                       :format-control "~@<Cannot ~@? to ~S, not of type ~S.~:@>"
-                       :format-arguments (list (describe-action) symbol new-value spec)
-                       :datum new-value
-                       :expected-type spec))))))))
-  (values))
-
 ;;; If COLD-FSET occurs not at top level, just treat it as an ordinary
 ;;; assignment instead of doing cold static linking. That way things like
 ;;;   (FLET ((FROB (X) ..))
@@ -1140,52 +1089,102 @@
 
 ;;;; Deprecating stuff
 
-(defun deprecation-error (since name replacement)
+(defun normalize-deprecation-replacements (replacements)
+  (if (or (not (listp replacements))
+          (eq 'setf (car replacements)))
+      (list replacements)
+      replacements))
+
+(defun deprecation-error (since name replacements)
   (error 'deprecation-error
           :name name
-          :replacement replacement
+          :replacements (normalize-deprecation-replacements replacements)
           :since since))
 
-(defun deprecation-warning (state since name replacement
+(defun deprecation-warning (state since name replacements
                             &key (runtime-error (neq :early state)))
   (warn (ecase state
           (:early 'early-deprecation-warning)
           (:late 'late-deprecation-warning)
           (:final 'final-deprecation-warning))
         :name name
-        :replacement replacement
+        :replacements (normalize-deprecation-replacements replacements)
         :since since
         :runtime-error runtime-error))
 
-(defun deprecated-function (since name replacement)
+(defun deprecated-function (since name replacements)
   (lambda (&rest deprecated-function-args)
     (declare (ignore deprecated-function-args))
-    (deprecation-error since name replacement)))
+    (deprecation-error since name replacements)))
 
-(defun deprecation-compiler-macro (state since name replacement)
+(defun deprecation-compiler-macro (state since name replacements)
   (lambda (form env)
     (declare (ignore env))
-    (deprecation-warning state since name replacement)
+    (deprecation-warning state since name replacements)
     form))
 
-(defmacro define-deprecated-function (state since name replacement lambda-list &body body)
-  (let ((doc (let ((*package* (find-package :keyword)))
-               (format nil "~@<~S has been deprecated as of SBCL ~A~@[, use ~S instead~].~:>"
-                       name since replacement))))
+;;; STATE is one of
+;;;
+;;;   :EARLY, for a compile-time style-warning.
+;;;   :LATE, for a compile-time full warning.
+;;;   :FINAL, for a compile-time full warning and runtime error.
+;;;
+;;; Suggested duration of each stage is one year, but some things can move faster,
+;;; and some widely used legacy APIs might need to move slower. Internals we don't
+;;; usually add deprecation notes for, but sometimes an internal API actually has
+;;; several external users, in which case we try to be nice about it.
+;;;
+;;; When you deprecate something, note it here till it is fully gone: makes it
+;;; easier to keep things progressing orderly. Also add the relevant section
+;;; (or update it when deprecation proceeds) in the manual, in
+;;; deprecated.texinfo.
+;;;
+;;; EARLY:
+;;; - SB-THREAD::SPINLOCK (type), since 1.0.53.11 (08/2011)         -> Late: 08/2012
+;;; - SB-THREAD::MAKE-SPINLOCK, since 1.0.53.11 (08/2011)           -> Late: 08/2012
+;;; - SB-THREAD::WITH-SPINLOCK, since 1.0.53.11 (08/2011)           -> Late: 08/2012
+;;; - SB-THREAD::WITH-RECURSIVE-SPINLOCK, since 1.0.53.11 (08/2011) -> Late: 08/2012
+;;; - SB-THREAD::GET-SPINLOCK, since 1.0.53.11 (08/2011)            -> Late: 08/2012
+;;; - SB-THREAD::RELEASE-SPINLOCK, since 1.0.53.11 (08/2011)        -> Late: 08/2012
+;;; - SB-THREAD::SPINLOCK-VALUE, since 1.0.53.11 (08/2011)          -> Late: 08/2012
+;;; - SB-THREAD::SPINLOCK-NAME, since 1.0.53.11 (08/2011)           -> Late: 08/2012
+;;; - SETF SB-THREAD::SPINLOCK-NAME, since 1.0.53.11 (08/2011)      -> Late: 08/2012
+;;; - SB-C::MERGE-TAIL-CALLS (policy), since 1.0.53.74 (11/2011)    -> Late: 11/2012
+;;; - SB-EXT:QUIT, since 1.0.56.55 (05/2012)                        -> Late: 05/2013
+;;; - SB-UNIX:UNIX-EXIT, since 1.0.56.55 (05/2012)                  -> Late: 05/2013
+;;;
+;;; LATE:
+;;; - SB-SYS:OUTPUT-RAW-BYTES, since 1.0.8.16 (06/2007)                 -> Final: anytime
+;;; - SB-C::STACK-ALLOCATE-DYNAMIC-EXTENT (policy), since 1.0.19.7      -> Final: anytime
+;;; - SB-C::STACK-ALLOCATE-VECTOR (policy), since 1.0.19.7              -> Final: anytime
+;;; - SB-C::STACK-ALLOCATE-VALUE-CELLS (policy), since 1.0.19.7         -> Final: anytime
+;;; - SB-INTROSPECT:FUNCTION-ARGLIST, since 1.0.24.5 (01/2009)          -> Final: anytime
+;;; - SB-THREAD:JOIN-THREAD-ERROR-THREAD, since 1.0.29.17 (06/2009)     -> Final: 09/2012
+;;; - SB-THREAD:INTERRUPT-THREAD-ERROR-THREAD since 1.0.29.17 (06/2009) -> Final: 06/2012
+
+(defmacro define-deprecated-function (state since name replacements lambda-list &body body)
+  (let* ((replacements (normalize-deprecation-replacements replacements))
+         (doc (let ((*package* (find-package :keyword)))
+                (apply #'format nil
+                       "~@<~S has been deprecated as of SBCL ~A.~
+                        ~#[~; Use ~S instead.~; ~
+                              Use ~S or ~S instead.~:; ~
+                              Use~@{~#[~; or~] ~S~^,~} instead.~]~@:>"
+                       name since replacements))))
     `(progn
        ,(ecase state
-               ((:early :late)
-                `(defun ,name ,lambda-list
-                   ,doc
-                   ,@body))
-               ((:final)
-                `(progn
-                   (declaim (ftype (function * nil) ,name))
-                   (setf (fdefinition ',name)
-                         (deprecated-function ',name ',replacement ,since))
-                   (setf (documentation ',name 'function) ,doc))))
+          ((:early :late)
+           `(defun ,name ,lambda-list
+              ,doc
+              ,@body))
+          ((:final)
+           `(progn
+              (declaim (ftype (function * nil) ,name))
+              (setf (fdefinition ',name)
+                    (deprecated-function ',name ',replacements ,since))
+              (setf (documentation ',name 'function) ,doc))))
        (setf (compiler-macro-function ',name)
-             (deprecation-compiler-macro ,state ,since ',name ',replacement)))))
+             (deprecation-compiler-macro ,state ,since ',name ',replacements)))))
 
 ;;; Anaphoric macros
 (defmacro awhen (test &body body)

@@ -90,6 +90,9 @@ os_vm_size_t large_object_size = 4 * GENCGC_CARD_BYTES;
 os_vm_size_t large_object_size = 4 * PAGE_BYTES;
 #endif
 
+/* Largest allocation seen since last GC. */
+os_vm_size_t large_allocation = 0;
+
 
 /*
  * debugging
@@ -169,7 +172,7 @@ boolean gc_active_p = 0;
 static boolean conservative_stack = 1;
 
 /* An array of page structures is allocated on gc initialization.
- * This helps quickly map between an address its page structure.
+ * This helps to quickly map between an address and its page structure.
  * page_table_pages is set from the size of the dynamic space. */
 page_index_t page_table_pages;
 struct page *page_table;
@@ -930,15 +933,15 @@ struct new_area {
     size_t size;
 };
 static struct new_area (*new_areas)[];
-static intptr_t new_areas_index;
-intptr_t max_new_areas;
+static size_t new_areas_index;
+size_t max_new_areas;
 
 /* Add a new area to new_areas. */
 static void
 add_new_area(page_index_t first_page, size_t offset, size_t size)
 {
-    uword_t new_area_start,c;
-    intptr_t i;
+    size_t new_area_start, c;
+    ssize_t i;
 
     /* Ignore if full. */
     if (new_areas_index >= NUM_NEW_AREAS)
@@ -962,7 +965,7 @@ add_new_area(page_index_t first_page, size_t offset, size_t size)
     /* Search backwards for a prior area that this follows from. If
        found this will save adding a new area. */
     for (i = new_areas_index-1, c = 0; (i >= 0) && (c < 8); i--, c++) {
-        uword_t area_end =
+        size_t area_end =
             npage_bytes((*new_areas)[i].page)
             + (*new_areas)[i].offset
             + (*new_areas)[i].size;
@@ -1614,23 +1617,7 @@ copy_large_unboxed_object(lispobj object, sword_t nwords)
 lispobj
 copy_unboxed_object(lispobj object, sword_t nwords)
 {
-    intptr_t tag;
-    lispobj *new;
-
-    gc_assert(is_lisp_pointer(object));
-    gc_assert(from_space_p(object));
-    gc_assert((nwords & 0x01) == 0);
-
-    /* Get tag of object. */
-    tag = lowtag_of(object);
-
-    /* Allocate space. */
-    new = gc_quick_alloc_unboxed(nwords*N_WORD_BYTES);
-
-    memcpy(new,native_pointer(object),nwords*N_WORD_BYTES);
-
-    /* Return Lisp pointer of new object. */
-    return ((lispobj) new) | tag;
+    return gc_general_copy_object(object, nwords, UNBOXED_PAGE_FLAG);
 }
 
 
@@ -1652,13 +1639,13 @@ static lispobj trans_boxed(lispobj object);
  * Currently only absolute fixups to the constant vector, or to the
  * code area are checked. */
 void
-sniff_code_object(struct code *code, uword_t displacement)
+sniff_code_object(struct code *code, os_vm_size_t displacement)
 {
 #ifdef LISP_FEATURE_X86
     intptr_t nheader_words, ncode_words, nwords;
-    void *p;
-    void *constants_start_addr = NULL, *constants_end_addr;
-    void *code_start_addr, *code_end_addr;
+    os_vm_address_t constants_start_addr = NULL, constants_end_addr, p;
+    os_vm_address_t code_start_addr, code_end_addr;
+    os_vm_address_t code_addr = (os_vm_address_t)code;
     int fixup_found = 0;
 
     if (!check_code_fixups)
@@ -1670,10 +1657,10 @@ sniff_code_object(struct code *code, uword_t displacement)
     nheader_words = HeaderValue(*(lispobj *)code);
     nwords = ncode_words + nheader_words;
 
-    constants_start_addr = (void *)code + 5*N_WORD_BYTES;
-    constants_end_addr = (void *)code + nheader_words*N_WORD_BYTES;
-    code_start_addr = (void *)code + nheader_words*N_WORD_BYTES;
-    code_end_addr = (void *)code + nwords*N_WORD_BYTES;
+    constants_start_addr = code_addr + 5*N_WORD_BYTES;
+    constants_end_addr = code_addr + nheader_words*N_WORD_BYTES;
+    code_start_addr = code_addr + nheader_words*N_WORD_BYTES;
+    code_end_addr = code_addr + nwords*N_WORD_BYTES;
 
     /* Work through the unboxed code. */
     for (p = code_start_addr; p < code_end_addr; p++) {
@@ -1690,8 +1677,8 @@ sniff_code_object(struct code *code, uword_t displacement)
         /* Check for code references. */
         /* Check for a 32 bit word that looks like an absolute
            reference to within the code adea of the code object. */
-        if ((data >= (code_start_addr-displacement))
-            && (data < (code_end_addr-displacement))) {
+        if ((data >= (void*)(code_start_addr-displacement))
+            && (data < (void*)(code_end_addr-displacement))) {
             /* function header */
             if ((d4 == 0x5e)
                 && (((unsigned)p - 4 - 4*HeaderValue(*((unsigned *)p-1))) ==
@@ -1733,8 +1720,8 @@ sniff_code_object(struct code *code, uword_t displacement)
         /* Check for a 32 bit word that looks like an absolute
            reference to within the constant vector. Constant references
            will be aligned. */
-        if ((data >= (constants_start_addr-displacement))
-            && (data < (constants_end_addr-displacement))
+        if ((data >= (void*)(constants_start_addr-displacement))
+            && (data < (void*)(constants_end_addr-displacement))
             && (((unsigned)data & 0x3) == 0)) {
             /*  Mov eax,m32 */
             if (d1 == 0xa1) {
@@ -1832,11 +1819,12 @@ gencgc_apply_code_fixups(struct code *old_code, struct code *new_code)
 /* x86-64 uses pc-relative addressing instead of this kludge */
 #ifndef LISP_FEATURE_X86_64
     intptr_t nheader_words, ncode_words, nwords;
-    void *constants_start_addr, *constants_end_addr;
-    void *code_start_addr, *code_end_addr;
+    os_vm_address_t constants_start_addr, constants_end_addr;
+    os_vm_address_t code_start_addr, code_end_addr;
+    os_vm_address_t code_addr = (os_vm_address_t)new_code;
+    os_vm_address_t old_addr = (os_vm_address_t)old_code;
+    os_vm_size_t displacement = code_addr - old_addr;
     lispobj fixups = NIL;
-    uword_t displacement =
-        (uword_t)new_code - (uword_t)old_code;
     struct vector *fixups_vector;
 
     ncode_words = fixnum_value(new_code->code_size);
@@ -1845,10 +1833,10 @@ gencgc_apply_code_fixups(struct code *old_code, struct code *new_code)
     /* FSHOW((stderr,
              "/compiled code object at %x: header words = %d, code words = %d\n",
              new_code, nheader_words, ncode_words)); */
-    constants_start_addr = (void *)new_code + 5*N_WORD_BYTES;
-    constants_end_addr = (void *)new_code + nheader_words*N_WORD_BYTES;
-    code_start_addr = (void *)new_code + nheader_words*N_WORD_BYTES;
-    code_end_addr = (void *)new_code + nwords*N_WORD_BYTES;
+    constants_start_addr = code_addr + 5*N_WORD_BYTES;
+    constants_end_addr = code_addr + nheader_words*N_WORD_BYTES;
+    code_start_addr = code_addr + nheader_words*N_WORD_BYTES;
+    code_end_addr = code_addr + nwords*N_WORD_BYTES;
     /*
     FSHOW((stderr,
            "/const start = %x, end = %x\n",
@@ -2648,6 +2636,7 @@ scavenge_newspace_generation_one_scan(generation_index_t generation)
 static void
 scavenge_newspace_generation(generation_index_t generation)
 {
+<<<<<<< HEAD
     intptr_t i;
 
     /* the new_areas array currently being written to by gc_alloc() */
@@ -2657,6 +2646,17 @@ scavenge_newspace_generation(generation_index_t generation)
     /* the new_areas created by the previous scavenge cycle */
     struct new_area (*previous_new_areas)[] = NULL;
     intptr_t previous_new_areas_index;
+=======
+    size_t i;
+
+    /* the new_areas array currently being written to by gc_alloc() */
+    struct new_area (*current_new_areas)[] = &new_areas_1;
+    size_t current_new_areas_index;
+
+    /* the new_areas created by the previous scavenge cycle */
+    struct new_area (*previous_new_areas)[] = NULL;
+    size_t previous_new_areas_index;
+>>>>>>> master
 
     /* Flush the current regions updating the tables. */
     gc_alloc_update_all_page_tables();
@@ -2890,8 +2890,13 @@ print_ptr(lispobj *addr)
     page_index_t pi1 = find_page_index((void*)addr);
 
     if (pi1 != -1)
+<<<<<<< HEAD
         fprintf(stderr,"  %x: page %d  alloc %d  gen %d  bytes_used %d  offset %lu  dont_move %d\n",
                 (uword_t) addr,
+=======
+        fprintf(stderr,"  %p: page %d  alloc %d  gen %d  bytes_used %d  offset %lu  dont_move %d\n",
+                addr,
+>>>>>>> master
                 pi1,
                 page_table[pi1].allocated,
                 page_table[pi1].gen,
@@ -3799,7 +3804,7 @@ void
 collect_garbage(generation_index_t last_gen)
 {
     generation_index_t gen = 0, i;
-    int raise;
+    int raise, more = 0;
     int gen_to_wp;
     /* The largest value of last_free_page seen since the time
      * remap_free_pages was called. */
@@ -3836,13 +3841,23 @@ collect_garbage(generation_index_t last_gen)
     do {
         /* Collect the generation. */
 
-        if (gen >= gencgc_oldest_gen_to_gc) {
-            /* Never raise the oldest generation. */
+        if (more || (gen >= gencgc_oldest_gen_to_gc)) {
+            /* Never raise the oldest generation. Never raise the extra generation
+             * collected due to more-flag. */
             raise = 0;
+            more = 0;
         } else {
             raise =
                 (gen < last_gen)
                 || (generations[gen].num_gc >= generations[gen].number_of_gcs_before_promotion);
+            /* If we would not normally raise this one, but we're
+             * running low on space in comparison to the object-sizes
+             * we've been seeing, raise it and collect the next one
+             * too. */
+            if (!raise && gen == last_gen) {
+                more = (2*large_allocation) >= (dynamic_space_size - bytes_allocated);
+                raise = more;
+            }
         }
 
         if (gencgc_verbose > 1) {
@@ -3875,8 +3890,8 @@ collect_garbage(generation_index_t last_gen)
         gen++;
     } while ((gen <= gencgc_oldest_gen_to_gc)
              && ((gen < last_gen)
-                 || ((gen <= gencgc_oldest_gen_to_gc)
-                     && raise
+                 || more
+                 || (raise
                      && (generations[gen].bytes_allocated
                          > generations[gen].gc_trigger)
                      && (generation_average_age(gen)
@@ -3918,7 +3933,13 @@ collect_garbage(generation_index_t last_gen)
 
     update_dynamic_space_free_pointer();
 
-    auto_gc_trigger = bytes_allocated + bytes_consed_between_gcs;
+    /* Update auto_gc_trigger. Make sure we trigger the next GC before
+     * running out of heap! */
+    if (bytes_consed_between_gcs <= (dynamic_space_size - bytes_allocated))
+        auto_gc_trigger = bytes_allocated + bytes_consed_between_gcs;
+    else
+        auto_gc_trigger = bytes_allocated + (dynamic_space_size - bytes_allocated)/2;
+
     if(gencgc_verbose)
         fprintf(stderr,"Next gc when %"OS_VM_SIZE_FMT" bytes have been consed\n",
                 auto_gc_trigger);
@@ -3934,9 +3955,13 @@ collect_garbage(generation_index_t last_gen)
     }
 
     gc_active_p = 0;
+<<<<<<< HEAD
 #ifdef LISP_FEATURE_WIN32
     os_commit_wp_violation_data(0);
 #endif
+=======
+    large_allocation = 0;
+>>>>>>> master
 
     log_generation_stats(gc_logfile, "=== GC End ===");
     SHOW("returning from collect_garbage");
@@ -4113,7 +4138,8 @@ gc_init(void)
         generations[i].num_gc = 0;
         generations[i].cum_sum_bytes_allocated = 0;
         /* the tune-able parameters */
-        generations[i].bytes_consed_between_gc = bytes_consed_between_gcs;
+        generations[i].bytes_consed_between_gc
+            = bytes_consed_between_gcs/(os_vm_size_t)HIGHEST_NORMAL_GENERATION;
         generations[i].number_of_gcs_before_promotion = 1;
         generations[i].minimum_age_before_gc = (AGE_SCALE/4)*3;
     }
@@ -4201,6 +4227,7 @@ general_alloc_internal(sword_t nbytes, int page_type_flag, struct alloc_region *
 #endif
     void *new_obj;
     void *new_free_pointer;
+    os_vm_size_t trigger_bytes = 0;
 
     gc_assert(nbytes>0);
 
@@ -4211,6 +4238,9 @@ general_alloc_internal(sword_t nbytes, int page_type_flag, struct alloc_region *
     /* Must be inside a PA section. */
     gc_assert(get_pseudo_atomic_atomic(thread));
 
+    if (nbytes > large_allocation)
+        large_allocation = nbytes;
+
     /* maybe we can do this quickly ... */
     new_free_pointer = region->free_pointer + nbytes;
     if (new_free_pointer <= region->end_addr) {
@@ -4219,10 +4249,23 @@ general_alloc_internal(sword_t nbytes, int page_type_flag, struct alloc_region *
         return(new_obj);        /* yup */
     }
 
+<<<<<<< HEAD
     /* we have to go the intptr_t way around, it seems. Check whether we
+=======
+    /* We don't want to count nbytes against auto_gc_trigger unless we
+     * have to: it speeds up the tenuring of objects and slows down
+     * allocation. However, unless we do so when allocating _very_
+     * large objects we are in danger of exhausting the heap without
+     * running sufficient GCs.
+     */
+    if (nbytes >= bytes_consed_between_gcs)
+        trigger_bytes = nbytes;
+
+    /* we have to go the long way around, it seems. Check whether we
+>>>>>>> master
      * should GC in the near future
      */
-    if (auto_gc_trigger && bytes_allocated > auto_gc_trigger) {
+    if (auto_gc_trigger && (bytes_allocated+trigger_bytes > auto_gc_trigger)) {
         /* Don't flood the system with interrupts if the need to gc is
          * already noted. This can happen for example when SUB-GC
          * allocates or after a gc triggered in a WITHOUT-GCING. */

@@ -3710,7 +3710,7 @@
                             (declare (ignore x y k1))
                             t))))))
 
-(with-test (:name :bug-309448)
+(with-test (:name :bug-309448 :fails-on :win32)
   ;; Like all tests trying to verify that something doesn't blow up
   ;; compile-times this is bound to be a bit brittle, but at least
   ;; here we try to establish a decent baseline.
@@ -4179,3 +4179,160 @@
                   (declare (optimize speed)
                            (type (and fixnum a) x))
                   x)))
+
+(with-test (:name :bug-959687)
+  (multiple-value-bind (fun warn fail)
+      (compile nil `(lambda (x)
+                      (case x
+                        (t
+                         :its-a-t)
+                        (otherwise
+                         :somethign-else))))
+    (assert (and warn fail))
+    (assert (not (ignore-errors (funcall fun t)))))
+  (multiple-value-bind (fun warn fail)
+      (compile nil `(lambda (x)
+                      (case x
+                        (otherwise
+                         :its-an-otherwise)
+                        (t
+                         :somethign-else))))
+    (assert (and warn fail))
+    (assert (not (ignore-errors (funcall fun t))))))
+
+(with-test (:name :bug-924276)
+  (assert (eq :style-warning
+              (handler-case
+                  (compile nil `(lambda (a)
+                                  (cons a (symbol-macrolet ((b 1))
+                                            (declare (ignorable a))
+                                            :c))))
+                (style-warning ()
+                  :style-warning)))))
+
+(with-test (:name :bug-974406)
+  (let ((fun32 (compile nil `(lambda (x)
+                               (declare (optimize speed (safety 0)))
+                               (declare (type (integer 53 86) x))
+                               (logand (+ x 1032791128) 11007078467))))
+        (fun64 (compile nil `(lambda (x)
+                               (declare (optimize speed (safety 0)))
+                               (declare (type (integer 53 86) x))
+                               (logand (+ x 1152921504606846975)
+                                       38046409652025950207)))))
+    (assert (= (funcall fun32 61) 268574721))
+    (assert (= (funcall fun64 61) 60)))
+  (let (result)
+    (do ((width 5 (1+ width)))
+        ((= width 130))
+      (dotimes (extra 4)
+        (let ((fun (compile nil `(lambda (x)
+                                   (declare (optimize speed (safety 0)))
+                                   (declare (type (integer 1 16) x))
+                                   (logand
+                                    (+ x ,(1- (ash 1 width)))
+                                    ,(logior (ash 1 (+ width 1 extra))
+                                             (1- (ash 1 width))))))))
+          (unless (= (funcall fun 16) (logand 15 (1- (ash 1 width))))
+            (push (cons width extra) result)))))
+    (assert (null result))))
+
+;; On x86-64 MOVE-IMMEDIATE of fixnum values into memory either directly
+;; uses a MOV into memory or goes through a temporary register if the
+;; value is larger than a certain number of bits. Check that it respects
+;; the limits of immediate arguments to the MOV instruction (if not, the
+;; assembler will fail an assertion) and doesn't have sign-extension
+;; problems. (The test passes fixnum constants through the MOVE VOP
+;; which calls MOVE-IMMEDIATE.)
+(with-test (:name :constant-fixnum-move)
+  (let ((f (compile nil `(lambda (g)
+                           (funcall g
+                                    ;; The first three args are
+                                    ;; uninteresting as they are
+                                    ;; passed in registers.
+                                    1 2 3
+                                    ,@(loop for i from 27 to 32
+                                            collect (expt 2 i)))))))
+    (assert (every #'plusp (funcall f #'list)))))
+
+(with-test (:name (:malformed-ignore :lp-1000239))
+  (raises-error?
+   (eval '(lambda () (declare (ignore (function . a)))))
+   sb-int:compiled-program-error)
+  (raises-error?
+   (eval '(lambda () (declare (ignore (function a b)))))
+   sb-int:compiled-program-error)
+  (raises-error?
+   (eval '(lambda () (declare (ignore (function)))))
+   sb-int:compiled-program-error)
+  (raises-error?
+   (eval '(lambda () (declare (ignore (a)))))
+   sb-int:compiled-program-error)
+  (raises-error?
+   (eval '(lambda () (declare (ignorable (a b)))))
+   sb-int:compiled-program-error))
+
+(with-test (:name :malformed-type-declaraions)
+  (compile nil '(lambda (a) (declare (type (integer 1 2 . 3) a)))))
+
+(with-test (:name :compiled-program-error-escaped-source)
+  (assert
+   (handler-case
+       (funcall (compile nil `(lambda () (lambda ("foo")))))
+     (sb-int:compiled-program-error (e)
+       (let ((source (read-from-string (sb-kernel::program-error-source e))))
+         (equal source '#'(lambda ("foo"))))))))
+
+(with-test (:name :escape-analysis-for-nlxs)
+  (flet ((test (check lambda &rest args)
+           (let* ((cell-note nil)
+                  (fun (handler-bind ((compiler-note
+                                        (lambda (note)
+                                          (when (search
+                                                 "Allocating a value-cell at runtime for"
+                                                 (princ-to-string note))
+                                            (setf cell-note t)))))
+                          (compile nil lambda))))
+             (assert (eql check cell-note))
+             (if check
+                 (assert
+                  (eq :ok
+                      (handler-case
+                          (dolist (arg args nil)
+                            (setf fun (funcall fun arg)))
+                        (sb-int:simple-control-error (e)
+                          (when (equal
+                                 (simple-condition-format-control e)
+                                 "attempt to RETURN-FROM a block or GO to a tag that no longer exists")
+                            :ok)))))
+                 (ctu:assert-no-consing (apply fun args))))))
+    (test nil `(lambda (x)
+                 (declare (optimize speed))
+                 (block out
+                   (flet ((ex () (return-from out 'out!)))
+                     (typecase x
+                       (cons (or (car x) (ex)))
+                       (t (ex)))))) :foo)
+    (test t   `(lambda (x)
+                 (declare (optimize speed))
+                 (funcall
+                  (block nasty
+                    (flet ((oops () (return-from nasty t)))
+                      #'oops)))) t)
+    (test t   `(lambda (r)
+                 (declare (optimize speed))
+                 (block out
+                   (flet ((ex () (return-from out r)))
+                     (lambda (x)
+                       (typecase x
+                         (cons (or (car x) (ex)))
+                         (t (ex))))))) t t)
+    (test t   `(lambda (x)
+                 (declare (optimize speed))
+                 (flet ((eh (x)
+                          (flet ((meh () (return-from eh 'meh)))
+                            (lambda ()
+                              (typecase x
+                                (cons (or (car x) (meh)))
+                                (t (meh)))))))
+                   (funcall (eh x)))) t t)))

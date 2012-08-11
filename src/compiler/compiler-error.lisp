@@ -91,14 +91,13 @@
   (let ((condition (coerce-to-condition datum arguments
                                         'simple-program-error 'compiler-error)))
     (restart-case
-        (progn
-          (cerror "Replace form with call to ERROR."
-                  'compiler-error
-                  :condition condition)
-          (funcall *compiler-error-bailout* condition)
-          (bug "Control returned from *COMPILER-ERROR-BAILOUT*."))
+        (cerror "Replace form with call to ERROR."
+                'compiler-error
+                :condition condition)
       (signal-error ()
-        (error condition)))))
+        (error condition)))
+    (funcall *compiler-error-bailout* condition)
+    (bug "Control returned from *COMPILER-ERROR-BAILOUT*.")))
 
 (defun compiler-warn (datum &rest arguments)
   (apply #'warn datum arguments)
@@ -108,10 +107,15 @@
   (apply #'style-warn datum arguments)
   (values))
 
+(defun source-to-string (source)
+  (write-to-string source
+                   :escape t :readably nil :pretty t
+                   :circle t :array nil))
+
 (defun make-compiler-error-form (condition source)
   `(error 'compiled-program-error
           :message ,(princ-to-string condition)
-          :source ,(princ-to-string source)))
+          :source ,(source-to-string source)))
 
 ;;; Fatal compiler errors. We export FATAL-COMPILER-ERROR as an
 ;;; interface for errors that kill the compiler dead
@@ -134,7 +138,7 @@
 ;;; deeply confused, so we violate what'd otherwise be good compiler
 ;;; practice by not trying to recover from this error and bailing out
 ;;; instead.)
-(define-condition input-error-in-compile-file (fatal-compiler-error)
+(define-condition input-error-in-compile-file (reader-error encapsulated-condition)
   (;; the position where the bad READ began, or NIL if unavailable,
    ;; redundant, or irrelevant
    (position :reader input-error-in-compile-file-position
@@ -143,8 +147,14 @@
   (:report
    (lambda (condition stream)
      (format stream
-             "~@<~S failure in ~S~@[ at character ~W~]: ~2I~_~A~:>"
+             "~@<~S error during ~S:~
+                ~@:_ ~2I~_~A~
+                  ~@[~@:_~@:_(in form starting at ~:{~(~A~): ~S~:^, ~:_~})~]~
+              ~:>"
              'read
              'compile-file
-             (input-error-in-compile-file-position condition)
-             (encapsulated-condition condition)))))
+             (encapsulated-condition condition)
+             (when (input-error-in-compile-file-position condition)
+               (sb!kernel::stream-error-position-info
+                (stream-error-stream condition)
+                (input-error-in-compile-file-position condition)))))))

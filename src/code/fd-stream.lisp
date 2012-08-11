@@ -441,39 +441,26 @@
          :format-arguments
          (list note-format (list pathname) (strerror errno))))
 
-(defun stream-decoding-error (stream octets)
-  (error 'stream-decoding-error
-         :external-format (stream-external-format stream)
-         :stream stream
-         ;; FIXME: dunno how to get at OCTETS currently, or even if
-         ;; that's the right thing to report.
-         :octets octets))
-(defun stream-encoding-error (stream code)
-  (error 'stream-encoding-error
-         :external-format (stream-external-format stream)
-         :stream stream
-         :code code))
-
 (defun c-string-encoding-error (external-format code)
   (error 'c-string-encoding-error
          :external-format external-format
          :code code))
-
-(defun c-string-decoding-error (external-format octets)
+(defun c-string-decoding-error (external-format sap offset count)
   (error 'c-string-decoding-error
          :external-format external-format
-         :octets octets))
+         :octets (sap-ref-octets sap offset count)))
 
 ;;; Returning true goes into end of file handling, false will enter another
 ;;; round of input buffer filling followed by re-entering character decode.
 (defun stream-decoding-error-and-handle (stream octet-count)
   (restart-case
-      (stream-decoding-error stream
-                             (let* ((buffer (fd-stream-ibuf stream))
-                                    (sap (buffer-sap buffer))
-                                    (head (buffer-head buffer)))
-                               (loop for i from 0 below octet-count
-                                     collect (sap-ref-8 sap (+ head i)))))
+      (error 'stream-decoding-error
+             :external-format (stream-external-format stream)
+             :stream stream
+             :octets (let ((buffer (fd-stream-ibuf stream)))
+                       (sap-ref-octets (buffer-sap buffer)
+                                       (buffer-head buffer)
+                                       octet-count)))
     (attempt-resync ()
       :report (lambda (stream)
                 (format stream
@@ -505,7 +492,10 @@
 
 (defun stream-encoding-error-and-handle (stream code)
   (restart-case
-      (stream-encoding-error stream code)
+      (error 'stream-encoding-error
+             :external-format (stream-external-format stream)
+             :stream stream
+             :code code)
     (output-nothing ()
       :report (lambda (stream)
                 (format stream "~@<Skip output of this character.~@:>"))
@@ -1106,7 +1096,9 @@
                      (catch 'eof-input-catcher
                        (setf decode-break-reason
                              (block decode-break-reason
-                               (input-at-least ,stream-var ,(if (consp bytes) (car bytes) `(setq size ,bytes)))
+                               (input-at-least ,stream-var ,(if (consp bytes)
+                                                                (car bytes)
+                                                                `(setq size ,bytes)))
                                (let* ((byte (sap-ref-8 (buffer-sap ibuf) (buffer-head ibuf))))
                                  (declare (ignorable byte))
                                  ,@(when (consp bytes)
@@ -1606,12 +1598,15 @@
                            (setf decode-break-reason
                                  (block decode-break-reason
                                    (setf byte (sap-ref-8 sap head)
-                                         size ,(if (consp in-size-expr) (cadr in-size-expr) in-size-expr)
+                                         size ,(if (consp in-size-expr)
+                                                   (cadr in-size-expr)
+                                                   in-size-expr)
                                          char ,in-expr)
                                    (incf head size)
                                    nil))
                            (when decode-break-reason
-                             (c-string-decoding-error ,name decode-break-reason))
+                             (c-string-decoding-error
+                              ,name sap head decode-break-reason))
                            (when (zerop (char-code char))
                              (return count))))
                  (string (make-string length :element-type element-type)))
@@ -1625,12 +1620,15 @@
               (setf decode-break-reason
                     (block decode-break-reason
                       (setf byte (sap-ref-8 sap head)
-                            size ,(if (consp in-size-expr) (cadr in-size-expr) in-size-expr)
+                            size ,(if (consp in-size-expr)
+                                      (cadr in-size-expr)
+                                      in-size-expr)
                             char ,in-expr)
                       (incf head size)
                       nil))
               (when decode-break-reason
-                (c-string-decoding-error ,name decode-break-reason))
+                (c-string-decoding-error
+                 ,name sap head decode-break-reason))
               (setf (aref string index) char)))))
 
       (defun ,output-c-string-function (string)

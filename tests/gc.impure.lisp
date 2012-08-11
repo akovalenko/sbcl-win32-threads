@@ -56,9 +56,40 @@
 (with-test (:name :bug-529014 :skipped-on '(not :gencgc))
   (loop for i from 0 to sb-vm:+pseudo-static-generation+
      do (assert (= (sb-ext:generation-bytes-consed-between-gcs i)
-                   (sb-ext:bytes-consed-between-gcs)))
+                   (truncate (sb-ext:bytes-consed-between-gcs)
+                             sb-vm:+highest-normal-generation+)))
         ;; FIXME: These parameters are a) tunable in the source and b)
         ;; duplicated multiple times there and now here.  It would be good to
         ;; OAOO-ify them (probably to src/compiler/generic/params.lisp).
         (assert (= (sb-ext:generation-minimum-age-before-gc i) 0.75))
         (assert (= (sb-ext:generation-number-of-gcs-before-promotion i) 1))))
+
+(defun stress-gc ()
+  (let* ((x (make-array (truncate (* 0.2 (dynamic-space-size))
+                                  sb-vm:n-word-bytes))))
+    (elt x 0)))
+
+(with-test (:name :bug-936304)
+  (gc :full t)
+  (time
+   (assert (eq :ok (handler-case
+                       (progn
+                         (loop repeat 50 do (stress-gc))
+                         :ok)
+                     (storage-condition ()
+                       :oom))))))
+
+(with-test (:name :bug-981106)
+  (gc :full t)
+  (time
+   (assert (eq :ok
+               (handler-case
+                   (dotimes (runs 100 :ok)
+                     (let* ((n (truncate (dynamic-space-size) 1200))
+                            (len (length
+                                  (with-output-to-string (string)
+                                    (dotimes (i n)
+                                      (write-sequence "hi there!" string))))))
+                       (assert (eql len (* n (length "hi there!"))))))
+                 (storage-condition ()
+                   :oom))))))

@@ -13,6 +13,14 @@
 
 ;;;; test generation utilities
 
+;;; Optimize the case of moving a 64-bit value into RAX when not caring
+;;; about the upper 32 bits: often the REX prefix can be spared.
+(defun move-qword-to-eax (value)
+  (if (and (sc-is value any-reg descriptor-reg)
+           (< (tn-offset value) r8-offset))
+      (move eax-tn (make-dword-tn value))
+      (move rax-tn value)))
+
 (defun generate-fixnum-test (value)
   "zero flag set if VALUE is fixnum"
   (inst test
@@ -72,10 +80,7 @@
   (%test-headers value target not-p nil headers drop-through))
 
 (defun %test-lowtag (value target not-p lowtag)
-  (if (and (sc-is value any-reg descriptor-reg)
-           (< (tn-offset value) r8-offset))
-      (move eax-tn (make-dword-tn value)) ; shorter encoding (no REX prefix)
-      (move rax-tn value))
+  (move-qword-to-eax value)
   (inst and al-tn lowtag-mask)
   (inst cmp al-tn lowtag)
   (inst jmp (if not-p :ne :e) target))
@@ -83,7 +88,8 @@
 (defun %test-headers (value target not-p function-p headers
                             &optional (drop-through (gen-label)))
   (let ((lowtag (if function-p fun-pointer-lowtag other-pointer-lowtag)))
-    (multiple-value-bind (equal less-or-equal greater-or-equal when-true when-false)
+    (multiple-value-bind (equal less-or-equal greater-or-equal when-true
+                                when-false)
         ;; EQUAL, LESS-OR-EQUAL, and GREATER-OR-EQUAL are the conditions
         ;; for branching to TARGET.  WHEN-TRUE and WHEN-FALSE are the
         ;; labels to branch to when we know it's true and when we know
@@ -92,14 +98,30 @@
             (values :ne :a :b drop-through target)
             (values :e :na :nb target drop-through))
       (%test-lowtag value when-false t lowtag)
-      (inst mov al-tn (make-ea :byte :base value :disp (- lowtag)))
-      (do ((remaining headers (cdr remaining)))
+      (do ((remaining headers (cdr remaining))
+           ;; It is preferable (smaller and faster code) to directly
+           ;; compare the value in memory instead of loading it into
+           ;; a register first. Find out if this is possible and set
+           ;; WIDETAG-TN accordingly. If impossible, generate the
+           ;; register load.
+           ;; Compared to x86 we additionally optimize the cases of a
+           ;; range starting with BIGNUM-WIDETAG or ending with
+           ;; COMPLEX-ARRAY-WIDETAG.
+           (widetag-tn (if (and (null (cdr headers))
+                                (or (atom (car headers))
+                                    (= (caar headers) bignum-widetag)
+                                    (= (cdar headers) complex-array-widetag)))
+                           (make-ea :byte :base value :disp (- lowtag))
+                           (progn
+                             (inst mov eax-tn (make-ea :dword :base value
+                                                       :disp (- lowtag)))
+                             al-tn))))
           ((null remaining))
         (let ((header (car remaining))
               (last (null (cdr remaining))))
           (cond
            ((atom header)
-            (inst cmp al-tn header)
+            (inst cmp widetag-tn header)
             (if last
                 (inst jmp equal target)
                 (inst jmp :e when-true)))
@@ -108,12 +130,12 @@
                    (end (cdr header)))
                (cond
                  ((= start bignum-widetag)
-                  (inst cmp al-tn end)
+                  (inst cmp widetag-tn end)
                   (if last
                       (inst jmp less-or-equal target)
                       (inst jmp :be when-true)))
                  ((= end complex-array-widetag)
-                  (inst cmp al-tn start)
+                  (inst cmp widetag-tn start)
                   (if last
                       (inst jmp greater-or-equal target)
                       (inst jmp :b when-false)))
@@ -121,9 +143,7 @@
                   (inst cmp al-tn start)
                   (inst jmp :b when-false)
                   (inst cmp al-tn end)
-                  (if last
-                      (inst jmp less-or-equal target)
-                      (inst jmp :be when-true)))
+                  (inst jmp :be when-true))
                  (t
                   (inst sub al-tn start)
                   (inst cmp al-tn (- end start))
@@ -209,7 +229,7 @@
 (define-vop (fixnump/signed-byte-64 type-predicate)
   (:args (value :scs (signed-reg)))
   (:info)
-  (:conditional :z)
+  (:conditional #.(if (= sb!vm:n-fixnum-tag-bits 1) :ns :z))
   (:arg-types signed-num)
   (:translate fixnump)
   (:generator 5
@@ -219,8 +239,8 @@
     ;;    ((x-a) >> n) = 0
     (inst mov rax-tn #.(- sb!xc:most-negative-fixnum))
     (inst add rax-tn value)
-    (inst shr rax-tn #.(integer-length (- sb!xc:most-positive-fixnum
-                                          sb!xc:most-negative-fixnum)))))
+    (unless (= n-fixnum-tag-bits 1)
+      (inst shr rax-tn n-fixnum-bits))))
 
 ;;; A (SIGNED-BYTE 64) can be represented with either fixnum or a bignum with
 ;;; exactly one digit.
@@ -234,7 +254,7 @@
             (values target not-target))
       (generate-fixnum-test value)
       (inst jmp :e yep)
-      (move rax-tn value)
+      (move-qword-to-eax value)
       (inst and al-tn lowtag-mask)
       (inst cmp al-tn other-pointer-lowtag)
       (inst jmp :ne nope)
@@ -250,7 +270,7 @@
                                      value)))
       (generate-fixnum-test value)
       (inst jmp :e yep)
-      (move rax-tn value)
+      (move-qword-to-eax value)
       (inst and al-tn lowtag-mask)
       (inst cmp al-tn other-pointer-lowtag)
       (inst jmp :ne nope)
@@ -279,8 +299,8 @@
         (inst jmp :e fixnum)
 
         ;; If not, is it an other pointer?
-        (inst and rax-tn lowtag-mask)
-        (inst cmp rax-tn other-pointer-lowtag)
+        (inst and al-tn lowtag-mask)
+        (inst cmp al-tn other-pointer-lowtag)
         (inst jmp :ne nope)
         ;; Get the header.
         (loadw rax-tn value 0 other-pointer-lowtag)
@@ -293,7 +313,7 @@
         ;; Get the second digit.
         (loadw rax-tn value (1+ bignum-digits-offset) other-pointer-lowtag)
         ;; All zeros, its an (unsigned-byte 64).
-        (inst or rax-tn rax-tn)
+        (inst test rax-tn rax-tn)
         (inst jmp :z yep)
         (inst jmp nope)
 
@@ -303,7 +323,7 @@
 
         ;; positive implies (unsigned-byte 64).
         (emit-label fixnum)
-        (inst or rax-tn rax-tn)
+        (inst test rax-tn rax-tn)
         (inst jmp (if not-p :s :ns) target)
 
         (emit-label not-target)))))
@@ -322,8 +342,8 @@
       (inst jmp :e fixnum)
 
       ;; If not, is it an other pointer?
-      (inst and rax-tn lowtag-mask)
-      (inst cmp rax-tn other-pointer-lowtag)
+      (inst and al-tn lowtag-mask)
+      (inst cmp al-tn other-pointer-lowtag)
       (inst jmp :ne nope)
       ;; Get the header.
       (loadw rax-tn value 0 other-pointer-lowtag)
@@ -336,7 +356,7 @@
       ;; Get the second digit.
       (loadw rax-tn value (1+ bignum-digits-offset) other-pointer-lowtag)
       ;; All zeros, its an (unsigned-byte 64).
-      (inst or rax-tn rax-tn)
+      (inst test rax-tn rax-tn)
       (inst jmp :z yep)
       (inst jmp nope)
 
@@ -346,7 +366,7 @@
 
       ;; positive implies (unsigned-byte 64).
       (emit-label fixnum)
-      (inst or rax-tn rax-tn)
+      (inst test rax-tn rax-tn)
       (inst jmp :s nope)
 
       (emit-label yep)

@@ -79,7 +79,7 @@
                                   (throw 'xxx nil))))
   (check-deferrables-unblocked-or-lose 0))
 
-#-sb-thread (sb-ext:quit :unix-status 104)
+#-sb-thread (sb-ext:exit :code 104)
 
 ;;;; Now the real tests...
 
@@ -93,7 +93,7 @@
                                   (check-deferrables-blocked-or-lose 0)
                                   (sb-thread::grab-mutex lock)
                                   (check-deferrables-unblocked-or-lose 0)
-                                  (sb-ext:quit)))
+                                  (sb-thread:abort-thread)))
     (sleep 1)
     (sb-thread::release-mutex lock)))
 
@@ -163,11 +163,11 @@
 
 (with-test (:name (:join-thread :nlx :default))
   (let ((sym (gensym)))
-    (assert (eq sym (join-thread (make-thread (lambda () (sb-ext:quit)))
+    (assert (eq sym (join-thread (make-thread (lambda () (sb-thread:abort-thread)))
                                  :default sym)))))
 
 (with-test (:name (:join-thread :nlx :error))
-  (raises-error? (join-thread (make-thread (lambda () (sb-ext:quit))))
+  (raises-error? (join-thread (make-thread (lambda () (sb-thread:abort-thread))))
                  join-thread-error))
 
 (with-test (:name (:join-thread :multiple-values))
@@ -186,7 +186,7 @@
       (sb-thread:make-thread (lambda ()
                                (with-mutex (mutex)
                                  (sb-thread:condition-wait queue mutex))
-                               (sb-ext:quit))))
+                               (sb-thread:abort-thread))))
     (let ((start-time (get-internal-run-time)))
       (funcall function)
       (prog1 (- (get-internal-run-time) start-time)
@@ -503,7 +503,7 @@
     (interrupt-thread child
                       (lambda ()
                         (format t "child pid ~A~%" *current-thread*)
-                        (when quit-p (sb-ext:quit))))
+                        (when quit-p (abort-thread))))
     (sleep 1)
     child))
 
@@ -717,7 +717,7 @@
                       (sb-unix::strerror)
                       reference-errno)
               (force-output)
-              (sb-ext:quit :unix-status 1)))))))
+              (abort-thread)))))))
 
 ;; (nanosleep -1 0) does not fail on FreeBSD
 (with-test (:name (:exercising-concurrent-syscalls))
@@ -744,13 +744,13 @@
 
 (format t "~&errno test done~%")
 
-(with-test (:name (:terminate-thread-restart))
+(with-test (:name :all-threads-have-abort-restart)
   (loop repeat 100 do
         (let ((thread (sb-thread:make-thread (lambda () (sleep 0.1)))))
           (sb-thread:interrupt-thread
            thread
            (lambda ()
-             (assert (find-restart 'sb-thread:terminate-thread)))))))
+             (assert (find-restart 'abort)))))))
 
 (sb-ext:gc :full t)
 
@@ -1187,7 +1187,7 @@
                                        (unless (zerop n)
                                          (setf ok nil)
                                          (format t "N != 0 (~A)~%" n)
-                                         (sb-ext:quit)))))))))
+                                         (abort-thread)))))))))
     (wait-for-threads threads)
     (assert ok)))
 
@@ -1380,32 +1380,36 @@
 (with-test (:name (:deadlock-detection :interrupts))
   (let* ((m1 (sb-thread:make-mutex :name "M1"))
          (m2 (sb-thread:make-mutex :name "M2"))
+         (t1-can-go (sb-thread:make-semaphore :name "T1 can go"))
+         (t2-can-go (sb-thread:make-semaphore :name "T2 can go"))
          (t1 (sb-thread:make-thread
               (lambda ()
                 (sb-thread:with-mutex (m1)
-                  (sleep 0.3)
-                  :ok))
+                  (sb-thread:wait-on-semaphore t1-can-go)
+                  :ok1))
               :name "T1"))
          (t2 (sb-thread:make-thread
               (lambda ()
-                (sleep 0.1)
+                (sb-ext:wait-for (eq t1 (sb-thread:mutex-owner m1)))
                 (sb-thread:with-mutex (m1 :wait-p t)
-                  (sleep 0.2)
-                  :ok))
+                  (sb-thread:wait-on-semaphore t2-can-go)
+                  :ok2))
               :name "T2")))
-    (sleep 0.2)
+    (sb-ext:wait-for (eq m1 (sb-thread::thread-waiting-for t2)))
     (sb-thread:interrupt-thread t2 (lambda ()
                                      (sb-thread:with-mutex (m2 :wait-p t)
-                                       (sleep 0.3))))
-    (sleep 0.05)
+                                       (sb-ext:wait-for
+                                        (eq m2 (sb-thread::thread-waiting-for t1)))
+                                       (sb-thread:signal-semaphore t2-can-go))))
+    (sb-ext:wait-for (eq t2 (sb-thread:mutex-owner m2)))
     (sb-thread:interrupt-thread t1 (lambda ()
                                      (sb-thread:with-mutex (m2 :wait-p t)
-                                       (sleep 0.3))))
+                                       (sb-thread:signal-semaphore t1-can-go))))
     ;; both threads should finish without a deadlock or deadlock
     ;; detection error
     (let ((res (list (sb-thread:join-thread t1)
                      (sb-thread:join-thread t2))))
-      (assert (equal '(:ok :ok) res)))))
+      (assert (equal '(:ok1 :ok2) res)))))
 
 (with-test (:name (:deadlock-detection :gc))
   ;; To semi-reliably trigger the error (in SBCL's where)

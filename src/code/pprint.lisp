@@ -1153,7 +1153,8 @@ line break."
            (consp (cdr list))
            (cddr list)
            ;; Filter out (FLET FOO :IN BAR) names.
-           (not (eq :in (third list))))
+           (and (consp (cddr list))
+                (not (eq :in (third list)))))
       (funcall (formatter
                 "~:<~^~W~^ ~@_~:<~@{~:<~^~W~^~3I ~:_~/SB!PRETTY:PPRINT-LAMBDA-LIST/~1I~:@_~@{~W~^ ~_~}~:>~^ ~_~}~:>~1I~@:_~@{~W~^ ~_~}~:>")
                stream
@@ -1277,7 +1278,9 @@ line break."
 
 (defun pprint-defmethod (stream list &rest noise)
   (declare (ignore noise))
-  (if (consp (third list))
+  (if (and (consp (cdr list))
+           (consp (cddr list))
+           (consp (third list)))
       (pprint-defun stream list)
       (funcall (formatter
                 "~:<~^~W~^ ~@_~:I~W~^ ~W~^ ~:_~/SB!PRETTY:PPRINT-LAMBDA-LIST/~1I~@{ ~_~W~}~:>")
@@ -1384,7 +1387,7 @@ line break."
   (declare (ignore noise))
   (destructuring-bind (loop-symbol . clauses) list
     (declare (ignore loop-symbol))
-    (if (or (null clauses) (consp (car clauses)))
+    (if (or (atom clauses) (consp (car clauses)))
         (pprint-spread-fun-call stream list)
         (pprint-extended-loop stream list))))
 

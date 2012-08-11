@@ -247,8 +247,11 @@
 
 ;;; void conflicted with derived type
 (declaim (inline bug-316075))
+#-win32 ;kludge: This reader conditional masks a bug, but allows the test
+        ;to fail cleanly.
 (sb-alien:define-alien-routine bug-316075 void (result char :out))
-(with-test (:name bug-316075)
+(with-test (:name bug-316075 :fails-on :win32)
+  #+win32 (error "fail")
   (handler-bind ((warning #'error))
     (compile nil '(lambda () (multiple-value-list (bug-316075))))))
 
@@ -293,7 +296,7 @@
     (verify (signed 16)   #x003f8042 #x-7fbe)
     (verify (signed 16)   #x003f7042 #x7042)))
 
-(with-test (:name :bug-654485)
+(with-test (:name :bug-654485 :fails-on :win32)
   ;; DEBUG 2 used to prevent let-conversion of the open-coded ALIEN-FUNCALL body,
   ;; which in turn led the dreaded %SAP-ALIEN note.
   (handler-case
@@ -304,9 +307,9 @@
                                            "execv"))
                     (values (alien-funcall sys-execv1 program argv)))))
     (compiler-note (n)
-      (error n))))
+      (error "bad note: ~A" n))))
 
-(with-test (:name :bug-721087)
+(with-test (:name :bug-721087 :fails-on :win32)
   (assert (typep nil '(alien c-string)))
   (assert (not (typep nil '(alien (c-string :not-null t)))))
   (assert (eq :ok
@@ -331,5 +334,83 @@
                         collect (sb-alien:make-alien char (1- array-total-size-limit)))
                 (storage-condition ()
                   :enomem)))))
+
+(with-test (:name :bug-985505)
+  ;; Check that correct octets are reported for a c-string-decoding error.
+  (assert
+   (eq :unibyte
+       (handler-case
+           (let ((c-string (coerce #(70 111 195 182 0)
+                                   '(vector (unsigned-byte 8)))))
+             (sb-sys:with-pinned-objects (c-string)
+               (sb-alien::c-string-to-string (sb-sys:vector-sap c-string)
+                                             :ascii 'character)))
+         (sb-int:c-string-decoding-error (e)
+           (assert (equalp #(195) (sb-int:character-decoding-error-octets e)))
+           :unibyte))))
+  (assert
+   (eq :multibyte-4
+       (handler-case
+           ;; KLUDGE, sort of.
+           ;;
+           ;; C-STRING decoding doesn't know how long the string is, and since this
+           ;; looks like a 4-byte sequence, it will grab 4 octets off the end.
+           ;;
+           ;; So we pad the vector for safety's sake.
+           (let ((c-string (coerce #(70 111 246 0 0 0)
+                                   '(vector (unsigned-byte 8)))))
+             (sb-sys:with-pinned-objects (c-string)
+               (sb-alien::c-string-to-string (sb-sys:vector-sap c-string)
+                                             :utf-8 'character)))
+         (sb-int:c-string-decoding-error (e)
+           (assert (equalp #(246 0 0 0)
+                           (sb-int:character-decoding-error-octets e)))
+           :multibyte-4))))
+  (assert
+   (eq :multibyte-2
+       (handler-case
+           (let ((c-string (coerce #(70 195 1 182 195 182 0) '(vector (unsigned-byte 8)))))
+             (sb-sys:with-pinned-objects (c-string)
+               (sb-alien::c-string-to-string (sb-sys:vector-sap c-string)
+                                             :utf-8 'character)))
+         (sb-int:c-string-decoding-error (e)
+           (assert (equalp #(195 1)
+                           (sb-int:character-decoding-error-octets e)))
+           :multibyte-2)))))
+
+(with-test (:name :stream-to-c-string-decoding-restart-leakage)
+  ;; Restarts for stream decoding errors didn't use to be associated with
+  ;; their conditions, so they could get confused with c-string decoding errors.
+  (assert (eq :nesting-ok
+              (catch 'out
+                (handler-bind ((sb-int:character-decoding-error
+                                 (lambda (stream-condition)
+                                   (handler-bind ((sb-int:character-decoding-error
+                                                    (lambda (c-string-condition)
+                                                      (throw 'out
+                                                        (if (find-restart
+                                                             'sb-impl::input-replacement
+                                                             c-string-condition)
+                                                            :bad-restart
+                                                            :nesting-ok)))))
+                                     (let ((c-string (coerce #(70 195 1 182 195 182 0)
+                                                             '(vector (unsigned-byte 8)))))
+                                       (sb-sys:with-pinned-objects (c-string)
+                                         (sb-alien::c-string-to-string
+                                          (sb-sys:vector-sap c-string)
+                                          :utf-8 'character)))))))
+                  (let ((namestring "alien.impure.tmp"))
+                    (unwind-protect
+                         (progn
+                           (with-open-file (f namestring
+                                              :element-type '(unsigned-byte 8)
+                                              :direction :output
+                                              :if-exists :supersede)
+                             (dolist (b '(70 195 1 182 195 182 0))
+                               (write-byte b f)))
+                           (with-open-file (f namestring
+                                              :external-format :utf-8)
+                             (read-line f)))
+                      (delete-file namestring))))))))
 
 ;;; success

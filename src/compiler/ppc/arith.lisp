@@ -679,15 +679,27 @@
   (:result-types tagged-num)
   (:policy :fast-safe)
   (:generator 2
-    (inst rlwinm res x
-          (mod (- 32 posn) 32)          ; effectively rotate right
-          (- 32 size n-fixnum-tag-bits)
-          (- 31 n-fixnum-tag-bits))))
+    (let ((phantom-bits (- (+ size posn) 30)))
+      (cond
+        ((plusp phantom-bits)
+         ;; The byte to be loaded into RES includes sign bits which are not
+         ;; present in the input X physically.  RLWINM as used below would
+         ;; mask these out with 0 even for negative inputs.
+         (inst srawi res x phantom-bits)
+         (inst rlwinm res x
+               (mod (- 32 posn (- phantom-bits)) 32)
+               (- 32 size n-fixnum-tag-bits)
+               (- 31 n-fixnum-tag-bits)))
+        (t
+         (inst rlwinm res x
+               (mod (- 32 posn) 32)     ; effectively rotate right
+               (- 32 size n-fixnum-tag-bits)
+               (- 31 n-fixnum-tag-bits)))))))
 
 (define-vop (ldb-c/signed)
   (:translate %%ldb)
   (:args (x :scs (signed-reg)))
-  (:arg-types signed-num (:constant (integer 1 29)) (:constant (integer 0 29)))
+  (:arg-types signed-num (:constant (integer 1 29)) (:constant (integer 0 31)))
   (:info size posn)
   (:results (res :scs (any-reg)))
   (:result-types tagged-num)
@@ -701,7 +713,7 @@
 (define-vop (ldb-c/unsigned)
   (:translate %%ldb)
   (:args (x :scs (unsigned-reg)))
-  (:arg-types unsigned-num (:constant (integer 1 29)) (:constant (integer 0 29)))
+  (:arg-types unsigned-num (:constant (integer 1 29)) (:constant (integer 0 31)))
   (:info size posn)
   (:results (res :scs (any-reg)))
   (:result-types tagged-num)
@@ -711,7 +723,6 @@
           (mod (- (+ 32 n-fixnum-tag-bits) posn) 32)
           (- 32 size n-fixnum-tag-bits)
           (- 31 n-fixnum-tag-bits))))
-
 
 ;;;; Modular functions:
 (define-modular-fun lognot-mod32 (x) lognot :untagged nil 32)

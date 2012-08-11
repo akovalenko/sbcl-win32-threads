@@ -468,9 +468,20 @@ corresponds to NAME, or NIL if there is none."
 ;;; Terminate the current process with an optional error code. If
 ;;; successful, the call doesn't return. If unsuccessful, the call
 ;;; returns NIL and an error number.
-(defun unix-exit (&optional (code 0))
-  (declare (type (signed-byte 32) code))
-  (void-syscall ("exit" int) code))
+(deftype exit-code ()
+  `(signed-byte 32))
+(defun os-exit (code &key abort)
+  #!+sb-doc
+  "Exit the process with CODE. If ABORT is true, exit is performed using _exit(2),
+avoiding atexit(3) hooks, etc. Otherwise exit(2) is called."
+  (unless (typep code 'exit-code)
+    (setf code (if abort 1 0)))
+  (if abort
+      (void-syscall ("_exit" int) code)
+      (void-syscall ("exit" int) code)))
+
+(define-deprecated-function :early "1.0.56.55" unix-exit os-exit (code)
+  (os-exit code))
 
 ;;; Return the process id of the current process.
 (define-alien-routine (#!+win32 "_getpid" #!-win32 "getpid" unix-getpid) int)

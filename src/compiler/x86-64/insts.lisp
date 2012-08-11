@@ -221,16 +221,6 @@
       (print-xmmreg value stream dstate)
     (print-mem-access value nil stream dstate)))
 
-;; Same as print-xmmreg/mem, but prints an explicit size indicator for
-;; memory references.
-(defun print-sized-xmmreg/mem (value stream dstate)
-  (declare (type (or list xmmreg) value)
-           (type stream stream)
-           (type sb!disassem:disassem-state dstate))
-  (if (typep value 'xmmreg)
-      (print-xmmreg value stream dstate)
-    (print-mem-access value (inst-operand-size dstate) stream dstate)))
-
 ;;; This prefilter is used solely for its side effects, namely to put
 ;;; the bits found in the REX prefix into the DSTATE for use by other
 ;;; prefilters and by printers.
@@ -489,10 +479,6 @@
 (sb!disassem:define-arg-type xmmreg/mem
   :prefilter #'prefilter-reg/mem
   :printer #'print-xmmreg/mem)
-
-(sb!disassem:define-arg-type sized-xmmreg/mem
-  :prefilter #'prefilter-reg/mem
-  :printer #'print-sized-xmmreg/mem)
 
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
@@ -902,7 +888,7 @@
   (x0f     :field (byte 8 0)    :value #x0f)
   (op      :field (byte 8 8))
   (reg/mem :fields (list (byte 2 22) (byte 3 16))
-                                :type 'sized-xmmreg/mem)
+                                :type 'xmmreg/mem)
   (reg     :field (byte 3 19)   :type 'reg))
 
 (sb!disassem:define-instruction-format (ext-reg-xmm/mem 32
@@ -912,7 +898,7 @@
   (x0f     :field (byte 8 8)    :value #x0f)
   (op      :field (byte 8 16))
   (reg/mem :fields (list (byte 2 30) (byte 3 24))
-                                :type 'sized-xmmreg/mem)
+                                :type 'xmmreg/mem)
   (reg     :field (byte 3 27)   :type 'reg))
 
 (sb!disassem:define-instruction-format (ext-rex-reg-xmm/mem 40
@@ -924,7 +910,7 @@
   (x0f     :field (byte 8 16)   :value #x0f)
   (op      :field (byte 8 24))
   (reg/mem :fields (list (byte 2 38) (byte 3 32))
-                                :type 'sized-xmmreg/mem)
+                                :type 'xmmreg/mem)
   (reg     :field (byte 3 35)   :type 'reg))
 
 ;; XMM comparison instruction
@@ -1637,44 +1623,43 @@
            (t
             (error "bogus arguments to MOV: ~S ~S" dst src))))))
 
+;;; Emit a sign-extending (if SIGNED-P is true) or zero-extending move.
+;;; To achieve the shortest possible encoding zero extensions into a
+;;; 64-bit destination are assembled as a straight 32-bit MOV (if the
+;;; source size is 32 bits) or as MOVZX with a 32-bit destination (if
+;;; the source size is 8 or 16 bits). Due to the implicit zero extension
+;;; to 64 bits this has the same effect as a MOVZX with 64-bit
+;;; destination but often needs no REX prefix.
 (defun emit-move-with-extension (segment dst src signed-p)
   (aver (register-p dst))
   (let ((dst-size (operand-size dst))
         (src-size (operand-size src))
-        (opcode (if signed-p  #b10111110 #b10110110)))
-    (ecase dst-size
-      (:word
-       (aver (eq src-size :byte))
-       (maybe-emit-operand-size-prefix segment :word)
-       ;; REX prefix is needed if SRC is SIL, DIL, SPL or BPL.
-       (maybe-emit-rex-for-ea segment src dst :operand-size :word)
-       (emit-byte segment #b00001111)
-       (emit-byte segment opcode)
-       (emit-ea segment src (reg-tn-encoding dst)))
-      ((:dword :qword)
-       (ecase src-size
-         (:byte
-          (maybe-emit-rex-for-ea segment src dst :operand-size dst-size)
-          (emit-byte segment #b00001111)
-          (emit-byte segment opcode)
-          (emit-ea segment src (reg-tn-encoding dst)))
-         (:word
-          (maybe-emit-rex-for-ea segment src dst :operand-size dst-size)
-          (emit-byte segment #b00001111)
-          (emit-byte segment (logior opcode 1))
-          (emit-ea segment src (reg-tn-encoding dst)))
-         (:dword
-          (aver (eq dst-size :qword))
-          ;; dst is in reg, src is in modrm
-          (let ((ea-p (ea-p src)))
-            (maybe-emit-rex-prefix segment (if signed-p :qword :dword) dst
-                                   (and ea-p (ea-index src))
-                                   (cond (ea-p (ea-base src))
-                                         ((tn-p src) src)
-                                         (t nil)))
-            (emit-byte segment (if signed-p #x63 #x8b)) ;movsxd or straight mov
-            ;;(emit-byte segment opcode)
-            (emit-ea segment src (reg-tn-encoding dst)))))))))
+        (opcode (if signed-p #b10111110 #b10110110)))
+    (macrolet ((emitter (operand-size &rest bytes)
+                 `(progn
+                   (maybe-emit-rex-for-ea segment src dst
+                                          :operand-size ,operand-size)
+                   ,@(mapcar (lambda (byte)
+                               `(emit-byte segment ,byte))
+                             bytes)
+                   (emit-ea segment src (reg-tn-encoding dst)))))
+      (ecase dst-size
+        (:word
+         (aver (eq src-size :byte))
+         (maybe-emit-operand-size-prefix segment :word)
+         (emitter :word #b00001111 opcode))
+        ((:dword :qword)
+         (unless signed-p
+           (setf dst-size :dword))
+         (ecase src-size
+           (:byte
+            (emitter dst-size #b00001111 opcode))
+           (:word
+            (emitter dst-size #b00001111 (logior opcode 1)))
+           (:dword
+            (aver (or (not signed-p) (eq dst-size :qword)))
+            (emitter dst-size
+                     (if signed-p #x63 #x8b))))))))) ; movsxd or straight mov
 
 (define-instruction movsx (segment dst src)
   (:printer ext-reg-reg/mem-no-width
@@ -2685,8 +2670,36 @@
 
 (define-instruction nop (segment)
   (:printer byte ((op #b10010000)))
+  ;; multi-byte NOP
+  (:printer ext-reg/mem-no-width ((op '(#x1f 0))) '(:name))
   (:emitter
    (emit-byte segment #b10010000)))
+
+;;; Emit a sequence of single- or multi-byte NOPs to fill AMOUNT many
+;;; bytes with the smallest possible number of such instructions.
+(defun emit-long-nop (segment amount)
+  (declare (type segment segment)
+           (type index amount))
+  ;; Pack all instructions into one byte vector to save space.
+  (let* ((bytes #.(coerce #(#x90
+                            #x66 #x90
+                            #x0f #x1f #x00
+                            #x0f #x1f #x40 #x00
+                            #x0f #x1f #x44 #x00 #x00
+                            #x66 #x0f #x1f #x44 #x00 #x00
+                            #x0f #x1f #x80 #x00 #x00 #x00 #x00
+                            #x0f #x1f #x84 #x00 #x00 #x00 #x00 #x00
+                            #x66 #x0f #x1f #x84 #x00 #x00 #x00 #x00 #x00)
+                          '(vector (unsigned-byte 8))))
+         (max-length (isqrt (* 2 (length bytes)))))
+    (loop
+      (let* ((count (min amount max-length))
+             (start (ash (* count (1- count)) -1)))
+        (dotimes (i count)
+          (emit-byte segment (aref bytes (+ start i)))))
+      (if (> amount max-length)
+          (decf amount max-length)
+          (return)))))
 
 (define-instruction wait (segment)
   (:printer byte ((op #b10011011)))

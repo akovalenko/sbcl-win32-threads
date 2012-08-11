@@ -152,7 +152,8 @@ evaluated as a PROGN."
 (defun inline-fun-name-p (name)
   (or
    ;; the normal reason for saving the inline expansion
-   (info :function :inlinep name)
+   (let ((inlinep (info :function :inlinep name)))
+     (member inlinep '(:inline :maybe-inline)))
    ;; another reason for saving the inline expansion: If the
    ;; ANSI-recommended idiom
    ;;   (DECLAIM (INLINE FOO))

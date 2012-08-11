@@ -18,6 +18,13 @@
 
 #include <genesis/simple-fun.h>
 #include "thread.h"
+#include "interr.h"
+
+#ifdef LISP_FEATURE_GENCGC
+#include "gencgc-internal.h"
+#else
+#include "cheneygc-internal.h"
+#endif
 
 /* disabling gc assertions made no discernable difference to GC speed,
  * last I tried it - dan 2003.12.21
@@ -104,6 +111,24 @@ gc_general_alloc(sword_t nbytes, int page_type_flag, int quick_p)
 #else
 extern void *gc_general_alloc(word_t nbytes,int page_type_flag,int quick_p);
 #endif
+
+static inline lispobj
+gc_general_copy_object(lispobj object, long nwords, int page_type_flag)
+{
+    lispobj *new;
+
+    gc_assert(is_lisp_pointer(object));
+    gc_assert(from_space_p(object));
+    gc_assert((nwords & 0x01) == 0);
+
+    /* Allocate space. */
+    new = gc_general_alloc(nwords*N_WORD_BYTES, page_type_flag, ALLOC_QUICK);
+
+    /* Copy the object. */
+    memcpy(new,native_pointer(object),nwords*N_WORD_BYTES);
+
+    return make_lispobj(new, lowtag_of(object));
+}
 
 extern intptr_t (*scavtab[256])(lispobj *where, lispobj object);
 extern lispobj (*transother[256])(lispobj object);

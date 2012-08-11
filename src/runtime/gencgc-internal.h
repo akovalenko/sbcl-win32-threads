@@ -110,7 +110,7 @@ extern struct page *page_table;
 
 /* forward declarations */
 
-void sniff_code_object(struct code *code, uword_t displacement);
+void sniff_code_object(struct code *code, os_vm_size_t displacement);
 void gencgc_apply_code_fixups(struct code *old_code, struct code *new_code);
 
 intptr_t update_dynamic_space_free_pointer(void);

@@ -35,22 +35,32 @@
 ;;; guess the other.
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defun pick-lisp-and-alien-names (name)
-    (etypecase name
-      (string
-       (values (guess-lisp-name-from-alien-name name) name))
-      (symbol
-       (values name (guess-alien-name-from-lisp-name name)))
-      (list
-       (unless (proper-list-of-length-p name 2)
-         (error "badly formed alien name"))
-       (values (cadr name) (car name))))))
+    (flet ((oops ()
+             (error "~@<~:IMalformed alien name. Acceptable formats are:~
+                     ~:@_  (\"alien_name\" LISP-NAME)~
+                     ~:@_  FOO-BAR                - equivalent to (\"foo_bar\" FOO-BAR)~
+                     ~:@_  \"foo_bar\"              - equivalent to (\"foo_bar\" FOO-BAR)~:@>")))
+      (etypecase name
+       (string
+        (values (guess-lisp-name-from-alien-name name)
+                (coerce name 'simple-string)))
+       (symbol
+        (values name (guess-alien-name-from-lisp-name name)))
+       (list
+        (unless (and (proper-list-of-length-p name 2)
+                     (symbolp (second name))
+                     (stringp (first name)))
+          (oops))
+        (values (second name) (coerce (first name) 'simple-string)))
+       (t
+        (oops))))))
 
 (defmacro define-alien-variable (name type &environment env)
   #!+sb-doc
-  "Define NAME as an external alien variable of type TYPE. NAME should be
-   a list of a string holding the alien name and a symbol to use as the Lisp
-   name. If NAME is just a symbol or string, then the other name is guessed
-   from the one supplied."
+  "Define NAME as an external alien variable of type TYPE. NAME should
+be a list of a string holding the alien name and a symbol to use as
+the Lisp name. If NAME is just a symbol or string, then the other name
+is guessed from the one supplied."
   (multiple-value-bind (lisp-name alien-name) (pick-lisp-and-alien-names name)
     (with-auxiliary-alien-types env
       (let ((alien-type (parse-alien-type type env)))
@@ -68,20 +78,27 @@
     (setf (info :variable :where-from lisp-name) :defined)
     (setf (info :variable :alien-info lisp-name)
           (make-heap-alien-info :type type
-                                :sap-form `(foreign-symbol-sap ',alien-name t)))))
+                                :alien-name alien-name
+                                :datap t))))
+
+(defun alien-value (symbol)
+  #!+sb-doc
+  "Returns the value of the alien variable bound to SYMBOL. Signals an
+error if SYMBOL is not bound to an alien variable, or if the alien
+variable is undefined."
+  (%heap-alien (or (info :variable :alien-info symbol)
+                   (error 'unbound-variable :name symbol))))
 
 (defmacro extern-alien (name type &environment env)
   #!+sb-doc
-  "Access the alien variable named NAME, assuming it is of type TYPE. This
-   is SETFable."
+  "Access the alien variable named NAME, assuming it is of type TYPE.
+This is SETFable."
   (let* ((alien-name (etypecase name
                        (symbol (guess-alien-name-from-lisp-name name))
                        (string name)))
          (alien-type (parse-alien-type type env))
          (datap (not (alien-fun-type-p alien-type))))
-    `(%heap-alien ',(make-heap-alien-info
-                     :type alien-type
-                     :sap-form `(foreign-symbol-sap ',alien-name ,datap)))))
+    `(%alien-value (foreign-symbol-sap ,alien-name ,datap) 0 ',alien-type)))
 
 (defmacro with-alien (bindings &body body &environment env)
   #!+sb-doc
@@ -394,9 +411,9 @@ null byte.
        (slot (deref alien) slot))
       (alien-record-type
        (let ((field (slot-or-lose type slot)))
-         (extract-alien-value (alien-value-sap alien)
-                              (alien-record-field-offset field)
-                              (alien-record-field-type field)))))))
+         (%alien-value (alien-value-sap alien)
+                       (alien-record-field-offset field)
+                       (alien-record-field-type field)))))))
 
 ;;; Deposit the value in the specified slot of the record ALIEN. If
 ;;; the ALIEN is really a pointer, DEREF it first. The compiler uses
@@ -411,10 +428,10 @@ null byte.
        (%set-slot (deref alien) slot value))
       (alien-record-type
        (let ((field (slot-or-lose type slot)))
-         (deposit-alien-value (alien-value-sap alien)
-                              (alien-record-field-offset field)
-                              (alien-record-field-type field)
-                              value))))))
+         (setf (%alien-value (alien-value-sap alien)
+                             (alien-record-field-offset field)
+                             (alien-record-field-type field))
+               value))))))
 
 ;;; Compute the address of the specified slot and return a pointer to it.
 (defun %slot-addr (alien slot)
@@ -484,19 +501,19 @@ null byte.
            (type list indices)
            (optimize (inhibit-warnings 3)))
   (multiple-value-bind (target-type offset) (deref-guts alien indices)
-    (extract-alien-value (alien-value-sap alien)
-                         offset
-                         target-type)))
+    (%alien-value (alien-value-sap alien)
+                  offset
+                  target-type)))
 
 (defun %set-deref (alien value &rest indices)
   (declare (type alien-value alien)
            (type list indices)
            (optimize (inhibit-warnings 3)))
   (multiple-value-bind (target-type offset) (deref-guts alien indices)
-    (deposit-alien-value (alien-value-sap alien)
-                         offset
-                         target-type
-                         value)))
+    (setf (%alien-value (alien-value-sap alien)
+                        offset
+                        target-type)
+          value)))
 
 (defun %deref-addr (alien &rest indices)
   (declare (type alien-value alien)
@@ -511,22 +528,22 @@ null byte.
 (defun %heap-alien (info)
   (declare (type heap-alien-info info)
            (optimize (inhibit-warnings 3)))
-  (extract-alien-value (eval (heap-alien-info-sap-form info))
-                       0
-                       (heap-alien-info-type info)))
+  (%alien-value (heap-alien-info-sap info)
+                0
+                (heap-alien-info-type info)))
 
 (defun %set-heap-alien (info value)
   (declare (type heap-alien-info info)
            (optimize (inhibit-warnings 3)))
-  (deposit-alien-value (eval (heap-alien-info-sap-form info))
-                       0
-                       (heap-alien-info-type info)
-                       value))
+  (setf (%alien-value (heap-alien-info-sap info)
+                      0
+                      (heap-alien-info-type info))
+        value))
 
 (defun %heap-alien-addr (info)
   (declare (type heap-alien-info info)
            (optimize (inhibit-warnings 3)))
-  (%sap-alien (eval (heap-alien-info-sap-form info))
+  (%sap-alien (heap-alien-info-sap info)
               (make-alien-pointer-type :to (heap-alien-info-type info))))
 
 ;;;; accessing local aliens
@@ -652,19 +669,19 @@ null byte.
   (funcall (coerce-to-interpreted-function (compute-deport-alloc-lambda type))
            value type))
 
-(defun extract-alien-value (sap offset type)
+(defun %alien-value (sap offset type)
   (declare (type system-area-pointer sap)
            (type unsigned-byte offset)
            (type alien-type type))
   (funcall (coerce-to-interpreted-function (compute-extract-lambda type))
            sap offset type))
 
-(defun deposit-alien-value (sap offset type value)
+(defun (setf %alien-value) (value sap offset type)
   (declare (type system-area-pointer sap)
            (type unsigned-byte offset)
            (type alien-type type))
   (funcall (coerce-to-interpreted-function (compute-deposit-lambda type))
-           sap offset type value))
+           value sap offset type))
 
 ;;;; ALIEN-FUNCALL, DEFINE-ALIEN-ROUTINE
 
@@ -816,6 +833,10 @@ null byte.
         (typep object lisp-rep-type)
         (and (alien-value-p object)
              (alien-subtype-p (alien-value-type object) type)))))
+
+(defun alien-value-typep (object type)
+  (when (alien-value-p object)
+    (alien-subtype-p (alien-value-type object) type)))
 
 ;;;; ALIEN CALLBACKS
 ;;;;

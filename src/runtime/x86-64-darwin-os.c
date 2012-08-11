@@ -65,8 +65,6 @@ pthread_mutex_t mach_exception_lock = PTHREAD_MUTEX_INITIALIZER;
 
 #ifdef LISP_FEATURE_MACH_EXCEPTION_HANDLER
 
-kern_return_t mach_thread_init(mach_port_t thread_exception_port);
-
 void sigill_handler(int signal, siginfo_t *siginfo, os_context_t *context);
 void sigtrap_handler(int signal, siginfo_t *siginfo, os_context_t *context);
 void memory_fault_handler(int signal, siginfo_t *siginfo,
@@ -327,9 +325,10 @@ catch_exception_raise(mach_port_t exception_port,
 
     os_vm_address_t addr;
 
-    struct thread *th = (struct thread*) exception_port;
+    struct thread *th;
 
     FSHOW((stderr,"/entering catch_exception_raise with exception: %d\n", exception));
+    th = *(struct thread**)exception_port;
 
     switch (exception) {
 
@@ -348,8 +347,6 @@ catch_exception_raise(mach_port_t exception_port,
                                (thread_state_t)&exception_state,
                                &exception_state_count);
         addr = (void*)exception_state.faultvaddr;
-
-
         /* note the os_context hackery here.  When the signal handler returns,
          * it won't go back to what it was doing ... */
         if(addr >= CONTROL_STACK_GUARD_PAGE(th) &&

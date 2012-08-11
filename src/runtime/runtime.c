@@ -484,7 +484,7 @@ main(int argc, char *argv[], char *envp[])
                        DYNAMIC_SPACE_START+dynamic_space_size) &&
                       (DYNAMIC_SPACE_START+dynamic_space_size <=
                        MAX_DYNAMIC_SPACE_END)))
-                  lose("--dynamic-space-size argument %s is too large, max %ldMiB",
+                  lose("--dynamic-space-size argument %s is too large, max %lu",
                        argv[argi-1], MAX_DYNAMIC_SPACE_END-DYNAMIC_SPACE_START);
 #               endif
             } else if (0 == strcmp(arg, "--control-stack-size")) {
