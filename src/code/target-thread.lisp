@@ -1473,7 +1473,7 @@ See also: RETURN-FROM-THREAD, ABORT-THREAD."
                  (when (zerop os-thread)
                    (error "Can't create a new thread"))
                  (wait-on-semaphore setup-sem)
-                 thread)))))
+                 (return-from make-thread thread))))))
    :cant-spawn
      (error "Could not create a new thread.")))
 
