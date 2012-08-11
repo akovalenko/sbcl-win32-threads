@@ -156,8 +156,8 @@ This is SETFable."
                          (/show0 ":EXTERN case")
                          (let ((info (make-heap-alien-info
                                       :type alien-type
-                                      :sap-form `(foreign-symbol-sap ',initial-value
-                                                                     ,datap))))
+				      :datap ,datap
+				      :alien-name ',initial-value)))
                            `((symbol-macrolet
                                  ((,symbol (%heap-alien ',info)))
                                ,@body))))
