@@ -1118,7 +1118,7 @@ Users Manual for details about the PROCESS structure."#-win32"
                         (values fd nil))
                        (t
                         (error "couldn't duplicate file descriptor: ~A"
-                               (strerror errno))))))))
+                               (strerror errno)))))))
           ((streamp object)
            (ecase direction
              (:input
@@ -1202,6 +1202,6 @@ Users Manual for details about the PROCESS structure."#-win32"
                                              external-format)
                   (push read-fd *close-on-error*)
                   (push write-fd *close-in-parent*)
-                  (return (values write-fd nil)))))))
-          (t
-           (error "invalid option to RUN-PROGRAM: ~S" object)))))
+                  (return (values write-fd nil)))))
+             (t
+              (error "invalid option to RUN-PROGRAM: ~S" object))))))))
