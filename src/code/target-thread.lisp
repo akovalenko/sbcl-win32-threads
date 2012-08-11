@@ -1458,7 +1458,7 @@ See also: RETURN-FROM-THREAD, ABORT-THREAD."
                                   ;; mind.
                                   (setq *interrupt-pending* nil)
                                   (handle-thread-exit thread))))))))
-                  (values))))
+                  (values)))))
          ;; If the starting thread is stopped for gc before it signals the
          ;; semaphore then we'd be stuck.
          (assert (not *gc-inhibit*))
