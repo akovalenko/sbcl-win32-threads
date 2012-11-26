@@ -22,20 +22,21 @@
 
 (with-test (:name atomic-update
             :skipped-on '(not :sb-thread))
-  (let ((x (cons :count 0)))
+  (let ((x (cons :count 0))
+        (nthreads (ecase sb-vm:n-word-bits (32 100) (64 1000))))
     (mapc #'sb-thread:join-thread
           (loop repeat 1000
                 collect (sb-thread:make-thread
                          (lambda ()
-                           (loop repeat 1000
+                           (loop repeat nthreads
                                  do (atomic-update (cdr x) #'1+)
                                     (sleep 0.00001))))))
-    (assert (equal x '(:count . 1000000)))))
+    (assert (equal x `(:count ,@(* 1000 nthreads))))))
 
 (with-test (:name mutex-owner)
   ;; Make sure basics are sane on unithreaded ports as well
   (let ((mutex (make-mutex)))
-    (get-mutex mutex)
+    (grab-mutex mutex)
     (assert (eq *current-thread* (mutex-value mutex)))
     (handler-bind ((warning #'error))
       (release-mutex mutex))
@@ -71,11 +72,11 @@
     (sleep 1)
     (assert (not (thread-alive-p thread)))))
 
-;;; GET-MUTEX should not be interruptible under WITHOUT-INTERRUPTS
+;;; GRAB-MUTEX should not be interruptible under WITHOUT-INTERRUPTS
 
-(with-test (:name without-interrupts+get-mutex :skipped-on '(not :sb-thread))
+(with-test (:name without-interrupts+grab-mutex :skipped-on '(not :sb-thread))
   (let* ((lock (make-mutex))
-         (bar (progn (get-mutex lock) nil))
+         (bar (progn (grab-mutex lock) nil))
          (thread (make-thread (lambda ()
                                 (sb-sys:without-interrupts
                                     (with-mutex (lock)
@@ -496,12 +497,12 @@
             :skipped-on '(not :sb-thread))
   (assert (eq :error
               (handler-case
-                  (join-thread (make-thread (lambda () (sleep 10))) :timeout 0.01)
+                  (join-thread (make-join-thread (lambda () (sleep 10))) :timeout 0.01)
                 (join-thread-error ()
                   :error))))
   (let ((cookie (cons t t)))
     (assert (eq cookie
-                (join-thread (make-thread (lambda () (sleep 10)))
+                (join-thread (make-join-thread (lambda () (sleep 10)))
                              :timeout 0.01
                              :default cookie)))))
 
@@ -527,7 +528,7 @@
                    #+sb-thread
                    (sb-thread::block-deferrable-signals))))))
       (let* ((threads (loop for i from 1 upto 100
-                            collect (make-thread #'critical :name (format nil "T~A" i))))
+                            collect (make-join-thread #'critical :name (format nil "T~A" i))))
              (safe nil)
              (unsafe nil)
              (interruptor (make-thread (lambda ()

@@ -80,9 +80,9 @@ Example:
           ,new))))
 
 EXPERIMENTAL: Interface subject to change."
-  (flet ((invalid-place ()
-           (error "Invalid place to CAS: ~S" place)))
     (let ((expanded (sb!xc:macroexpand place environment)))
+      (flet ((invalid-place ()
+           (error "Invalid place to CAS: ~S -> ~S" place expanded)))
       (unless (consp expanded)
         ;; FIXME: Allow (CAS *FOO* <OLD> <NEW>), maybe?
         (invalid-place))
@@ -93,7 +93,7 @@ EXPERIMENTAL: Interface subject to change."
           (cond
             ;; CAS expander.
             (info
-             (funcall info place environment))
+             (funcall info expanded environment))
 
             ;; Structure accessor
             ((setf info (info :function :structure-accessor name))

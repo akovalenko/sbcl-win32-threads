@@ -1,4 +1,73 @@
 ;;;; -*- coding: utf-8; fill-column: 78 -*-
+changes relative to sbcl-1.1.1:
+  * notice: System requirements for SBCL on Microsoft Windows: Windows NT 5.1
+    or newer (Windows XP, Server 2003) is required.  Support for Windows 2000
+    (NT 5.0) is no longer being maintained.
+  * notice: Starting with this version, SBCL on Windows no longer supports
+    building with disabled thread support.
+  * enhancement: frlocks have been added to SB-CONCURRENCY contrib module.
+  * enhancement: New feature sb-dynamic-core allows the runtime to be
+    rebuilt or relocated without requiring changes to the core file on
+    all linkage table platforms.  Required on Windows.  (Thanks to Anton
+    Kovalenko.)
+  * enhancement: Console I/O streams use UCS-2. (Thanks to Anton Kovalenko.)
+  * enhancement: I/O on Windows unnamed pipes is interruptible
+    asynchronously using interrupt-thread, timers when running on Windows NT
+    version 6.1 or newer (Windows 7, Server 2008 R2).  (Thanks to Anton
+    Kovalenko.)
+  * enhancement: Support for the experimental safepoint-based stop-the-world
+    protocol on the PowerPC platform.
+  * bug fix: Non-blocking reads from the Windows console were not necessarily
+    non-blocking. Thanks to Anton Kovalenko. (lp#308923)
+  * bug fix: stability of threads on Windows has been improved upon through
+    an updated stop-the-world protocol (thanks to Anton Kovalenko).
+
+changes in sbcl-1.1.1 relative to sbcl-1.1.0:
+  * enhancement: WITH-COMPILATION-UNIT no longer grabs the world-lock.
+    (COMPILE and COMPILE-FILE still do.)
+  * optimization: The compiler no longer rotates loops in some cases where
+    this transformation actually lead to worse code being generated.
+  * bug fix: SB-CLTL2:MACROEXPAND-ALL correctly handles shadowing of
+    symbol-macros by lexical bindings.
+  * bug fix: stack allocation was prevented by high DEBUG declaration in
+    several cases.
+  * bug fix: SB-EXT:GC-LOGFILE signaled an error when no logfile was set.
+    (thanks to SANO Masatoshi)
+  * bug fix: PARSE-NATIVE-NAMESTRING performed non-native parsing when
+    :JUNK-ALLOWED was true.
+  * bug fix: type derivation inferred overly conservative types for
+    unions of array types. (lp#1050768)
+
+changes in sbcl-1.1.0 relative to sbcl-1.0.58:
+  * enhancement: New variable, sb-ext:*disassemble-annotate* for controlling
+    source annotation of DISASSEMBLE output. Defaults to T.
+  * enhancement: TIMEOUT arguments added to WITH-MUTEX and WITH-RECURSIVE-LOCK, and
+    WAIT-P argument added to WITH-RECURSIVE-LOCK.
+  * enhancement: SB-EXT:ATOMIC-PUSH and SB-EXT:ATOMIC-POP allow atomic operations
+    on list heads.
+  * enhancement: Optional features (not enabled by default) allow the
+    use of signals for inter-thread synchronization to be reduced on certain
+    supported platforms (currently Linux, Solaris, and FreeBSD on x86 and
+    x86-64).  Set (and :sb-thread :sb-safepoint :sb-thruption :sb-wtimer)
+    to test these experimental features.  Known remaining bugs include minor
+    thread safety issues, less timely freeing of memory by GC, and certain
+    (not yet optimally low) runtime overhead.  Thanks to Anton Kovalenko.
+  * optimization: CL:SORT and CL:STABLE-SORT of lists are faster and use fewer
+    comparisons, particularly on almost-sorted inputs.
+  * bug fix: Reading floats with large exponents no longer takes too much time
+    before reporting that the exponent is too large.
+  * bug fix: SB-BSD-SOCKETS:SOCKET-RECEIVE with a UDP socket now works
+    correctly when the received datagram is larger than the provided buffer.
+    (lp#1023438, thanks to Robert Uhl)
+  * bug fix: SB-EXT:GET-CAS-EXPANSION returned a bogus read-form when given
+    a SYMBOL-VALUE form with a constant symbol argument.
+  * bug fix: SB-EXT:GET-CAS-EXPANSION signaled an error when a macro expanding
+    into a DEFCAS defined place was used as the place.
+  * bug fix: FIND and POSITION signaled a type-error when non-bits where looked
+    for from bit-vectors.
+  * documentation: a section on random number generation has been added to the
+    manual. (lp#656839)
+
 changes in sbcl-1.0.58 relative to sbcl-1.0.57:
   * enhancement: implicit generic function warnings now specify the package
     in which the new generic function is being created.
@@ -12,11 +81,11 @@ changes in sbcl-1.0.58 relative to sbcl-1.0.57:
   * optimization: On x86-64, code alignment of block headers is done with
     multi-byte NOPs now instead of repetitions of the single-byte NOP.
   * optimization: MAP-INTO is substantially faster when the target sequence is
-    of unknown type; mapping into lists is no longer O(N^2). (thanks to James
-    M. Lawrence)
+    of unknown type; mapping into lists is no longer O(N^2). (lp#1001043,
+    thanks to James M. Lawrence)
   * optimization: the compiler no longer heap-conses to check exits in cases
     where the exit function is dynamic extent, or when it can prove the exit
-    function cannot escape.
+    function cannot escape. (lp#1002534)
   * optimization: SB-SEQUENCE:DOSEQUENCE is faster on vectors of unknown
     element type, and vectors that aren't SIMPLE-ARRAYs.
   * optimization: CL:SORT and CL:STABLE-SORT are more efficient in execution

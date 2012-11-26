@@ -56,8 +56,8 @@
 ;;; reached by recursing on top level functions.
 ;;; FIXME: Is it really only LAMBDAs, not e.g. FUNCTIONALs? Then
 ;;; shouldn't it be *SEEN-LAMBDAS*?
-(defvar *seen-blocks* (make-hash-table :test 'eq))
-(defvar *seen-funs* (make-hash-table :test 'eq))
+(defvar *seen-blocks*)
+(defvar *seen-funs*)
 
 ;;; Barf if NODE is in a block which wasn't reached during the graph
 ;;; walk.
@@ -79,78 +79,79 @@
 ;;; hashtables, looking for lossage.
 (declaim (ftype (function (list) (values)) check-ir1-consistency))
 (defun check-ir1-consistency (components)
-  (clrhash *seen-blocks*)
-  (clrhash *seen-funs*)
-  (dolist (c components)
-    (let* ((head (component-head c))
-           (tail (component-tail c)))
-      (unless (and (null (block-pred head))
-                   (null (block-succ tail)))
-        (barf "~S is malformed." c))
+  (let ((*seen-blocks* (make-hash-table :test 'eq))
+        (*seen-funs* (make-hash-table :test 'eq)))
+    (unwind-protect
+         (progn
+           (dolist (c components)
+             (let* ((head (component-head c))
+                    (tail (component-tail c)))
+               (unless (and (null (block-pred head))
+                            (null (block-succ tail)))
+                 (barf "~S is malformed." c))
 
-      (do ((prev nil block)
-           (block head (block-next block)))
-          ((null block)
-           (unless (eq prev tail)
-             (barf "wrong TAIL for DFO, ~S in ~S" prev c)))
-        (setf (gethash block *seen-blocks*) t)
-        (unless (eq (block-prev block) prev)
-          (barf "bad PREV for ~S, should be ~S" block prev))
-        (unless (or (eq block tail)
-                    (eq (block-component block) c))
-          (barf "~S is not in ~S." block c)))
-#|
-      (when (or (loop-blocks c) (loop-inferiors c))
-        (do-blocks (block c :both)
-          (setf (block-flag block) nil))
-        (check-loop-consistency c nil)
-        (do-blocks (block c :both)
-          (unless (block-flag block)
-            (barf "~S was not in any loop." block))))
-|#
-    ))
+               (do ((prev nil block)
+                    (block head (block-next block)))
+                   ((null block)
+                    (unless (eq prev tail)
+                      (barf "wrong TAIL for DFO, ~S in ~S" prev c)))
+                 (setf (gethash block *seen-blocks*) t)
+                 (unless (eq (block-prev block) prev)
+                   (barf "bad PREV for ~S, should be ~S" block prev))
+                 (unless (or (eq block tail)
+                             (eq (block-component block) c))
+                   (barf "~S is not in ~S." block c)))
+               #|
+               (when (or (loop-blocks c) (loop-inferiors c))
+               (do-blocks (block c :both)
+               (setf (block-flag block) nil))
+               (check-loop-consistency c nil)
+               (do-blocks (block c :both)
+               (unless (block-flag block)
+               (barf "~S was not in any loop." block))))
+               |#
+               ))
+           (check-fun-consistency components)
 
-  (check-fun-consistency components)
+           (dolist (c components)
+             (do ((block (block-next (component-head c)) (block-next block)))
+                 ((null (block-next block)))
+               (check-block-consistency block)))
 
-  (dolist (c components)
-    (do ((block (block-next (component-head c)) (block-next block)))
-        ((null (block-next block)))
-      (check-block-consistency block)))
+           (maphash (lambda (k v)
+                      (declare (ignore k))
+                      (unless (or (constant-p v)
+                                  (and (global-var-p v)
+                                       (member (global-var-kind v)
+                                               '(:global :special :unknown))))
+                        (barf "strange *FREE-VARS* entry: ~S" v))
+                      (dolist (n (leaf-refs v))
+                        (check-node-reached n))
+                      (when (basic-var-p v)
+                        (dolist (n (basic-var-sets v))
+                          (check-node-reached n))))
+                    *free-vars*)
 
-  (maphash (lambda (k v)
-             (declare (ignore k))
-             (unless (or (constant-p v)
-                         (and (global-var-p v)
-                              (member (global-var-kind v)
-                                      '(:global :special :unknown))))
-               (barf "strange *FREE-VARS* entry: ~S" v))
-             (dolist (n (leaf-refs v))
-               (check-node-reached n))
-             (when (basic-var-p v)
-               (dolist (n (basic-var-sets v))
-                 (check-node-reached n))))
-           *free-vars*)
+           (maphash (lambda (k v)
+                      (declare (ignore k))
+                      (unless (constant-p v)
+                        (barf "strange *CONSTANTS* entry: ~S" v))
+                      (dolist (n (leaf-refs v))
+                        (check-node-reached n)))
+                    *constants*)
 
-  (maphash (lambda (k v)
-             (declare (ignore k))
-             (unless (constant-p v)
-               (barf "strange *CONSTANTS* entry: ~S" v))
-             (dolist (n (leaf-refs v))
-               (check-node-reached n)))
-           *constants*)
-
-  (maphash (lambda (k v)
-             (declare (ignore k))
-             (unless (or (functional-p v)
-                         (and (global-var-p v)
-                              (eq (global-var-kind v) :global-function)))
-               (barf "strange *FREE-FUNS* entry: ~S" v))
-             (dolist (n (leaf-refs v))
-               (check-node-reached n)))
-           *free-funs*)
-  (clrhash *seen-funs*)
-  (clrhash *seen-blocks*)
-  (values))
+           (maphash (lambda (k v)
+                      (declare (ignore k))
+                      (unless (or (functional-p v)
+                                  (and (global-var-p v)
+                                       (eq (global-var-kind v) :global-function)))
+                        (barf "strange *FREE-FUNS* entry: ~S" v))
+                      (dolist (n (leaf-refs v))
+                        (check-node-reached n)))
+                    *free-funs*))
+      (clrhash *seen-blocks*)
+      (clrhash *seen-funs*))
+    (values)))
 
 ;;;; function consistency checking
 
@@ -876,15 +877,11 @@
 ;;;
 ;;; FIXME:
 ;;;   * Perhaps this machinery should be #!+SB-SHOW.
-;;;   * Probably the hash tables should either be weak hash tables,
-;;;     or only allocated within a single compilation unit. Otherwise
-;;;     there will be a tendency for them to grow without bound and
-;;;     keep garbage from being collected.
 (macrolet ((def (counter vto vfrom fto ffrom)
              `(progn
                 (declaim (type hash-table ,vto ,vfrom))
-                (defvar ,vto (make-hash-table :test 'eq))
-                (defvar ,vfrom (make-hash-table :test 'eql))
+                (defvar ,vto)
+                (defvar ,vfrom)
                 (declaim (type fixnum ,counter))
                 (defvar ,counter 0)
 
@@ -899,7 +896,7 @@
   (def *continuation-number* *continuation-numbers* *number-continuations*
        cont-num num-cont)
   (def *tn-id* *tn-ids* *id-tns* tn-id id-tn)
-  (def *label-id* *id-labels* *label-ids* label-id id-label))
+  (def *label-id* *label-ids* *id-labels* label-id id-label))
 
 ;;; Print a terse one-line description of LEAF.
 (defun print-leaf (leaf &optional (stream *standard-output*))
@@ -1197,7 +1194,6 @@
                (when k
                  (res k)))
              *list-conflicts-table*)
-    (clrhash *list-conflicts-table*)
     (res)))
 
 ;;; Return a list of a the TNs that conflict with TN. Sort of, kind
@@ -1206,24 +1202,26 @@
   (aver (member (tn-kind tn) '(:normal :environment :debug-environment)))
   (let ((confs (tn-global-conflicts tn)))
     (cond (confs
-           (clrhash *list-conflicts-table*)
-           (do ((conf confs (global-conflicts-next-tnwise conf)))
-               ((null conf))
-             (format t "~&#<block ~D kind ~S>~%"
-                     (block-number (ir2-block-block (global-conflicts-block
-                                                     conf)))
-                     (global-conflicts-kind conf))
-             (let ((block (global-conflicts-block conf)))
-               (add-always-live-tns block tn)
-               (if (eq (global-conflicts-kind conf) :live)
-                   (add-all-local-tns block)
-                   (let ((bconf (global-conflicts-conflicts conf))
-                         (ltns (ir2-block-local-tns block)))
-                     (dotimes (i (ir2-block-local-tn-count block))
-                       (when (/= (sbit bconf i) 0)
-                         (setf (gethash (svref ltns i) *list-conflicts-table*)
-                               t)))))))
-           (listify-conflicts-table))
+           (let ((*list-conflicts-table* (make-hash-table :test 'eq)))
+             (unwind-protect
+                  (do ((conf confs (global-conflicts-next-tnwise conf)))
+                      ((null conf)
+                       (listify-conflicts-table))
+                    (format t "~&#<block ~D kind ~S>~%"
+                            (block-number (ir2-block-block (global-conflicts-block
+                                                            conf)))
+                            (global-conflicts-kind conf))
+                    (let ((block (global-conflicts-block conf)))
+                      (add-always-live-tns block tn)
+                      (if (eq (global-conflicts-kind conf) :live)
+                          (add-all-local-tns block)
+                          (let ((bconf (global-conflicts-conflicts conf))
+                                (ltns (ir2-block-local-tns block)))
+                            (dotimes (i (ir2-block-local-tn-count block))
+                              (when (/= (sbit bconf i) 0)
+                                (setf (gethash (svref ltns i) *list-conflicts-table*)
+                                      t)))))))
+               (clrhash *list-conflicts-table*))))
           (t
            (let* ((block (tn-local tn))
                   (ltns (ir2-block-local-tns block))

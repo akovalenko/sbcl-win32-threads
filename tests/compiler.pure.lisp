@@ -3827,7 +3827,8 @@
 (with-test (:name :multiple-args-to-function)
   (let ((form `(flet ((foo (&optional (x 13)) x))
                  (funcall (function foo 42))))
-        (*evaluator-mode* :interpret))
+        #+sb-eval (*evaluator-mode* :interpret))
+    #+sb-eval
     (assert (eq :error
                 (handler-case (eval form)
                   (error () :error))))
@@ -4336,3 +4337,19 @@
                                 (cons (or (car x) (meh)))
                                 (t (meh)))))))
                    (funcall (eh x)))) t t)))
+
+(with-test (:name (:bug-1050768 :symptom))
+  ;; Used to signal an error.
+  (compile nil
+           `(lambda (string position)
+              (char string position)
+              (array-in-bounds-p string (1+ position)))))
+
+(with-test (:name (:bug-1050768 :cause))
+  (let ((types `((string string)
+                 ((or (simple-array character 24) (vector t 24))
+                  (or (simple-array character 24) (vector t))))))
+    (dolist (pair types)
+      (destructuring-bind (orig conservative) pair
+        (assert sb-c::(type= (specifier-type cl-user::conservative)
+                             (conservative-type (specifier-type cl-user::orig))))))))

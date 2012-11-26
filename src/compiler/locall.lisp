@@ -681,7 +681,7 @@
                    (call-args `(list ,@more-temps))
                    ;; &REST arguments may be accompanied by extra
                    ;; context and count arguments. We know this by
-                   ;; the ARG-INFO-DEFAULT. Supply NIL and 0 or
+                   ;; the ARG-INFO-DEFAULT. Supply 0 and 0 or
                    ;; don't convert at all depending.
                    (let ((more (arg-info-default info)))
                      (when more
@@ -692,7 +692,7 @@
                              ;; We've already converted to use the more context
                              ;; instead of the rest list.
                              (return-from convert-more-call))))
-                       (call-args nil)
+                       (call-args 0)
                        (call-args 0)
                        (setf (arg-info-default info) t)))
                    (return))
@@ -712,7 +712,8 @@
         (convert-hairy-fun-entry ref call (optional-dispatch-main-entry fun)
                                  (append temps more-temps)
                                  (ignores) (call-args)
-                                 more-temps))))
+                                 (when (optional-rest-p fun)
+                                   more-temps)))))
 
   (values))
 
@@ -1028,7 +1029,13 @@
   ;; with anonymous things, and suppressing inlining
   ;; for such things can easily give Python acute indigestion, so
   ;; we don't.)
-  (when (leaf-has-source-name-p clambda)
+  ;;
+  ;; A functional that is already inline-expanded in this componsne definitely
+  ;; deserves let-conversion -- and in case of main entry points for inline
+  ;; expanded optional dispatch, the main-etry isn't explicitly marked :INLINE
+  ;; even if the function really is.
+  (when (and (leaf-has-source-name-p clambda)
+             (not (functional-inline-expanded clambda)))
     ;; ANSI requires that explicit NOTINLINE be respected.
     (or (eq (lambda-inlinep clambda) :notinline)
         ;; If (= LET-CONVERSION 0) we can guess that inlining

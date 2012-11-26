@@ -248,7 +248,7 @@
              (if (stringp host-object)
                  (warn-and-give-up)
                  (values nil t)))
-            ((target-type-is-in '(character base-char))
+            ((target-type-is-in '(character base-char standard-char))
              (cond ((typep host-object 'standard-char)
                     (values t t))
                    ((not (characterp host-object))
@@ -289,6 +289,12 @@
                  ;; trivial.
                  (and (every/type #'cross-typep host-object rest))
                  (or  (any/type   #'cross-typep host-object rest))
+                 (not
+                  (multiple-value-bind (value surep)
+                      (cross-typep host-object (car rest))
+                    (if surep
+                        (values (not value) t)
+                        (warn-and-give-up))))
                  ;; If we want to work with the KEYWORD type, we need
                  ;; to grok (SATISFIES KEYWORDP).
                  (satisfies

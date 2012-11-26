@@ -65,17 +65,17 @@
     (assert (= n 1))
     (assert (not final))))
 
-(with-test (:name (:deadline :get-mutex) :skipped-on '(not :sb-thread))
+(with-test (:name (:deadline :grab-mutex) :skipped-on '(not :sb-thread))
   (assert-timeout
    (let ((lock (sb-thread:make-mutex))
          (waitp t))
-     (sb-thread:make-thread (lambda ()
-                              (sb-thread:get-mutex lock)
-                              (setf waitp nil)
-                              (sleep 5)))
+     (make-join-thread (lambda ()
+                         (sb-thread:grab-mutex lock)
+                         (setf waitp nil)
+                         (sleep 5)))
      (loop while waitp do (sleep 0.01))
      (sb-sys:with-deadline (:seconds 1)
-       (sb-thread:get-mutex lock)))))
+       (sb-thread:grab-mutex lock)))))
 
 (with-test (:name (:deadline :wait-on-semaphore) :skipped-on '(not :sb-thread))
   (assert-timeout
@@ -87,22 +87,22 @@
   (assert-timeout
    (sb-sys:with-deadline (:seconds 1)
      (sb-thread:join-thread
-      (sb-thread:make-thread (lambda () (loop (sleep 1))))))))
+      (make-kill-thread (lambda () (loop (sleep 1))))))))
 
 (with-test (:name (:deadline :futex-wait-eintr) :skipped-on '(not :sb-thread))
   (let ((lock (sb-thread:make-mutex))
         (waitp t))
-    (sb-thread:make-thread (lambda ()
-                             (sb-thread:get-mutex lock)
-                             (setf waitp nil)
-                             (sleep 5)))
+    (make-join-thread (lambda ()
+                        (sb-thread:grab-mutex lock)
+                        (setf waitp nil)
+                        (sleep 5)))
     (loop while waitp do (sleep 0.01))
-    (let ((thread (sb-thread:make-thread
+    (let ((thread (make-join-thread
                    (lambda ()
                      (let ((start (get-internal-real-time)))
                        (handler-case
                            (sb-sys:with-deadline (:seconds 1)
-                             (sb-thread:get-mutex lock))
+                             (sb-thread:grab-mutex lock))
                          (sb-sys:deadline-timeout (x)
                            (declare (ignore x))
                            (let ((end (get-internal-real-time)))

@@ -826,7 +826,7 @@
           (let* ((name (first spec))
                  (exp-temp (gensym "ONCE-ONLY")))
             `(let ((,exp-temp ,(second spec))
-                   (,name (gensym ,(symbol-name name))))
+                   (,name (sb!xc:gensym ,(symbol-name name))))
                `(let ((,,name ,,exp-temp))
                   ,,(frob (rest specs) body))))))))
 
@@ -1140,6 +1140,8 @@
 ;;; deprecated.texinfo.
 ;;;
 ;;; EARLY:
+;;; - SB-THREAD::GET-MUTEX, since 1.0.37.33 (04/2010)               -> Late: 01/2013
+;;;   ^- initially deprecated without compile-time warning, hence the schedule
 ;;; - SB-THREAD::SPINLOCK (type), since 1.0.53.11 (08/2011)         -> Late: 08/2012
 ;;; - SB-THREAD::MAKE-SPINLOCK, since 1.0.53.11 (08/2011)           -> Late: 08/2012
 ;;; - SB-THREAD::WITH-SPINLOCK, since 1.0.53.11 (08/2011)           -> Late: 08/2012
@@ -1164,19 +1166,22 @@
 
 (defmacro define-deprecated-function (state since name replacements lambda-list &body body)
   (let* ((replacements (normalize-deprecation-replacements replacements))
-         (doc (let ((*package* (find-package :keyword)))
-                (apply #'format nil
-                       "~@<~S has been deprecated as of SBCL ~A.~
-                        ~#[~; Use ~S instead.~; ~
-                              Use ~S or ~S instead.~:; ~
-                              Use~@{~#[~; or~] ~S~^,~} instead.~]~@:>"
-                       name since replacements))))
+         (doc
+          (let ((*package* (find-package :keyword))
+                (*print-pretty* nil))
+            (apply #'format nil
+                   "~S has been deprecated as of SBCL ~A.~
+                    ~#[~;~2%Use ~S instead.~;~2%~
+                            Use ~S or ~S instead.~:;~2%~
+                            Use~@{~#[~; or~] ~S~^,~} instead.~]"
+                    name since replacements))))
     `(progn
        ,(ecase state
           ((:early :late)
-           `(defun ,name ,lambda-list
-              ,doc
-              ,@body))
+           `(progn
+              (defun ,name ,lambda-list
+                ,doc
+                ,@body)))
           ((:final)
            `(progn
               (declaim (ftype (function * nil) ,name))
@@ -1352,3 +1357,44 @@ to :INTERPRET, an interpreter will be used.")
      (if (eql x 0.0l0)
          (make-unportable-float :long-float-negative-zero)
          0.0l0))))
+
+;;; Signalling an error when trying to print an error condition is
+;;; generally a PITA, so whatever the failure encountered when
+;;; wondering about FILE-POSITION within a condition printer, 'tis
+;;; better silently to give up than to try to complain.
+(defun file-position-or-nil-for-error (stream &optional (pos nil posp))
+  ;; Arguably FILE-POSITION shouldn't be signalling errors at all; but
+  ;; "NIL if this cannot be determined" in the ANSI spec doesn't seem
+  ;; absolutely unambiguously to prohibit errors when, e.g., STREAM
+  ;; has been closed so that FILE-POSITION is a nonsense question. So
+  ;; my (WHN) impression is that the conservative approach is to
+  ;; IGNORE-ERRORS. (I encountered this failure from within a homebrew
+  ;; defsystemish operation where the ERROR-STREAM had been CL:CLOSEd,
+  ;; I think by nonlocally exiting through a WITH-OPEN-FILE, by the
+  ;; time an error was reported.)
+  (if posp
+      (ignore-errors (file-position stream pos))
+      (ignore-errors (file-position stream))))
+
+(defun stream-error-position-info (stream &optional position)
+  (unless (interactive-stream-p stream)
+    (let ((now (file-position-or-nil-for-error stream))
+          (pos position))
+      (when (and (not pos) now (plusp now))
+        ;; FILE-POSITION is the next character -- error is at the previous one.
+        (setf pos (1- now)))
+      (let (lineno colno)
+        (when (and pos
+                   (< pos sb!xc:array-dimension-limit)
+                   (file-position stream :start))
+          (let ((string
+                  (make-string pos :element-type (stream-element-type stream))))
+            (when (= pos (read-sequence string stream))
+              ;; Lines count from 1, columns from 0. It's stupid and traditional.
+              (setq lineno (1+ (count #\Newline string))
+                    colno (- pos (or (position #\Newline string :from-end t) 0)))))
+          (file-position-or-nil-for-error stream now))
+        (remove-if-not #'second
+                       (list (list :line lineno)
+                             (list :column colno)
+                             (list :file-position pos)))))))

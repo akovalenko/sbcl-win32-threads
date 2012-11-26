@@ -17,7 +17,6 @@
 (declaim (special *constants* *free-vars* *component-being-compiled*
                   *code-vector* *next-location* *result-fixups*
                   *free-funs* *source-paths*
-                  *seen-blocks* *seen-funs* *list-conflicts-table*
                   *continuation-number* *continuation-numbers*
                   *number-continuations* *tn-id* *tn-ids* *id-tns*
                   *label-ids* *label-id* *id-labels*
@@ -236,17 +235,16 @@ Examples:
                        (*compiler-note-count* 0)
                        (*undefined-warnings* nil)
                        (*in-compilation-unit* t))
-                   (with-world-lock ()
-                     (handler-bind ((parse-unknown-type
-                                     (lambda (c)
-                                       (note-undefined-reference
-                                        (parse-unknown-type-specifier c)
-                                        :type))))
-                       (unwind-protect
-                            (multiple-value-prog1 (funcall fn) (setf succeeded-p t))
-                         (unless succeeded-p
-                           (incf *aborted-compilation-unit-count*))
-                         (summarize-compilation-unit (not succeeded-p))))))))))
+                   (handler-bind ((parse-unknown-type
+                                    (lambda (c)
+                                      (note-undefined-reference
+                                       (parse-unknown-type-specifier c)
+                                       :type))))
+                     (unwind-protect
+                          (multiple-value-prog1 (funcall fn) (setf succeeded-p t))
+                       (unless succeeded-p
+                         (incf *aborted-compilation-unit-count*))
+                       (summarize-compilation-unit (not succeeded-p)))))))))
     (if policy
         (let ((*policy* (process-optimize-decl policy (unless override *policy*)))
               (*policy-restrictions* (unless override *policy-restrictions*)))
@@ -374,12 +372,33 @@ Examples:
 ;;; WARNINGS-P and FAILURE-P are as in CL:COMPILE or CL:COMPILE-FILE.
 ;;; This also wraps up WITH-IR1-NAMESPACE functionality.
 (defmacro with-compilation-values (&body body)
-  `(with-ir1-namespace
-    (let ((*warnings-p* nil)
-          (*failure-p* nil))
-      (values (progn ,@body)
-              *warnings-p*
-              *failure-p*))))
+  ;; These bindings could just as well be in WITH-IR1-NAMESPACE, but
+  ;; since they're primarily debugging tools, it's nicer to have
+  ;; a wider unique scope by ID.
+  `(let ((*continuation-number* 0)
+         (*continuation-numbers* (make-hash-table :test 'eq))
+         (*number-continuations* (make-hash-table :test 'eql))
+         (*tn-id* 0)
+         (*tn-ids* (make-hash-table :test 'eq))
+         (*id-tns* (make-hash-table :test 'eql))
+         (*label-id* 0)
+         (*label-ids* (make-hash-table :test 'eq))
+         (*id-labels* (make-hash-table :test 'eql)))
+       (unwind-protect
+            (let ((*warnings-p* nil)
+                  (*failure-p* nil))
+              (handler-bind ((compiler-error #'compiler-error-handler)
+                             (style-warning #'compiler-style-warning-handler)
+                             (warning #'compiler-warning-handler))
+                  (values (progn ,@body)
+                       *warnings-p*
+                       *failure-p*)))
+         (clrhash *tn-ids*)
+         (clrhash *id-tns*)
+         (clrhash *continuation-numbers*)
+         (clrhash *number-continuations*)
+         (clrhash *label-ids*)
+         (clrhash *id-labels*))))
 
 ;;;; component compilation
 
@@ -737,47 +756,6 @@ Examples:
     (blast *free-funs*)
     (blast *constants*))
   (values))
-
-;;; Clear global variables used by the compiler.
-;;;
-;;; FIXME: It seems kinda nasty and unmaintainable to have to do this,
-;;; and it adds overhead even when people aren't using the compiler.
-;;; Perhaps we could make these global vars unbound except when
-;;; actually in use, so that this function could go away.
-(defun clear-stuff (&optional (debug-too t))
-
-  ;; Clear global tables.
-  (when (boundp '*free-funs*)
-    (clrhash *free-funs*)
-    (clrhash *free-vars*)
-    (clrhash *constants*))
-
-  ;; Clear debug counters and tables.
-  (clrhash *seen-blocks*)
-  (clrhash *seen-funs*)
-  (clrhash *list-conflicts-table*)
-
-  (when debug-too
-    (clrhash *continuation-numbers*)
-    (clrhash *number-continuations*)
-    (setq *continuation-number* 0)
-    (clrhash *tn-ids*)
-    (clrhash *id-tns*)
-    (setq *tn-id* 0)
-    (clrhash *label-ids*)
-    (clrhash *id-labels*)
-    (setq *label-id* 0))
-
-  ;; (Note: The CMU CL code used to set CL::*GENSYM-COUNTER* to zero here.
-  ;; Superficially, this seemed harmful -- the user could reasonably be
-  ;; surprised if *GENSYM-COUNTER* turned back to zero when something was
-  ;; compiled. A closer inspection showed that this actually turned out to be
-  ;; harmless in practice, because CLEAR-STUFF was only called from within
-  ;; forms which bound CL::*GENSYM-COUNTER* to zero. However, this means that
-  ;; even though zeroing CL::*GENSYM-COUNTER* here turned out to be harmless in
-  ;; practice, it was also useless in practice. So we don't do it any more.)
-
-  (values))
 
 ;;;; trace output
 
@@ -982,9 +960,10 @@ Examples:
 ;;; Read and compile the source file.
 (defun sub-sub-compile-file (info)
   (do-forms-from-info ((form current-index) info)
-    (find-source-paths form current-index)
-    (process-toplevel-form
-     form `(original-source-start 0 ,current-index) nil)))
+    (with-source-paths
+      (find-source-paths form current-index)
+      (process-toplevel-form
+       form `(original-source-start 0 ,current-index) nil))))
 
 ;;; Return the INDEX'th source form read from INFO and the position
 ;;; where it was read.
@@ -1008,15 +987,16 @@ Examples:
       (if (fopcompilable-p form)
          (let ((*fopcompile-label-counter* 0))
            (fopcompile form path nil))
-         (let ((*lexenv* (make-lexenv
-                          :policy *policy*
-                          :handled-conditions *handled-conditions*
-                          :disabled-package-locks *disabled-package-locks*))
-               (tll (ir1-toplevel form path nil)))
-           (if (eq *block-compile* t)
-               (push tll *toplevel-lambdas*)
-               (compile-toplevel (list tll) nil))
-           nil)))))
+         (with-ir1-namespace
+           (let ((*lexenv* (make-lexenv
+                            :policy *policy*
+                            :handled-conditions *handled-conditions*
+                            :disabled-package-locks *disabled-package-locks*))
+                 (tll (ir1-toplevel form path nil)))
+             (if (eq *block-compile* t)
+                 (push tll *toplevel-lambdas*)
+                 (compile-toplevel (list tll) nil))
+             nil))))))
 
 ;;; Macroexpand FORM in the current environment with an error handler.
 ;;; We only expand one level, so that we retain all the intervening
@@ -1045,25 +1025,26 @@ Examples:
   (declare (list path))
   (multiple-value-bind (forms decls)
       (parse-body body :doc-string-allowed nil :toplevel t)
-    (let* ((*lexenv* (process-decls decls vars funs))
-           ;; FIXME: VALUES declaration
-           ;;
-           ;; Binding *POLICY* is pretty much of a hack, since it
-           ;; causes LOCALLY to "capture" enclosed proclamations. It
-           ;; is necessary because CONVERT-AND-MAYBE-COMPILE uses the
-           ;; value of *POLICY* as the policy. The need for this hack
-           ;; is due to the quirk that there is no way to represent in
-           ;; a POLICY that an optimize quality came from the default.
-           ;;
-           ;; FIXME: Ideally, something should be done so that DECLAIM
-           ;; inside LOCALLY works OK. Failing that, at least we could
-           ;; issue a warning instead of silently screwing up.
-           (*policy* (lexenv-policy *lexenv*))
-           ;; This is probably also a hack
-           (*handled-conditions* (lexenv-handled-conditions *lexenv*))
-           ;; ditto
-           (*disabled-package-locks* (lexenv-disabled-package-locks *lexenv*)))
-      (process-toplevel-progn forms path compile-time-too))))
+    (with-ir1-namespace
+      (let* ((*lexenv* (process-decls decls vars funs))
+             ;; FIXME: VALUES declaration
+             ;;
+             ;; Binding *POLICY* is pretty much of a hack, since it
+             ;; causes LOCALLY to "capture" enclosed proclamations. It
+             ;; is necessary because CONVERT-AND-MAYBE-COMPILE uses the
+             ;; value of *POLICY* as the policy. The need for this hack
+             ;; is due to the quirk that there is no way to represent in
+             ;; a POLICY that an optimize quality came from the default.
+             ;;
+             ;; FIXME: Ideally, something should be done so that DECLAIM
+             ;; inside LOCALLY works OK. Failing that, at least we could
+             ;; issue a warning instead of silently screwing up.
+             (*policy* (lexenv-policy *lexenv*))
+             ;; This is probably also a hack
+             (*handled-conditions* (lexenv-handled-conditions *lexenv*))
+             ;; ditto
+             (*disabled-package-locks* (lexenv-disabled-package-locks *lexenv*)))
+        (process-toplevel-progn forms path compile-time-too)))))
 
 ;;; Parse an EVAL-WHEN situations list, returning three flags,
 ;;; (VALUES COMPILE-TOPLEVEL LOAD-TOPLEVEL EXECUTE), indicating
@@ -1176,78 +1157,78 @@ Examples:
                   '(original-source-start 0 0)))
   (when name
     (legal-fun-name-or-type-error name))
-  (let* ((*lexenv* (make-lexenv
-                    :policy *policy*
-                    :handled-conditions *handled-conditions*
-                    :disabled-package-locks *disabled-package-locks*))
-         (*compiler-sset-counter* 0)
-         (fun (make-functional-from-toplevel-lambda lambda-expression
-                                                    :name name
-                                                    :path path)))
+  (with-ir1-namespace
+    (let* ((*lexenv* (make-lexenv
+                      :policy *policy*
+                      :handled-conditions *handled-conditions*
+                      :disabled-package-locks *disabled-package-locks*))
+           (*compiler-sset-counter* 0)
+           (fun (make-functional-from-toplevel-lambda lambda-expression
+                                                      :name name
+                                                      :path path)))
 
-    ;; FIXME: The compile-it code from here on is sort of a
-    ;; twisted version of the code in COMPILE-TOPLEVEL. It'd be
-    ;; better to find a way to share the code there; or
-    ;; alternatively, to use this code to replace the code there.
-    ;; (The second alternative might be pretty easy if we used
-    ;; the :LOCALL-ONLY option to IR1-FOR-LAMBDA. Then maybe the
-    ;; whole FUNCTIONAL-KIND=:TOPLEVEL case could go away..)
+      ;; FIXME: The compile-it code from here on is sort of a
+      ;; twisted version of the code in COMPILE-TOPLEVEL. It'd be
+      ;; better to find a way to share the code there; or
+      ;; alternatively, to use this code to replace the code there.
+      ;; (The second alternative might be pretty easy if we used
+      ;; the :LOCALL-ONLY option to IR1-FOR-LAMBDA. Then maybe the
+      ;; whole FUNCTIONAL-KIND=:TOPLEVEL case could go away..)
 
-    (locall-analyze-clambdas-until-done (list fun))
+      (locall-analyze-clambdas-until-done (list fun))
 
-    (let ((components-from-dfo (find-initial-dfo (list fun))))
-      (dolist (component-from-dfo components-from-dfo)
-        (compile-component component-from-dfo)
-        (replace-toplevel-xeps component-from-dfo))
+      (let ((components-from-dfo (find-initial-dfo (list fun))))
+        (dolist (component-from-dfo components-from-dfo)
+          (compile-component component-from-dfo)
+          (replace-toplevel-xeps component-from-dfo))
 
-      (let ((entry-table (etypecase *compile-object*
-                           (fasl-output (fasl-output-entry-table
-                                         *compile-object*))
-                           (core-object (core-object-entry-table
-                                         *compile-object*)))))
-        (multiple-value-bind (result found-p)
-            (gethash (leaf-info fun) entry-table)
-          (aver found-p)
-          (prog1
-              result
-            ;; KLUDGE: This code duplicates some other code in this
-            ;; file. In the great reorganzation, the flow of program
-            ;; logic changed from the original CMUCL model, and that
-            ;; path (as of sbcl-0.7.5 in SUB-COMPILE-FILE) was no
-            ;; longer followed for CORE-OBJECTS, leading to BUG
-            ;; 156. This place is transparently not the right one for
-            ;; this code, but I don't have a clear enough overview of
-            ;; the compiler to know how to rearrange it all so that
-            ;; this operation fits in nicely, and it was blocking
-            ;; reimplementation of (DECLAIM (INLINE FOO)) (MACROLET
-            ;; ((..)) (DEFUN FOO ...))
-            ;;
-            ;; FIXME: This KLUDGE doesn't solve all the problem in an
-            ;; ideal way, as (1) definitions typed in at the REPL
-            ;; without an INLINE declaration will give a NULL
-            ;; FUNCTION-LAMBDA-EXPRESSION (allowable, but not ideal)
-            ;; and (2) INLINE declarations will yield a
-            ;; FUNCTION-LAMBDA-EXPRESSION headed by
-            ;; SB-C:LAMBDA-WITH-LEXENV, even for null LEXENV.  -- CSR,
-            ;; 2002-07-02
-            ;;
-            ;; (2) is probably fairly easy to fix -- it is, after all,
-            ;; a matter of list manipulation (or possibly of teaching
-            ;; CL:FUNCTION about SB-C:LAMBDA-WITH-LEXENV).  (1) is
-            ;; significantly harder, as the association between
-            ;; function object and source is a tricky one.
-            ;;
-            ;; FUNCTION-LAMBDA-EXPRESSION "works" (i.e. returns a
-            ;; non-NULL list) when the function in question has been
-            ;; compiled by (COMPILE <x> '(LAMBDA ...)); it does not
-            ;; work when it has been compiled as part of the top-level
-            ;; EVAL strategy of compiling everything inside (LAMBDA ()
-            ;; ...).  -- CSR, 2002-11-02
-            (when (core-object-p *compile-object*)
-              (fix-core-source-info *source-info* *compile-object* result))
+        (let ((entry-table (etypecase *compile-object*
+                             (fasl-output (fasl-output-entry-table
+                                           *compile-object*))
+                             (core-object (core-object-entry-table
+                                           *compile-object*)))))
+          (multiple-value-bind (result found-p)
+              (gethash (leaf-info fun) entry-table)
+            (aver found-p)
+            (prog1
+                result
+              ;; KLUDGE: This code duplicates some other code in this
+              ;; file. In the great reorganzation, the flow of program
+              ;; logic changed from the original CMUCL model, and that
+              ;; path (as of sbcl-0.7.5 in SUB-COMPILE-FILE) was no
+              ;; longer followed for CORE-OBJECTS, leading to BUG
+              ;; 156. This place is transparently not the right one for
+              ;; this code, but I don't have a clear enough overview of
+              ;; the compiler to know how to rearrange it all so that
+              ;; this operation fits in nicely, and it was blocking
+              ;; reimplementation of (DECLAIM (INLINE FOO)) (MACROLET
+              ;; ((..)) (DEFUN FOO ...))
+              ;;
+              ;; FIXME: This KLUDGE doesn't solve all the problem in an
+              ;; ideal way, as (1) definitions typed in at the REPL
+              ;; without an INLINE declaration will give a NULL
+              ;; FUNCTION-LAMBDA-EXPRESSION (allowable, but not ideal)
+              ;; and (2) INLINE declarations will yield a
+              ;; FUNCTION-LAMBDA-EXPRESSION headed by
+              ;; SB-C:LAMBDA-WITH-LEXENV, even for null LEXENV.  -- CSR,
+              ;; 2002-07-02
+              ;;
+              ;; (2) is probably fairly easy to fix -- it is, after all,
+              ;; a matter of list manipulation (or possibly of teaching
+              ;; CL:FUNCTION about SB-C:LAMBDA-WITH-LEXENV).  (1) is
+              ;; significantly harder, as the association between
+              ;; function object and source is a tricky one.
+              ;;
+              ;; FUNCTION-LAMBDA-EXPRESSION "works" (i.e. returns a
+              ;; non-NULL list) when the function in question has been
+              ;; compiled by (COMPILE <x> '(LAMBDA ...)); it does not
+              ;; work when it has been compiled as part of the top-level
+              ;; EVAL strategy of compiling everything inside (LAMBDA ()
+              ;; ...).  -- CSR, 2002-11-02
+              (when (core-object-p *compile-object*)
+                (fix-core-source-info *source-info* *compile-object* result))
 
-            (mapc #'clear-ir1-info components-from-dfo)
-            (clear-stuff)))))))
+              (mapc #'clear-ir1-info components-from-dfo))))))))
 
 (defun process-toplevel-cold-fset (name lambda-expression path)
   (unless (producing-fasl-file)
@@ -1579,8 +1560,7 @@ Examples:
           (compile-load-time-value-lambda lambdas)
           (compile-toplevel-lambdas lambdas))
 
-      (mapc #'clear-ir1-info components)
-      (clear-stuff)))
+      (mapc #'clear-ir1-info components)))
   (values))
 
 ;;; Actually compile any stuff that has been queued up for block
@@ -1674,31 +1654,29 @@ Examples:
     (handler-case
         (handler-bind (((satisfies handle-condition-p) #'handle-condition-handler))
           (with-compilation-values
-              (sb!xc:with-compilation-unit ()
-                (clear-stuff)
-
+            (sb!xc:with-compilation-unit ()
+              (with-world-lock ()
                 (sub-sub-compile-file info)
-
                 (unless (zerop (hash-table-count *code-coverage-records*))
                   ;; Dump the code coverage records into the fasl.
-                  (fopcompile `(record-code-coverage
-                                ',(namestring *compile-file-pathname*)
-                                ',(let (list)
-                                       (maphash (lambda (k v)
-                                                  (declare (ignore k))
-                                                  (push v list))
-                                                *code-coverage-records*)
-                                       list))
-                              nil
-                              nil))
-
+                  (with-source-paths
+                    (fopcompile `(record-code-coverage
+                                  ',(namestring *compile-file-pathname*)
+                                  ',(let (list)
+                                      (maphash (lambda (k v)
+                                                 (declare (ignore k))
+                                                 (push v list))
+                                               *code-coverage-records*)
+                                      list))
+                                nil
+                                nil)))
                 (finish-block-compilation)
                 (let ((object *compile-object*))
                   (etypecase object
                     (fasl-output (fasl-dump-source-info info object))
                     (core-object (fix-core-source-info info object))
                     (null)))
-                nil)))
+                nil))))
       ;; Some errors are sufficiently bewildering that we just fail
       ;; immediately, without trying to recover and compile more of
       ;; the input file.

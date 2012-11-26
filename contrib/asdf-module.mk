@@ -21,6 +21,9 @@ ifeq (CYGWIN,$(findstring CYGWIN,$(UNAME)))
   # paths, either.
   CC:=$(shell cygpath -m $(shell readlink -fn $(shell which $(CC))))
 endif
+ifeq (Linux,$(UNAME))
+  EXTRA_CFLAGS=-D_GNU_SOURCE
+endif
 
 export CC SBCL EXTRA_CFLAGS EXTRA_LDFLAGS
 
@@ -29,7 +32,8 @@ all: $(EXTRA_ALL_TARGETS)
 	$(SBCL) --eval '(defvar *system* "$(SYSTEM)")' --load ../asdf-stub.lisp --eval '(exit)'
 
 test: all
-	echo "(asdf:operate (quote asdf:load-op) :$(SYSTEM))" \
+	echo "(pushnew :sb-testing-contrib *features*)" \
+	     "(asdf:operate (quote asdf:load-op) :$(SYSTEM))" \
 	     "(asdf:operate (quote asdf:test-op) :$(SYSTEM))" | \
 	  $(SBCL) --eval '(load "../asdf/asdf")'
 

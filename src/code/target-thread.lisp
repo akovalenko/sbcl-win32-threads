@@ -613,9 +613,8 @@ HOLDING-MUTEX-P."
                      (decode-timeout timeout))
                (go :again)))))))
 
-(defun get-mutex (mutex &optional new-owner (waitp t) (timeout nil))
-  #!+sb-doc
-  "Deprecated in favor of GRAB-MUTEX."
+(define-deprecated-function :early "1.0.37.33" get-mutex (grab-mutex)
+    (mutex &optional new-owner (waitp t) (timeout nil))
   (declare (ignorable waitp timeout))
   (let ((new-owner (or new-owner *current-thread*)))
     (or (%try-mutex mutex new-owner)
@@ -1350,7 +1349,7 @@ Invoking the initial ABORT restart estabilished by MAKE-THREAD
 terminates the thread.
 
 See also: RETURN-FROM-THREAD, ABORT-THREAD."
-  #!-sb-thread (declare (ignore function name arguments))
+  #!-sb-thread (declare (ignore function name arguments ephemeral))
   #!-sb-thread (error "Not supported in unithread builds.")
   #!+sb-thread (assert (or (atom arguments)
                            (null (cdr (last arguments))))

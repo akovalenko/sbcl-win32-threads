@@ -301,16 +301,17 @@
           (typecase expanded-type
             (atom (cond
                     ((eq expanded-type 'string) '(vector character))
-                    ((eq expanded-type 'simple-string) '(simple-array character (*)))
+                    ((eq expanded-type 'simple-string)
+                     '(simple-array character (*)))
                     (t type)))
             (cons (cond
-                    ((eq (car expanded-type) 'string) `(vector character ,@(cdr expanded-type)))
+                    ((eq (car expanded-type) 'string)
+                     `(vector character ,@(cdr expanded-type)))
                     ((eq (car expanded-type) 'simple-string)
                      `(simple-array character ,(if (cdr expanded-type)
                                                    (cdr expanded-type)
                                                    '(*))))
-                    (t type)))
-            (t type)))
+                    (t type)))))
          (type (specifier-type adjusted-type)))
     (cond ((csubtypep type (specifier-type 'list))
            (cond
@@ -1183,7 +1184,7 @@ many elements are copied."
                 ;; from the old seq.lisp into target-seq.lisp.
                 (define-compiler-macro ,name (pred first-seq &rest more-seqs)
                   (let ((elements (make-gensym-list (1+ (length more-seqs))))
-                        (blockname (gensym "BLOCK")))
+                        (blockname (sb!xc:gensym "BLOCK")))
                     (once-only ((pred pred))
                       `(block ,blockname
                          (map nil
@@ -2235,11 +2236,12 @@ many elements are copied."
                          ((simple-array base-char (*)) (frob2))
                          ,@(when bit-frob
                              `((simple-bit-vector
-                                (if (and (eq #'identity key)
+                                (if (and (typep item 'bit)
+                                         (eq #'identity key)
                                          (or (eq #'eq test)
                                              (eq #'eql test)
                                              (eq #'equal test)))
-                                    (let ((p (%bit-position (the bit item) sequence
+                                    (let ((p (%bit-position item sequence
                                                             from-end start end)))
                                       (if p
                                           (values item p)

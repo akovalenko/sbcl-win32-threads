@@ -394,3 +394,54 @@
     (assert (eq t (cas (thing b) nil :oops)))
     (assert (eq t (thing a)))
     (assert (eq t (thing b)))))
+
+;;; SYMBOL-VALUE with a constant argument used to return a bogus read-form
+(with-test (:name :symbol-value-cas-expansion)
+  (multiple-value-bind (vars vals old new cas-form read-form)
+      (get-cas-expansion `(symbol-value t))
+    (assert (not vars))
+    (assert (not vals))
+    (assert (eq t (eval read-form))))
+  (multiple-value-bind (vars vals old new cas-form read-form)
+      (get-cas-expansion `(symbol-value *))
+    (let ((* :foo))
+      (assert (eq :foo
+                  (eval `(let (,@(mapcar 'list vars vals))
+                      ,read-form)))))
+    (let ((* :bar))
+      (assert (eq :bar
+                  (eval `(let (,@(mapcar 'list vars vals))
+                      ,read-form)))))))
+
+(let ((foo (cons :foo nil)))
+  (defun cas-foo (old new)
+    (cas (cdr foo) old new)))
+
+(defcas foo () cas-foo)
+
+(with-test (:name :cas-and-macroexpansion)
+  (assert (not (cas (foo) nil t)))
+  (assert (eq t (cas (foo) t nil)))
+  (symbol-macrolet ((bar (foo)))
+    (assert (not (cas bar nil :ok)))
+    (assert (eq :ok (cas bar :ok nil)))
+    (assert (not (cas bar nil t)))))
+
+(with-test (:name atomic-push
+            :skipped-on '(not :sb-thread))
+  (let ((store (cons nil nil))
+        (n 100000))
+    (symbol-macrolet ((x (car store))
+                      (y (cdr store)))
+      (dotimes (i n)
+        (push i y))
+      (mapc #'sb-thread:join-thread
+            (loop repeat 1000
+                  collect (sb-thread:make-thread
+                           (lambda ()
+                             (loop for z = (atomic-pop y)
+                                   while z
+                                   do (atomic-push z x)
+                                      (sleep 0.00001))))))
+      (assert (not y))
+      (assert (eql n (length x))))))
