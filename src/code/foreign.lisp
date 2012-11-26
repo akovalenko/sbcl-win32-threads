@@ -16,7 +16,8 @@
 
 (defun extern-alien-name (name)
   (handler-case
-      (coerce name 'base-string)
+      #!-win32 (coerce name 'base-string)
+      #!+win32 (concatenate 'base-string "_" name)
     (error ()
       (error "invalid external alien name: ~S" name))))
 
@@ -53,10 +54,7 @@ Dynamic symbols are entered into the linkage-table if they aren't there already.
 
 On non-linkage-table ports signals an error if the symbol isn't found."
   (declare (ignorable datap))
-  #!+sb-dynamic-core
-  (values (ensure-foreign-symbol-linkage name datap) t)
-  #!-sb-dynamic-core
-  (let ((static (find-foreign-symbol-in-table name *static-foreign-symbols*)))
+  (let ((static (find-foreign-symbol-in-table name  *static-foreign-symbols*)))
     (if static
         (values static nil)
         #!+os-provides-dlopen
@@ -83,7 +81,8 @@ if the symbol isn't found."
   #!+linkage-table
   (multiple-value-bind (addr sharedp)
       (foreign-symbol-address symbol datap)
-    #+sb-xc-host #!-sb-dynamic-core (aver (not sharedp)) ()
+    #+sb-xc-host
+    (aver (not sharedp))
     ;; If the address is from linkage-table and refers to data
     ;; we need to do a bit of juggling. It is not the address of the
     ;; variable, but the address where the real address is stored.
@@ -105,7 +104,7 @@ if the symbol isn't found."
 ;;; Cleanups before saving a core
 #-sb-xc-host
 (defun foreign-deinit ()
-  #!+(and os-provides-dlopen (not linkage-table))
+  #!+(and os-provides-dlopen (or (not linkage-table) win32))
   (when (dynamic-foreign-symbols-p)
     (warn "~@<Saving cores with alien definitions referring to non-static ~
            foreign symbols is unsupported on this platform: references to ~
@@ -156,17 +155,9 @@ if the symbol isn't found."
 
 #-sb-xc-host
 (defun !foreign-cold-init ()
-  #!-sb-dynamic-core
   (dolist (symbol *!initial-foreign-symbols*)
     (setf (gethash (car symbol) *static-foreign-symbols*) (cdr symbol)))
-  #!+sb-dynamic-core
-  (loop for table-address from sb!vm::linkage-table-space-start
-          by sb!vm::linkage-table-entry-size
-          and reference in sb!vm::*required-runtime-c-symbols*
-        do (setf (gethash reference *linkage-info*)
-                 (make-linkage-info :datap (cdr reference)
-                      :address table-address)))
-  #!+os-provides-dlopen
+  #!+(and os-provides-dlopen (not win32))
   (setf *runtime-dlhandle* (dlopen-or-lose))
   #!+os-provides-dlopen
   (setf *shared-objects* nil))
