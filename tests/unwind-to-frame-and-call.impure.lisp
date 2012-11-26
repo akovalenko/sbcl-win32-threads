@@ -75,18 +75,7 @@
     (signal 'restart-condition))
   foo)
 
-#+win32
-(defun decline ()
-  ;; these tests currently fail no matter whether threads are enabled or
-  ;; not, but on threaded builds the failure mode is particularly
-  ;; unfortunate.  As a workaround, opt out of running the test.
-  #+sb-thread
-  (error "this test fails with exception 0xc0000029 ~
-          (STATUS_INVALID_UNWIND_TARGET), from which we cannot currently ~
-          recover"))
-
 (defun test-restart (name)
-  #+win32 (decline)
   (setf *a* nil)
   (let ((*foo* 'x))
     (let ((*foo* 'y)
@@ -140,7 +129,6 @@
   foo)
 
 (defun test-return (name)
-  #+win32 (decline)
   (setf *a* nil)
   (let ((*foo* 'x))
     (let ((*foo* 'y))
@@ -205,7 +193,6 @@
       (setf *b* (multiple-value-list (b :*c* :good))))))
 
 (defun test-locals (name)
-  #+win32 (decline)
   (handler-bind ((in-a (lambda (c)
                          (declare (ignore c))
                          (return-from-frame `(flet a :in ,name) 'x 'y)))
@@ -264,7 +251,6 @@
 (defparameter *anon-4* (make-anon-4))
 
 (defun test-anon (fun var-name &optional in)
-  #+win32 (decline)
   (handler-bind ((anon-condition (lambda (c)
                                    (declare (ignore c))
                                    (return-from-frame
@@ -308,7 +294,6 @@
     (push :unwind-2 *unwind-state*)))
 
 (defun test-unwind (fun wanted)
-  #+win32 (decline)
   (handler-bind ((return-condition (lambda (c)
                                      (declare (ignore c))
                                      (return-from-frame fun

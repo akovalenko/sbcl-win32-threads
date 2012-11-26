@@ -77,8 +77,7 @@
 (defmethod compute-test ((x symbol) (y symbol))
   'symbol)
 
-(test-util:with-test (:name :compute-test
-                            :fails-on (and :win32 (not :sb-thread)))
+(test-util:with-test (:name :compute-test :fails-on :win32)
   (compute-test 1 2)
 
   ;; Check that we actually interrupted something.

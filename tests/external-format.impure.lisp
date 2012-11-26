@@ -124,7 +124,8 @@
     (write-byte #xe0 s)
     (dotimes (i 40)
       (write-sequence a s))))
-(with-test (:name (:character-decode-large :attempt-resync))
+(with-test (:name (:character-decode-large :attempt-resync)
+                  :fails-on :win32)
   (with-open-file (s *test-path* :direction :input
                      :external-format :utf-8)
     (let ((count 0))

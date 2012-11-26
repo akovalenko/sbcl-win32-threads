@@ -196,8 +196,7 @@
 (defun wait-for-threads (threads)
   (loop while (some #'sb-thread:thread-alive-p threads) do (sleep 0.01)))
 
-(with-test (:name (:with-timeout :many-at-the-same-time)
-                  :skipped-on '(not :sb-thread))
+(with-test (:name (:with-timeout :many-at-the-same-time) :skipped-on '(not :sb-thread))
   (let ((ok t))
     (let ((threads (loop repeat 10 collect
                          (sb-thread:make-thread
@@ -298,11 +297,7 @@
   #-sb-thread
   (loop repeat 10 do (test))))
 
-(with-test (:name (:timer :threaded-stress)
-                  :skipped-on '(not :sb-thread)
-                  :fails-on :win32)
-  #+win32
-  (error "fixme")
+(with-test (:name (:timer :threaded-stress) :skipped-on '(not :sb-thread))
   (let ((barrier (sb-thread:make-semaphore))
         (goal 100))
     (flet ((wait-for-goal ()
