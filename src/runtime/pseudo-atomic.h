@@ -100,10 +100,10 @@ clear_pseudo_atomic_interrupted(struct thread *thread)
 #define set_alloc_pointer(value) \
     (dynamic_space_free_pointer = \
      ((lispobj *) \
-      ((value) | (((uword_t)dynamic_space_free_pointer) & LOWTAG_MASK))))
+      ((value) | (((unsigned long)dynamic_space_free_pointer) & LOWTAG_MASK))))
 
 #define get_alloc_pointer()                                     \
-    ((uword_t) dynamic_space_free_pointer & ~LOWTAG_MASK)
+    ((unsigned long) dynamic_space_free_pointer & ~LOWTAG_MASK)
 
 #ifdef LISP_FEATURE_SB_THREAD
 #define get_pseudo_atomic_atomic(thread) \
@@ -120,21 +120,21 @@ clear_pseudo_atomic_interrupted(struct thread *thread)
     ((thread)->pseudo_atomic_bits &= ~flag_PseudoAtomicInterrupted)
 #else
 #define get_pseudo_atomic_atomic(thread)                                \
-    ((uword_t)dynamic_space_free_pointer & flag_PseudoAtomic)
+    ((unsigned long)dynamic_space_free_pointer & flag_PseudoAtomic)
 #define set_pseudo_atomic_atomic(thread)                                \
     (dynamic_space_free_pointer                                         \
-     = (lispobj*) ((uword_t)dynamic_space_free_pointer | flag_PseudoAtomic))
+     = (lispobj*) ((unsigned long)dynamic_space_free_pointer | flag_PseudoAtomic))
 #define clear_pseudo_atomic_atomic(thread)                              \
     (dynamic_space_free_pointer                                         \
-     = (lispobj*) ((uword_t) dynamic_space_free_pointer & ~flag_PseudoAtomic))
+     = (lispobj*) ((unsigned long) dynamic_space_free_pointer & ~flag_PseudoAtomic))
 #define get_pseudo_atomic_interrupted(thread)                           \
-    ((uword_t) dynamic_space_free_pointer & flag_PseudoAtomicInterrupted)
+    ((unsigned long) dynamic_space_free_pointer & flag_PseudoAtomicInterrupted)
 #define clear_pseudo_atomic_interrupted(thread)                         \
     (dynamic_space_free_pointer                                         \
-     = (lispobj*) ((uword_t) dynamic_space_free_pointer & ~flag_PseudoAtomicInterrupted))
+     = (lispobj*) ((unsigned long) dynamic_space_free_pointer & ~flag_PseudoAtomicInterrupted))
 #define set_pseudo_atomic_interrupted(thread)                           \
     (dynamic_space_free_pointer                                         \
-     = (lispobj*) ((uword_t) dynamic_space_free_pointer | flag_PseudoAtomicInterrupted))
+     = (lispobj*) ((unsigned long) dynamic_space_free_pointer | flag_PseudoAtomicInterrupted))
 #endif
 
 #endif

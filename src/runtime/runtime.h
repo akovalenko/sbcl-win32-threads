@@ -243,7 +243,7 @@ widetag_of(lispobj obj)
     return obj & WIDETAG_MASK;
 }
 
-static inline uword_t
+static inline unsigned long
 HeaderValue(lispobj obj)
 {
   return obj >> N_WIDETAG_BITS;
