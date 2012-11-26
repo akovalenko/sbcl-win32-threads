@@ -2636,17 +2636,6 @@ scavenge_newspace_generation_one_scan(generation_index_t generation)
 static void
 scavenge_newspace_generation(generation_index_t generation)
 {
-<<<<<<< HEAD
-    intptr_t i;
-
-    /* the new_areas array currently being written to by gc_alloc() */
-    struct new_area (*current_new_areas)[] = &new_areas_1;
-    intptr_t current_new_areas_index;
-
-    /* the new_areas created by the previous scavenge cycle */
-    struct new_area (*previous_new_areas)[] = NULL;
-    intptr_t previous_new_areas_index;
-=======
     size_t i;
 
     /* the new_areas array currently being written to by gc_alloc() */
@@ -2656,7 +2645,6 @@ scavenge_newspace_generation(generation_index_t generation)
     /* the new_areas created by the previous scavenge cycle */
     struct new_area (*previous_new_areas)[] = NULL;
     size_t previous_new_areas_index;
->>>>>>> master
 
     /* Flush the current regions updating the tables. */
     gc_alloc_update_all_page_tables();
@@ -2890,13 +2878,8 @@ print_ptr(lispobj *addr)
     page_index_t pi1 = find_page_index((void*)addr);
 
     if (pi1 != -1)
-<<<<<<< HEAD
-        fprintf(stderr,"  %x: page %d  alloc %d  gen %d  bytes_used %d  offset %lu  dont_move %d\n",
-                (uword_t) addr,
-=======
         fprintf(stderr,"  %p: page %d  alloc %d  gen %d  bytes_used %d  offset %lu  dont_move %d\n",
                 addr,
->>>>>>> master
                 pi1,
                 page_table[pi1].allocated,
                 page_table[pi1].gen,
@@ -3955,13 +3938,10 @@ collect_garbage(generation_index_t last_gen)
     }
 
     gc_active_p = 0;
-<<<<<<< HEAD
 #ifdef LISP_FEATURE_WIN32
     os_commit_wp_violation_data(0);
 #endif
-=======
     large_allocation = 0;
->>>>>>> master
 
     log_generation_stats(gc_logfile, "=== GC End ===");
     SHOW("returning from collect_garbage");
@@ -4249,9 +4229,6 @@ general_alloc_internal(sword_t nbytes, int page_type_flag, struct alloc_region *
         return(new_obj);        /* yup */
     }
 
-<<<<<<< HEAD
-    /* we have to go the intptr_t way around, it seems. Check whether we
-=======
     /* We don't want to count nbytes against auto_gc_trigger unless we
      * have to: it speeds up the tenuring of objects and slows down
      * allocation. However, unless we do so when allocating _very_
@@ -4262,7 +4239,6 @@ general_alloc_internal(sword_t nbytes, int page_type_flag, struct alloc_region *
         trigger_bytes = nbytes;
 
     /* we have to go the long way around, it seems. Check whether we
->>>>>>> master
      * should GC in the near future
      */
     if (auto_gc_trigger && (bytes_allocated+trigger_bytes > auto_gc_trigger)) {
