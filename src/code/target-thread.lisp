@@ -1408,53 +1408,54 @@ See also: RETURN-FROM-THREAD, ABORT-THREAD."
                       ;; could be sharing them)
                       (catch 'sb!impl::toplevel-catcher
                         (catch 'sb!impl::%end-of-the-world
-                          (with-simple-restart
-                              (terminate-thread
-                               (format nil
-                                       "~~@<Terminate this thread (~A)~~@:>"
-                                       *current-thread*))
-                            (without-interrupts
-                                (unwind-protect
-                                     (with-local-interrupts
-                                         ;; Now that most things have a chance
-                                         ;; to work properly without messing up
-                                         ;; other threads, it's time to enable
-                                         ;; signals.
-                                         (sb!unix::unblock-deferrable-signals)
-                                       #!+win32
-                                       ;; FPU state, on win32 at least, is
-                                       ;; per-thread and it isn't
-                                       ;; automatically inherited. FIXME on
-                                       ;; other platforms?
-                                       (float-cold-init-or-reinit)
-                                       (setf (thread-result thread)
-                                             ;; Too hard to recover after stack overflow
-                                             ;; on windows.  Terminating thread by default
-                                             ;; makes debugging feasible, at least.
-                                             (handler-case
-                                                 (cons t
-                                                       (multiple-value-list
-                                                        (apply real-function arguments)))
-                                               #!+win32
-                                               (sb!kernel::control-stack-exhausted ()
-                                                 (throw 'sb!impl::%toplevel-catcher nil))))
-                                       ;; Try to block deferrables. An
-                                       ;; interrupt may unwind it, but for a
-                                       ;; normal exit it prevents interrupt
-                                       ;; loss.
-                                       (block-deferrable-signals))
-                                  #!+win32
-                                  (sb!kernel::reset-control-stack-guard-page)
-                                  ;; We're going down, can't handle interrupts
-                                  ;; sanely anymore. GC remains enabled.
-                                  (block-deferrable-signals)
-                                  ;; We don't want to run interrupts in a dead
-                                  ;; thread when we leave WITHOUT-INTERRUPTS.
-                                  ;; This potentially causes important
-                                  ;; interupts to be lost: SIGINT comes to
-                                  ;; mind.
-                                  (setq *interrupt-pending* nil)
-                                  (handle-thread-exit thread))))))))
+                          (catch '%abort-thread
+			      (with-simple-restart
+				  (terminate-thread
+				   (format nil
+					   "~~@<Terminate this thread (~A)~~@:>"
+					   *current-thread*))
+				(without-interrupts
+				    (unwind-protect
+					 (with-local-interrupts
+					     ;; Now that most things have a chance
+					     ;; to work properly without messing up
+					     ;; other threads, it's time to enable
+					     ;; signals.
+					     (sb!unix::unblock-deferrable-signals)
+					   #!+win32
+					   ;; FPU state, on win32 at least, is
+					   ;; per-thread and it isn't
+					   ;; automatically inherited. FIXME on
+					   ;; other platforms?
+					   (float-cold-init-or-reinit)
+					   (setf (thread-result thread)
+						 ;; Too hard to recover after stack overflow
+						 ;; on windows.  Terminating thread by default
+						 ;; makes debugging feasible, at least.
+						 (handler-case
+						     (cons t
+							   (multiple-value-list
+							    (apply real-function arguments)))
+						   #!+win32
+						   (sb!kernel::control-stack-exhausted ()
+						     (throw 'sb!impl::%toplevel-catcher nil))))
+					   ;; Try to block deferrables. An
+					   ;; interrupt may unwind it, but for a
+					   ;; normal exit it prevents interrupt
+					   ;; loss.
+					   (block-deferrable-signals))
+				      #!+win32
+				      (sb!kernel::reset-control-stack-guard-page)
+				      ;; We're going down, can't handle interrupts
+				      ;; sanely anymore. GC remains enabled.
+				      (block-deferrable-signals)
+				      ;; We don't want to run interrupts in a dead
+				      ;; thread when we leave WITHOUT-INTERRUPTS.
+				      ;; This potentially causes important
+				      ;; interupts to be lost: SIGINT comes to
+				      ;; mind.
+				      (setq *interrupt-pending* nil)
+				      (handle-thread-exit thread)))))))))
                   (values))))
          ;; If the starting thread is stopped for gc before it signals the
          ;; semaphore then we'd be stuck.
