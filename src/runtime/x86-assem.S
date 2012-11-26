@@ -930,7 +930,7 @@ GNAME(fast_bzero_pointer):
 	.data
         .align  align_page
 GNAME(gc_safepoint_page):
-        .fill BACKEND_PAGE_BYTES,1,0
+        .fill BACKEND_PAGE_BYTES
 
 	.text
 	.align	align_16byte,0x90
