@@ -860,7 +860,6 @@
   (sb-ext:gc)
   (incf *n-gcs-done*))
 
-#+(or x86 x86-64) ;the only platforms with a *binding-stack-pointer* variable
 (defun exercise-binding ()
   (loop
    (let ((*x* (make-something-big)))
@@ -880,7 +879,6 @@
      (wait-for-gc)
      (decf sb-vm::*binding-stack-pointer* binding-pointer-delta))))
 
-#+(or x86 x86-64) ;the only platforms with a *binding-stack-pointer* variable
 (with-test (:name (:binding-stack-gc-safety))
   (let (threads)
     (unwind-protect
@@ -951,7 +949,7 @@
 (with-test (:name (:synchronized-hash-table))
   (let* ((hash (make-hash-table :synchronized t))
          (*errors* nil)
-         (threads (list (make-join-thread
+         (threads (list (make-kill-thread
                          (lambda ()
                            (catch 'done
                              (handler-bind ((serious-condition 'oops))
@@ -959,7 +957,7 @@
                                  ;;(princ "1") (force-output)
                                  (setf (gethash (random 100) hash) 'h)))))
                          :name "writer")
-                        (make-join-thread
+                        (make-kill-thread
                          (lambda ()
                            (catch 'done
                              (handler-bind ((serious-condition 'oops))
@@ -967,7 +965,7 @@
                                  ;;(princ "2") (force-output)
                                  (remhash (random 100) hash)))))
                          :name "reader")
-                        (make-join-thread
+                        (make-kill-thread
                          (lambda ()
                            (catch 'done
                              (handler-bind ((serious-condition 'oops))
@@ -1313,14 +1311,7 @@
           two (make-box)
           three (make-box))))
 
-;;; PowerPC safepoint builds occasionally hang or busy-loop (or
-;;; sometimes run out of memory) in the following test.  For developers
-;;; interested in debugging this combination of features, it might be
-;;; fruitful to concentrate their efforts around this test...
-
-(with-test (:name (:funcallable-instances)
-                  :skipped-on '(and :sb-safepoint
-                                    (not :c-stack-is-control-stack)))
+(with-test (:name (:funcallable-instances))
   ;; the funcallable-instance implementation used not to be threadsafe
   ;; against setting the funcallable-instance function to a closure
   ;; (because the code and lexenv were set separately).

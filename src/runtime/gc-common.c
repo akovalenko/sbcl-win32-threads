@@ -2718,14 +2718,9 @@ maybe_gc(os_context_t *context)
  * may be what the "lame" adjective in the above comment is for. In
  * this case, exact gc may lose badly. */
 void
-scrub_control_stack()
+scrub_control_stack(void)
 {
-    scrub_thread_control_stack(arch_os_get_current_thread());
-}
-
-void
-scrub_thread_control_stack(struct thread *th)
-{
+    struct thread *th = arch_os_get_current_thread();
     os_vm_address_t guard_page_address = CONTROL_STACK_GUARD_PAGE(th);
     os_vm_address_t hard_guard_page_address = CONTROL_STACK_HARD_GUARD_PAGE(th);
 #ifdef LISP_FEATURE_C_STACK_IS_CONTROL_STACK

@@ -660,11 +660,7 @@
               (inst stwu stack-pointer stack-pointer (- frame-size))
 
               ;; And make the call.
-              (load-address-into
-               r0
-               (foreign-symbol-address
-                #!-sb-safepoint "funcall3"
-                #!+sb-safepoint "callback_wrapper_trampoline"))
+              (load-address-into r0 (foreign-symbol-address "funcall3"))
               (inst mtlr r0)
               (inst blrl)
 

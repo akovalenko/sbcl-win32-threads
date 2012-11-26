@@ -100,16 +100,23 @@
 
 ;;; While on gencgc we don't.
 #!+gencgc
-(!gencgc-space-setup #x04000000
-                     #!+linux   #x4f000000
-                     #!+netbsd  #x4f000000
-                     #!+openbsd #x4f000000
-                     #!+darwin  #x10000000)
+(progn
+  (def!constant read-only-space-start #x04000000)
+  (def!constant read-only-space-end   #x040ff000)
+  (def!constant static-space-start    #x04100000)
+  (def!constant static-space-end      #x041ff000)
+
+  (def!constant linkage-table-space-start #x04200000)
+  (def!constant linkage-table-space-end   #x042ff000))
 
 (def!constant linkage-table-entry-size 16)
 
 #!+linux
 (progn
+  #!+gencgc
+  (progn
+    (def!constant dynamic-space-start #x4f000000)
+    (def!constant dynamic-space-end   (!configure-dynamic-space-end)))
   #!-gencgc
   (progn
     (def!constant dynamic-0-space-start #x4f000000)
@@ -119,6 +126,10 @@
 
 #!+netbsd
 (progn
+  #!+gencgc
+  (progn
+    (def!constant dynamic-space-start #x4f000000)
+    (def!constant dynamic-space-end   (!configure-dynamic-space-end)))
   #!-gencgc
   (progn
     (def!constant dynamic-0-space-start #x4f000000)
@@ -135,6 +146,10 @@
 ;;; as rare as it might or might not be.
 #!+openbsd
 (progn
+  #!+gencgc
+  (progn
+    (def!constant dynamic-space-start #x4f000000)
+    (def!constant dynamic-space-end   (!configure-dynamic-space-end)))
   #!-gencgc
   (progn
     (def!constant dynamic-0-space-start #x4f000000)
@@ -144,6 +159,10 @@
 
 #!+darwin
 (progn
+  #!+gencgc
+  (progn
+    (def!constant dynamic-space-start #x10000000)
+    (def!constant dynamic-space-end   (!configure-dynamic-space-end)))
   #!-gencgc
   (progn
     (def!constant dynamic-0-space-start #x10000000)
