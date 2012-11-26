@@ -42,8 +42,6 @@
                   sb!unix::*unblock-deferrables-on-enabling-interrupts-p*
                   *interrupts-enabled*
                   *interrupt-pending*
-                  #!+sb-safepoint *gc-safe*
-                  #!+sb-safepoint *in-safepoint*
                   *free-interrupt-context-index*
                   sb!kernel::*gc-epoch*
                   sb!vm::*unwind-to-frame-function*

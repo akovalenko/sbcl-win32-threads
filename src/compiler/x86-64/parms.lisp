@@ -138,9 +138,7 @@
 
 (defenum (:start 24)
   object-not-list-trap
-  object-not-instance-trap
-  #!+sb-safepoint global-safepoint-trap
-  #!+sb-safepoint csp-safepoint-trap)
+  object-not-instance-trap)
 
 ;;;; static symbols
 

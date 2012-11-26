@@ -1417,16 +1417,13 @@ See also: RETURN-FROM-THREAD, ABORT-THREAD."
                                      (with-local-interrupts
                                        (sb!unix::unblock-deferrable-signals)
                                        (setf (thread-result thread)
-                                             (prog1
-                                                 (cons t
-                                                       (multiple-value-list
-                                                        (unwind-protect
-                                                             (catch '%return-from-thread
-                                                               (apply real-function arguments))
-                                                          (when *exit-in-process*
-                                                            (sb!impl::call-exit-hooks)))))
-                                               #!+sb-safepoint
-                                               (sb!kernel::gc-safepoint))))
+                                             (cons t
+                                                   (multiple-value-list
+                                                    (unwind-protect
+                                                         (catch '%return-from-thread
+                                                           (apply real-function arguments))
+                                                      (when *exit-in-process*
+                                                        (sb!impl::call-exit-hooks)))))))
                                   ;; We're going down, can't handle interrupts
                                   ;; sanely anymore. GC remains enabled.
                                   (block-deferrable-signals)
