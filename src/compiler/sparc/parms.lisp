@@ -22,12 +22,6 @@
 ;;; number of bits per byte where a byte is the smallest addressable object
 (def!constant n-byte-bits 8)
 
-;;; flags for the generational garbage collector
-(def!constant pseudo-atomic-interrupted-flag 1)
-(def!constant pseudo-atomic-flag
-    ;; Must be (ash 1 (1- sb-vm:n-lowtag-bits)) for cheneygc ALLOCATION.
-    4)
-
 (def!constant float-sign-shift 31)
 
 (def!constant single-float-bias 126)
@@ -113,7 +107,7 @@
   (def!constant dynamic-1-space-start #x40000000)
   (def!constant dynamic-1-space-end   #x48000000))
 
-#!+(and sunos cheneygc) ; might as well start by trying the same numbers
+#!+sunos ; might as well start by trying the same numbers
 (progn
   (def!constant linkage-table-space-start #x0f800000)
   (def!constant linkage-table-space-end   #x10000000)
@@ -129,20 +123,6 @@
 
   (def!constant dynamic-1-space-start     #x40000000)
   (def!constant dynamic-1-space-end       #x48000000))
-
-#!+(and sunos gencgc) ; sensibly small read-only and static spaces
-(progn
-  (def!constant linkage-table-space-start #x0f800000)
-  (def!constant linkage-table-space-end   #x10000000)
-
-  (def!constant read-only-space-start     #x11000000)
-  (def!constant read-only-space-end       #x110ff000)
-
-  (def!constant static-space-start        #x11100000)
-  (def!constant static-space-end          #x111ff000)
-
-  (def!constant dynamic-space-start       #x30000000)
-  (def!constant dynamic-space-end         (!configure-dynamic-space-end)))
 
 #!+netbsd ; Need a gap at 0x4000000 for shared libraries
 (progn
@@ -177,8 +157,7 @@
   fun-end-breakpoint-trap
   after-breakpoint-trap
   single-step-around-trap
-  single-step-before-trap
-  #!+gencgc allocation-trap)
+  single-step-before-trap)
 
 (defenum (:start 24)
   object-not-list-trap
@@ -198,7 +177,7 @@
   (append
    *common-static-symbols*
    *c-callable-static-symbols*
-   '(#!+gencgc *restart-lisp-function*)))
+   '()))
 
 (defparameter *static-funs*
   '(length

@@ -18,7 +18,6 @@
   (:temporary (:scs (descriptor-reg)) temp)
   (:temporary (:scs (descriptor-reg) :type list :to (:result 0) :target result)
               res)
-  (:temporary (:scs (non-descriptor-reg)) alloc-temp)
   (:info num)
   (:results (result :scs (descriptor-reg)))
   (:variant-vars star)
@@ -42,10 +41,14 @@
              (let* ((dx-p (node-stack-allocate-p node))
                     (cons-cells (if star (1- num) num))
                     (alloc (* (pad-data-block cons-size) cons-cells)))
-               (pseudo-atomic ()
-                 (allocation res alloc list-pointer-lowtag
-                             :stack-p dx-p
-                             :temp-tn alloc-temp)
+               (pseudo-atomic (:extra (if dx-p 0 alloc))
+                 (let ((allocation-area-tn (if dx-p csp-tn alloc-tn)))
+                   (when dx-p
+                     (align-csp res))
+                   (inst andn res allocation-area-tn lowtag-mask)
+                   (inst or res list-pointer-lowtag)
+                   (when dx-p
+                     (inst add csp-tn csp-tn alloc)))
                  (move ptr res)
                  (dotimes (i (1- cons-cells))
                    (storew (maybe-load (tn-ref-tn things)) ptr
@@ -78,7 +81,6 @@
   (:results (result :scs (descriptor-reg)))
   (:temporary (:scs (non-descriptor-reg)) ndescr)
   (:temporary (:scs (any-reg) :from (:argument 0)) boxed)
-  (:temporary (:scs (non-descriptor-reg)) size)
   (:temporary (:scs (non-descriptor-reg) :from (:argument 1)) unboxed)
   (:generator 100
     (inst add boxed boxed-arg (fixnumize (1+ code-trace-table-offset-slot)))
@@ -87,16 +89,15 @@
     (inst add unboxed lowtag-mask)
     (inst and unboxed (lognot lowtag-mask))
     (pseudo-atomic ()
+      ;; CMUCL Comment:
+      ;; Note: we don't have to subtract off the 4 that was added by
+      ;; pseudo-atomic, because oring in other-pointer-lowtag just adds
+      ;; it right back.
       ;;
       ;; This looks like another dreadful type pun. CSR - 2002-02-06
-      ;;
-      ;; Not any more, or not in that sense at least, because the
-      ;; "p/a bit is also the highest lowtag bit" assumption is now hidden
-      ;; in the allocation macro.  DFL - 2012-10-01
-      ;;
-      ;; Figure out how much space we really need and allocate it.
-      (inst add size boxed unboxed)
-      (allocation result size other-pointer-lowtag :temp-tn ndescr)
+      (inst or result alloc-tn other-pointer-lowtag)
+      (inst add alloc-tn boxed)
+      (inst add alloc-tn unboxed)
       (inst sll ndescr boxed (- n-widetag-bits word-shift))
       (inst or ndescr code-header-widetag)
       (storew ndescr result 0 other-pointer-lowtag)
@@ -126,10 +127,15 @@
   (:generator 10
     (let* ((size (+ length closure-info-offset))
            (alloc-size (pad-data-block size)))
-      (pseudo-atomic ()
-        (allocation result alloc-size fun-pointer-lowtag
-                    :stack-p stack-allocate-p
-                    :temp-tn temp)
+      (pseudo-atomic (:extra (if stack-allocate-p 0 alloc-size))
+        (cond (stack-allocate-p
+               (align-csp temp)
+               (inst andn result csp-tn lowtag-mask)
+               (inst or result fun-pointer-lowtag)
+               (inst add csp-tn alloc-size))
+              (t
+               (inst andn result alloc-tn lowtag-mask)
+               (inst or result fun-pointer-lowtag)))
         (inst li temp (logior (ash (1- size) n-widetag-bits) closure-header-widetag))
         (storew temp result 0 fun-pointer-lowtag)
         (storew function result closure-fun-slot fun-pointer-lowtag)))))
@@ -167,8 +173,12 @@
   (:results (result :scs (descriptor-reg)))
   (:temporary (:scs (non-descriptor-reg)) temp)
   (:generator 4
-    (pseudo-atomic ()
-      (allocation result (pad-data-block words) lowtag :temp-tn temp)
+    (pseudo-atomic (:extra (pad-data-block words))
+      (cond ((logbitp (1- n-lowtag-bits) lowtag)
+             (inst or result alloc-tn lowtag))
+            (t
+             (inst andn result alloc-tn lowtag-mask)
+             (inst or result lowtag)))
       (when type
         (inst li temp (logior (ash (1- words) n-widetag-bits) type))
         (storew temp result 0 lowtag)))))
@@ -181,12 +191,18 @@
   (:results (result :scs (descriptor-reg)))
   (:temporary (:scs (any-reg)) bytes)
   (:temporary (:scs (non-descriptor-reg)) header)
-  (:temporary (:scs (non-descriptor-reg)) temp)
   (:generator 6
     (inst add bytes extra (* (1+ words) n-word-bytes))
     (inst sll header bytes (- n-widetag-bits 2))
     (inst add header header (+ (ash -2 n-widetag-bits) type))
     (inst and bytes (lognot lowtag-mask))
     (pseudo-atomic ()
-      (allocation result bytes lowtag :temp-tn temp)
-      (storew header result 0 lowtag))))
+      ;; Need to be careful if the lowtag and the pseudo-atomic flag
+      ;; are not compatible.
+      (cond ((logbitp (1- n-lowtag-bits) lowtag)
+             (inst or result alloc-tn lowtag))
+            (t
+             (inst andn result alloc-tn lowtag-mask)
+             (inst or result lowtag)))
+      (storew header result 0 lowtag)
+      (inst add alloc-tn alloc-tn bytes))))
