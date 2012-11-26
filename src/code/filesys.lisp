@@ -1160,7 +1160,6 @@ Experimental: interface subject to change."
              (make-pathname :directory dir :device (pathname-device pathname)))
           (dev (pathname-device pathname)))
       (loop for i from (case dev (:unc 3) (otherwise 2)) upto (length dir)
-              upto (length dir)
             do
             (let* ((newpath (make-pathname
                              :host (pathname-host pathname)
