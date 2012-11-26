@@ -191,7 +191,6 @@
     (sb!thread:interrupt-thread (sb!thread::foreground-thread)
                                 #'interrupt-it)))
 
-#!-sb-wtimer
 (defun sigalrm-handler (signal info context)
   (declare (ignore signal info context))
   (declare (type system-area-pointer context))
@@ -228,7 +227,6 @@
   (enable-interrupt sigbus #'sigbus-handler)
   #!-linux
   (enable-interrupt sigsys #'sigsys-handler)
-  #!-sb-wtimer
   (enable-interrupt sigalrm #'sigalrm-handler)
   #!-sb-thruption
   (enable-interrupt sigpipe #'sigpipe-handler)

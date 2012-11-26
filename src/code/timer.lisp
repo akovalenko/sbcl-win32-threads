@@ -315,87 +315,20 @@ triggers."
             (incf (%timer-expire-time timer) (%timer-repeat-interval timer))
             (%schedule-timer timer))))))
 
-;;; setitimer is unavailable for win32, but we can emulate it when
-;;; threads are available -- using win32 waitable timers.
-;;;
-;;; Conversely, when we want to minimize signal use on POSIX, we emulate
-;;; win32 waitable timers using a timerfd-like portability layer in
-;;; the runtime.
-
-#!+sb-wtimer
-(define-alien-type wtimer
-    #!+win32 system-area-pointer ;HANDLE, but that's not defined yet
-    #!+sunos system-area-pointer ;struct os_wtimer *
-    #!+(or linux bsd) int)
-
-#!+sb-wtimer
-(progn
-  (define-alien-routine "os_create_wtimer" wtimer)
-  (define-alien-routine "os_wait_for_wtimer" int (wt wtimer))
-  (define-alien-routine "os_close_wtimer" void (wt wtimer))
-  (define-alien-routine "os_cancel_wtimer" void (wt wtimer))
-  (define-alien-routine "os_set_wtimer" void (wt wtimer) (sec int) (nsec int))
-
-  ;; scheduler lock already protects us
-
-  (defvar *waitable-timer-handle* nil)
-
-  (defvar *timer-thread* nil)
-
-  (defun get-waitable-timer ()
-    (assert (under-scheduler-lock-p))
-    (or *waitable-timer-handle*
-        (prog1
-            (setf *waitable-timer-handle* (os-create-wtimer))
-          (setf *timer-thread*
-                (sb!thread:make-thread
-                 (lambda ()
-                   (loop while
-                        (or (zerop
-                             (os-wait-for-wtimer *waitable-timer-handle*))
-                            *waitable-timer-handle*)
-                        doing (run-expired-timers)))
-                 :ephemeral t
-                 :name "System timer watchdog thread")))))
-
-  (defun itimer-emulation-deinit ()
-    (with-scheduler-lock ()
-      (when *timer-thread*
-        (sb!thread:terminate-thread *timer-thread*)
-        (sb!thread:join-thread *timer-thread* :default nil))
-      (when *waitable-timer-handle*
-        (os-close-wtimer *waitable-timer-handle*)
-        (setf *waitable-timer-handle* nil))))
-
-  (defun %clear-system-timer ()
-    (os-cancel-wtimer (get-waitable-timer)))
-
-  (defun %set-system-timer (sec nsec)
-    (os-set-wtimer (get-waitable-timer) sec nsec)))
-
 ;;; Expiring timers
 
-(defun real-time->sec-and-nsec (time)
+(defun real-time->sec-and-usec (time)
   ;; KLUDGE: Always leave 0.0001 second for other stuff in order to
   ;; avoid starvation.
-  (let ((min-nsec 100000))
+  (let ((min-usec 100))
     (if (minusp time)
-        (values 0 min-nsec)
+        (list 0 min-usec)
         (multiple-value-bind (s u) (floor time internal-time-units-per-second)
-          (setf u (floor (* (/ u internal-time-units-per-second)
-                            #.(expt 10 9))))
-          (if (and (= 0 s) (< u min-nsec))
+          (setf u (floor (* (/ u internal-time-units-per-second) 1000000)))
+          (if (and (= 0 s) (< u min-usec))
               ;; 0 0 means "shut down the timer" for setitimer
-              (values 0 min-nsec)
-              (values s u))))))
-
-#!-(or sb-wtimer win32)
-(progn
-  (defun %set-system-timer (sec nsec)
-    (sb!unix:unix-setitimer :real 0 0 sec (ceiling nsec 1000)))
-
-  (defun %clear-system-timer ()
-    (sb!unix:unix-setitimer :real 0 0 0 0)))
+              (list 0 min-usec)
+              (list s u))))))
 
 (defun set-system-timer ()
   (assert (under-scheduler-lock-p))
@@ -404,9 +337,9 @@ triggers."
     (if next-timer
         (let ((delta (- (%timer-expire-time next-timer)
                         (get-internal-real-time))))
-          (multiple-value-call #'%set-system-timer
-            (real-time->sec-and-nsec delta)))
-        (%clear-system-timer))))
+          (apply #'sb!unix:unix-setitimer
+                 :real 0 0 (real-time->sec-and-usec delta)))
+        (sb!unix:unix-setitimer :real 0 0 0 0))))
 
 (defun run-timer (timer)
   (let ((function (%timer-interrupt-function timer))

@@ -194,8 +194,6 @@ sufficiently motivated to do lengthy fixes."
 
 (defun deinit ()
   (call-hooks "save" *save-hooks*)
-  #!+sb-wtimer
-  (itimer-emulation-deinit)
   (when (rest (sb!thread:list-all-threads))
     (error "Cannot save core with multiple threads running."))
   (float-deinit)
