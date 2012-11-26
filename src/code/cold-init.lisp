@@ -101,7 +101,6 @@
         sb!unix::*unblock-deferrables-on-enabling-interrupts-p* nil
         *interrupts-enabled* t
         *interrupt-pending* nil
-        #!+sb-thruption #!+sb-thruption *thruption-pending* nil
         *break-on-signals* nil
         *maximum-error-depth* 10
         *current-error-depth* 0

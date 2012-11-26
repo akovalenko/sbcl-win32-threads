@@ -50,7 +50,6 @@
 
 (defvar *interrupts-enabled* t)
 (defvar *interrupt-pending* nil)
-#!+sb-thruption (defvar *thruption-pending* nil)
 (defvar *allow-with-interrupts* t)
 ;;; This is to support signal handlers that want to return to the
 ;;; interrupted context without leaving anything extra on the stack. A
@@ -123,8 +122,7 @@ WITHOUT-INTERRUPTS in:
                             (setq *unblock-deferrables-on-enabling-interrupts-p*
                                   nil)
                             (sb!unix::unblock-deferrable-signals))
-                          (when (or *interrupt-pending*
-                                    #!+sb-thruption *thruption-pending*)
+                          (when *interrupt-pending*
                             (receive-pending-interrupt)))
                         (locally ,@with-forms))))
                 (let ((*interrupts-enabled* nil)
@@ -146,8 +144,7 @@ WITHOUT-INTERRUPTS in:
              ;; another WITHOUT-INTERRUPTS, the pending interrupt will be
              ;; handled immediately upon exit from said
              ;; WITHOUT-INTERRUPTS, so it is as if nothing has happened.
-             (when (or *interrupt-pending*
-                       #!+sb-thruption *thruption-pending*)
+             (when *interrupt-pending*
                (receive-pending-interrupt)))
            (,without-interrupts-body)))))
 
@@ -172,8 +169,7 @@ by ALLOW-WITH-INTERRUPTS."
          (when *unblock-deferrables-on-enabling-interrupts-p*
            (setq *unblock-deferrables-on-enabling-interrupts-p* nil)
            (sb!unix::unblock-deferrable-signals))
-         (when (or *interrupt-pending*
-                   #!+sb-thruption *thruption-pending*)
+         (when *interrupt-pending*
            (receive-pending-interrupt)))
        (locally ,@body))))
 
@@ -193,6 +189,6 @@ by ALLOW-WITH-INTERRUPTS."
 (defun %check-interrupts ()
   ;; Here we check for pending interrupts first, because reading a
   ;; special is faster then binding it!
-  (when (or *interrupt-pending* #!+sb-thruption *thruption-pending*)
+  (when *interrupt-pending*
     (let ((*interrupts-enabled* t))
       (receive-pending-interrupt))))
