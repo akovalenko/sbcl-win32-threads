@@ -1155,10 +1155,10 @@ Experimental: interface subject to change."
       (error 'simple-file-error
              :format-control "bad place for a wild pathname"
              :pathname pathspec))
-    (let ((dir (pathname-directory pathname))
+    (let* ((dir (pathname-directory pathname))
            (*default-pathname-defaults*
              (make-pathname :directory dir :device (pathname-device pathname)))
-          (dev (pathname-device pathname)))
+           (dev (pathname-device pathname)))
       (loop for i from (case dev (:unc 3) (otherwise 2)) upto (length dir)
             do
             (let* ((newpath (make-pathname
