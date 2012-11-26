@@ -220,14 +220,6 @@ potentially stale even before the function returns, as the thread may exit at
 any time."
   (thread-%alive-p thread))
 
-(defun thread-emphemeral-p (thread)
-  #!+sb-doc
-  "Return T if THREAD is `ephemeral', which indicates that this thread is
-used by SBCL for internal purposes, and specifically that it knows how to
-to terminate this thread cleanly prior to core file saving without signalling
-an error in that case."
-  (thread-%ephemeral-p thread))
-
 ;; A thread is eligible for gc iff it has finished and there are no
 ;; more references to it. This list is supposed to keep a reference to
 ;; all running threads.
@@ -1349,7 +1341,7 @@ have the foreground next."
 
 ;;;; The beef
 
-(defun make-thread (function &key name arguments ephemeral)
+(defun make-thread (function &key name arguments)
   #!+sb-doc
   "Create a new thread of NAME that runs FUNCTION with the argument
 list designator provided (defaults to no argument). Thread exits when
@@ -1370,7 +1362,7 @@ See also: RETURN-FROM-THREAD, ABORT-THREAD."
   #!+sb-thread
   (tagbody
      (with-mutex (*make-thread-lock*)
-       (let* ((thread (%make-thread :name name :%ephemeral-p ephemeral))
+       (let* ((thread (%make-thread :name name))
               (setup-sem (make-semaphore :name "Thread setup semaphore"))
               (real-function (coerce function 'function))
               (arguments     (if (listp arguments)
