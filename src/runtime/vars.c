@@ -29,7 +29,7 @@ struct var {
     lispobj obj;
     lispobj (*update_fn)(struct var *var);
     char *name;
-    sword_t clock;
+    long clock;
     boolean map_back, permanent;
 
     struct var *nnext; /* Next in name list */
@@ -176,12 +176,12 @@ lispobj var_value(struct var *var)
     return var->obj;
 }
 
-sword_t var_clock(struct var *var)
+long var_clock(struct var *var)
 {
     return var->clock;
 }
 
-void var_setclock(struct var *var, sword_t val)
+void var_setclock(struct var *var, long val)
 {
     var->clock = val;
 }

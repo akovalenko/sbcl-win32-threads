@@ -312,12 +312,12 @@ make_lispobj(void *o, int low_tag)
 
 #define MAKE_FIXNUM(n) (n << N_FIXNUM_TAG_BITS)
 static inline lispobj
-make_fixnum(sword_t n)
+make_fixnum(long n)
 {
     return MAKE_FIXNUM(n);
 }
 
-static inline sword_t
+static inline long
 fixnum_value(lispobj n)
 {
     return n >> N_FIXNUM_TAG_BITS;
