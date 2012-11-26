@@ -49,10 +49,10 @@ static void skip_ws(char **ptr)
         (*ptr)++;
 }
 
-static boolean string_to_long(char *token, uword_t *value)
+static boolean string_to_long(char *token, long *value)
 {
     int base, digit;
-    uword_t num;
+    long num;
     char *ptr;
 
     if (token == 0)
@@ -196,11 +196,11 @@ char *token;
 }
 #endif
 
-uword_t parse_number(ptr)
+long parse_number(ptr)
 char **ptr;
 {
     char *token = parse_token(ptr);
-    uword_t result;
+    long result;
 
     if (token == NULL) {
         printf("expected a number\n");
@@ -233,7 +233,7 @@ char **ptr;
         result &= ~7;
     }
     else {
-        uword_t value;
+        long value;
         if (!string_to_long(token, &value)) {
             printf("invalid number: ``%s''\n", token);
             throw_to_monitor();
@@ -316,9 +316,9 @@ char **ptr;
 {
     struct thread *thread=arch_os_get_current_thread();
     char *token = parse_token(ptr);
-    uword_t pointer;
+    long pointer;
     lispobj result;
-    uword_t value;
+    long value;
 
     if (token == NULL) {
         printf("expected an object\n");
