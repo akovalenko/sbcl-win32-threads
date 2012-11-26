@@ -831,7 +831,6 @@ void
 wake_thread_io(struct thread * thread)
 {
     SetEvent(thread->private_events.events[1]);
-    win32_maybe_interrupt_io(thread);
 }
 
 void
