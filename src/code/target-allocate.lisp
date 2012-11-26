@@ -13,9 +13,9 @@
 
 (sb!alien:define-alien-routine ("os_allocate" allocate-system-memory)
                                system-area-pointer
-  (bytes sb!alien:unsigned))
+  (bytes sb!alien:unsigned-long))
 
 (sb!alien:define-alien-routine ("os_deallocate" deallocate-system-memory)
                                sb!alien:void
   (addr system-area-pointer)
-  (bytes sb!alien:unsigned))
+  (bytes sb!alien:unsigned-long))
