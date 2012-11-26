@@ -157,7 +157,7 @@
     sb!unix::*interrupt-pending*
     #!+sb-thruption sb!unix::*thruption-pending*
     #!+sb-thruption sb!impl::*restart-clusters*
-    sb!vm::*in-without-gcing*
+    *in-without-gcing*
     *gc-inhibit*
     *gc-pending*
     #!-sb-thread

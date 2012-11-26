@@ -944,7 +944,7 @@ interrupt_handle_pending(os_context_t *context)
             sigset_t old, *ctxset = os_context_sigmask_addr(context);
             unblock_signals(&deferrable_sigset, ctxset, &old);
 #endif
-            thread_in_lisp_raised(context);
+            thread_pitstop(context);
 #ifndef LISP_FEATURE_WIN32
             sigcopyset(&old, ctxset);
 #endif
