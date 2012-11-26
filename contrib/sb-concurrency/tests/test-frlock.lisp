@@ -79,7 +79,6 @@
                 nil))))
       (values (cdr w-e!) (cdr r-e!))))
 
-#+sb-thread
 (deftest* (frlock.1 :fails-on :win32)
     (handler-case
         (sb-ext:with-timeout 60 (test-frlocks))
