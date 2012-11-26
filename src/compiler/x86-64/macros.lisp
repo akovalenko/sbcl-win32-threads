@@ -299,7 +299,8 @@
 
 #!+sb-safepoint
 (defun emit-safepoint ()
-  (inst test al-tn (make-ea :byte :disp sb!vm::gc-safepoint-page-addr)))
+  (inst test al-tn (make-ea :byte
+                            :disp (make-fixup "gc_safepoint_page" :foreign))))
 
 #!+sb-thread
 (defmacro pseudo-atomic (&rest forms)
