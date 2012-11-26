@@ -1465,10 +1465,9 @@
   ;; register on -SB-THREAD.
   #!+sb-thread
   (progn
-    (with-tls-ea (EA :base :unused
-                     :disp-type :constant
-                     :disp (* thread-stepping-slot n-word-bytes))
-      (inst cmp EA nil-value :maybe-fs)))
+    (inst cmp (make-ea :dword
+                       :disp (* thread-stepping-slot n-word-bytes))
+          nil-value :fs))
   #!-sb-thread
   (inst cmp (make-ea-for-symbol-value sb!impl::*stepping*)
         nil-value))
