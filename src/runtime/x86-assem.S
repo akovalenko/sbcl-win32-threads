@@ -712,18 +712,10 @@ DEFINE_ALLOC_TO_REG(alloc_16_to_edi,%edi,$16)
 #define START_REGION GNAME(boxed_region)
 #endif
 
-#if defined(LISP_FEATURE_SB_THREAD) && defined(LISP_FEATURE_WIN32)
-#define ALLOC_OVERFLOW(size,scratch)				\
-	movl SBCL_THREAD_BASE_EA, scratch;			\
-	/* Calculate the size for the allocation. */		\
-	subl THREAD_ALLOC_REGION_OFFSET(scratch),size;		\
-	ALLOC(size)
-#else
-#define ALLOC_OVERFLOW(size,scratch)			\
-	  /* Calculate the size for the allocation. */	\
-	  subl    START_REGION,size;			\
-	  ALLOC(size)
-#endif
+#define ALLOC_OVERFLOW(size)                                    \
+        /* Calculate the size for the allocation. */            \
+        subl    START_REGION,size;                              \
+        ALLOC(size)
 
 /* This routine handles an overflow with eax=crfp+size. So the
    size=eax-crfp. */
@@ -733,7 +725,7 @@ DEFINE_ALLOC_TO_REG(alloc_16_to_edi,%edi,$16)
 GNAME(alloc_overflow_eax):
         pushl   %ecx            # Save ecx
         pushl   %edx            # Save edx
-	ALLOC_OVERFLOW(%eax,%edx)
+	ALLOC_OVERFLOW(%eax)
         popl    %edx    # Restore edx.
         popl    %ecx    # Restore ecx.
         ret
@@ -745,7 +737,7 @@ GNAME(alloc_overflow_eax):
 GNAME(alloc_overflow_ecx):
         pushl   %eax            # Save eax
         pushl   %edx            # Save edx
-	ALLOC_OVERFLOW(%ecx,%edx)
+	ALLOC_OVERFLOW(%ecx)
         movl    %eax,%ecx       # setup the destination.
         popl    %edx    # Restore edx.
         popl    %eax    # Restore eax.
@@ -758,7 +750,7 @@ GNAME(alloc_overflow_ecx):
 GNAME(alloc_overflow_edx):
         pushl   %eax            # Save eax
         pushl   %ecx            # Save ecx
-	ALLOC_OVERFLOW(%edx,%ecx)
+	ALLOC_OVERFLOW(%edx)
         movl    %eax,%edx       # setup the destination.
         popl    %ecx    # Restore ecx.
         popl    %eax    # Restore eax.
@@ -774,7 +766,7 @@ GNAME(alloc_overflow_ebx):
         pushl   %eax            # Save eax
         pushl   %ecx            # Save ecx
         pushl   %edx            # Save edx
-	ALLOC_OVERFLOW(%ebx,%edx)
+	ALLOC_OVERFLOW(%ebx)
         movl    %eax,%ebx       # setup the destination.
         popl    %edx    # Restore edx.
         popl    %ecx    # Restore ecx.
@@ -791,7 +783,7 @@ GNAME(alloc_overflow_esi):
         pushl   %eax            # Save eax
         pushl   %ecx            # Save ecx
         pushl   %edx            # Save edx
-	ALLOC_OVERFLOW(%esi,%edx)
+	ALLOC_OVERFLOW(%esi)
         movl    %eax,%esi       # setup the destination.
         popl    %edx    # Restore edx.
         popl    %ecx    # Restore ecx.
@@ -806,7 +798,7 @@ GNAME(alloc_overflow_edi):
         pushl   %eax            # Save eax
         pushl   %ecx            # Save ecx
         pushl   %edx            # Save edx
-	ALLOC_OVERFLOW(%edi,%edx)
+	ALLOC_OVERFLOW(%edi)
         movl    %eax,%edi       # setup the destination.
         popl    %edx    # Restore edx.
         popl    %ecx    # Restore ecx.

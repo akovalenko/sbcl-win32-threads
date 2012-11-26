@@ -221,15 +221,8 @@
                            :foreign))))
 
 (defun allocation-inline (alloc-tn size)
-  (let* ((ok (gen-label)) ;reindent after merging
+  (let ((ok (gen-label))
         (done (gen-label))
-        #!+(and sb-thread win32)
-        (scratch-tns (loop for my-tn in `(,eax-tn ,ebx-tn ,edx-tn ,ecx-tn)
-                           when (and (not (location= alloc-tn my-tn))
-                                     (or (not (tn-p size))
-                                         (not (location= size my-tn))))
-                             collect my-tn))
-        (tls-prefix #!+sb-thread :fs #!-sb-thread nil)
         (free-pointer
          (make-ea :dword :disp
                   #!+sb-thread (* n-word-bytes thread-alloc-region-slot)
@@ -239,23 +232,11 @@
          (make-ea :dword :disp
                   #!+sb-thread (* n-word-bytes (1+ thread-alloc-region-slot))
                   #!-sb-thread (make-fixup "boxed_region" :foreign 4)
-                  :scale 1))   ; thread->alloc_region.end_addr
-        #!+(and sb-thread win32) (scratch-tn (pop scratch-tns))
-        #!+(and sb-thread win32) (swap-tn (pop scratch-tns)))
+                  :scale 1)))   ; thread->alloc_region.end_addr
     (unless (and (tn-p size) (location= alloc-tn size))
       (inst mov alloc-tn size))
-    #!+(and sb-thread win32)
-    (progn
-      (inst push scratch-tn)
-      (inst push swap-tn)
-      (inst mov scratch-tn
-            (make-ea :dword :disp
-                     +win32-tib-arbitrary-field-offset+) tls-prefix)
-      (setf (ea-base free-pointer) scratch-tn
-            (ea-base end-addr) scratch-tn
-            tls-prefix nil))
-    (inst add alloc-tn free-pointer tls-prefix)
-    (inst cmp alloc-tn end-addr tls-prefix)
+    (inst add alloc-tn free-pointer #!+sb-thread :fs)
+    (inst cmp alloc-tn end-addr #!+sb-thread :fs)
     (inst jmp :be ok)
     (let ((dst (ecase (tn-offset alloc-tn)
                  (#.eax-offset "alloc_overflow_eax")
@@ -270,26 +251,15 @@
     ;; Swap ALLOC-TN and FREE-POINTER
     (cond ((and (tn-p size) (location= alloc-tn size))
            ;; XCHG is extremely slow, use the xor swap trick
-           #!-(and sb-thread win32)
-           (progn
-             (inst xor alloc-tn free-pointer tls-prefix)
-             (inst xor free-pointer alloc-tn tls-prefix)
-             (inst xor alloc-tn free-pointer tls-prefix))
-           #!+(and sb-thread win32)
-           (progn
-             (inst mov swap-tn free-pointer tls-prefix)
-             (inst mov free-pointer alloc-tn tls-prefix)
-             (inst mov alloc-tn swap-tn)))
+           (inst xor alloc-tn free-pointer #!+sb-thread :fs)
+           (inst xor free-pointer alloc-tn #!+sb-thread :fs)
+           (inst xor alloc-tn free-pointer #!+sb-thread :fs))
           (t
            ;; It's easier if SIZE is still available.
-           (inst mov free-pointer alloc-tn tls-prefix)
+           (inst mov free-pointer alloc-tn #!+sb-thread :fs)
            (inst sub alloc-tn size)))
-    (emit-label done)
-    #!+(and sb-thread win32)
-    (progn
-      (inst pop swap-tn)
-      (inst pop scratch-tn))
-    (values)))
+    (emit-label done))
+  (values))
 
 
 ;;; Emit code to allocate an object with a size in bytes given by
@@ -303,7 +273,6 @@
 ;;; (FIXME: so why aren't we asserting this?)
 
 (defun allocation (alloc-tn size &optional inline dynamic-extent lowtag)
-  (declare (ignorable inline))
   (cond
     (dynamic-extent
      (allocation-dynamic-extent alloc-tn size lowtag))
@@ -397,9 +366,6 @@
 ;;; pa section.
 #!+sb-thread
 (defmacro %clear-pseudo-atomic ()
-  #!+win32
-  `(progn)
-  #!-win32
   '(inst mov (make-ea :dword :disp (* 4 thread-pseudo-atomic-bits-slot)) 0 :fs))
 
 #!+sb-safepoint
@@ -409,9 +375,6 @@
 
 #!+sb-thread
 (defmacro pseudo-atomic (&rest forms)
-  #!+win32
-  `(progn ,@forms (emit-safepoint))
-  #!-win32
   (with-unique-names (label)
     `(let ((,label (gen-label)))
        (inst mov (make-ea :dword :disp (* 4 thread-pseudo-atomic-bits-slot))
@@ -661,7 +624,6 @@ collection."
    The value of the BASE register is undefined following the macro invocation."
   (check-type base-already-live-p boolean)
   (check-type disp-type (member :index :constant))
-  #!-(and win32 sb-thread)
   (let ((body (subst :fs :maybe-fs body)))
     (ecase disp-type
       (:constant
@@ -679,20 +641,4 @@ collection."
           (inst ,(if base-already-live-p 'add 'mov) ,base ,disp)
           ,@(subst `(make-ea :dword :base ,base)
                    ea-var
-                   body)))))
-  #!+(and win32 sb-thread)
-  ;; goes through a temporary register to add the thread address into it
-  (multiple-value-bind (constant-disp ea-disp)
-      (ecase disp-type
-        (:constant (values disp nil))
-        (:index    (values 0 disp)))
-    `(progn
-       ,@(when ea-disp
-           `((inst ,(if base-already-live-p 'add 'mov) ,base ,ea-disp)))
-       (inst ,(if (or base-already-live-p ea-disp) 'add 'mov)
-             ,base
-             (make-ea :dword :disp +win32-tib-arbitrary-field-offset+)
-             :fs)
-       ,@(subst `(make-ea :dword :base ,base :disp ,constant-disp)
-                ea-var
-                (subst nil :maybe-fs body)))))
+                   body))))))

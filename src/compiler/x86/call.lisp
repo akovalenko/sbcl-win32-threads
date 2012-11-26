@@ -1465,12 +1465,10 @@
   ;; register on -SB-THREAD.
   #!+sb-thread
   (progn
-    #!+win32 (inst push eax-tn)
-    (with-tls-ea (EA :base #!+win32 eax-tn #!-win32 :unused
+    (with-tls-ea (EA :base :unused
                      :disp-type :constant
                      :disp (* thread-stepping-slot n-word-bytes))
-      (inst cmp EA nil-value :maybe-fs))
-    #!+win32 (inst pop eax-tn))
+      (inst cmp EA nil-value :maybe-fs)))
   #!-sb-thread
   (inst cmp (make-ea-for-symbol-value sb!impl::*stepping*)
         nil-value))
