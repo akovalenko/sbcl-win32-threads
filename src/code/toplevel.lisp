@@ -202,7 +202,7 @@ any non-negative real number."
            :format-arguments (list seconds)
            :datum seconds
            :expected-type '(real 0)))
-  #!-(and win32 (not sb-thread))
+  #!-win32
   (multiple-value-bind (sec nsec)
       (if (integerp seconds)
           (values seconds 0)
@@ -216,7 +216,7 @@ any non-negative real number."
           do (decf sec (expt 10 8))
              (sb!unix:nanosleep (expt 10 8) 0))
     (sb!unix:nanosleep sec nsec))
-  #!+(and win32 (not sb-thread))
+  #!+win32
   (sb!win32:millisleep (truncate (* seconds 1000)))
   nil)
 

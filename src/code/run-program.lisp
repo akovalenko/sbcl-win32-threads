@@ -145,6 +145,7 @@
   #+sb-doc
   "List of process structures for all active processes.")
 
+#-win32
 (defvar *active-processes-lock*
   (sb-thread:make-mutex :name "Lock for active processes."))
 
@@ -152,8 +153,11 @@
 ;;; mutex is needed. More importantly the sigchld signal handler also
 ;;; accesses it, that's why we need without-interrupts.
 (defmacro with-active-processes-lock (() &body body)
+  #-win32
   `(sb-thread::with-system-mutex (*active-processes-lock*)
-     ,@body))
+     ,@body)
+  #+win32
+  `(progn ,@body))
 
 (defstruct (process (:copier nil))
   pid                 ; PID of child process

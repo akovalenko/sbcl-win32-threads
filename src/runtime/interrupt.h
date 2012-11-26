@@ -12,7 +12,7 @@
 #if !defined(_INCLUDE_INTERRUPT_H_)
 #define _INCLUDE_INTERRUPT_H_
 
-#include "runtime.h"
+#include <signal.h>
 #include <string.h>
 
 /*
@@ -24,12 +24,7 @@
  * stack by the kernel, so copying a libc-sized sigset_t into it will
  * overflow and cause other data on the stack to be corrupted */
 /* FIXME: do not rely on NSIG being a multiple of 8 */
-
-#ifdef LISP_FEATURE_WIN32
-# define REAL_SIGSET_SIZE_BYTES (4)
-#else
-# define REAL_SIGSET_SIZE_BYTES ((NSIG/8))
-#endif
+#define REAL_SIGSET_SIZE_BYTES ((NSIG/8))
 
 static inline void
 sigcopyset(sigset_t *new, sigset_t *old)

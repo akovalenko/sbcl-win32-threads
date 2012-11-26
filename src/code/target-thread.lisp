@@ -1605,12 +1605,12 @@ the state of a thread:
   (interrupt-thread thread #'break)
 
 Short version: be careful out there."
-  #!+(and (not sb-thread) win32)
-  #!+(and (not sb-thread) win32)
+ #!+win32
   (declare (ignore thread))
+  #!+win32
   (with-interrupt-bindings
     (with-interrupts (funcall function)))
-  #!-(and (not sb-thread) win32)
+  #!-win32
   (let ((os-thread (thread-os-thread thread)))
     (cond ((not os-thread)
            (error 'interrupt-thread-error :thread thread))

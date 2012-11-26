@@ -30,7 +30,7 @@
 #include <sys/file.h>
 #include <sys/param.h>
 #include <sys/stat.h>
-#include "runtime.h"
+#include <signal.h>
 #ifndef LISP_FEATURE_WIN32
 #include <sched.h>
 #endif
@@ -42,9 +42,7 @@
 #include <time.h>
 #endif
 
-#if !(defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD))
 #include "signal.h"
-#endif
 
 #include "runtime.h"
 #include "vars.h"
@@ -342,10 +340,6 @@ char *core_string;
 struct runtime_options *runtime_options;
 
 char *saved_runtime_path = NULL;
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-void pthreads_win32_init();
-#endif
-
 
 int
 main(int argc, char *argv[], char *envp[])
@@ -369,11 +363,6 @@ main(int argc, char *argv[], char *envp[])
 
     lispobj initial_function;
     const char *sbcl_home = getenv("SBCL_HOME");
-
-#if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
-    os_preinit();
-    pthreads_win32_init();
-#endif
 
     interrupt_init();
     block_blockable_signals(0, 0);

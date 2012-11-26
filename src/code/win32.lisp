@@ -154,20 +154,9 @@
 
 ;;;; System Functions
 
-#!-sb-thread
+;;; Sleep for MILLISECONDS milliseconds.
 (define-alien-routine ("Sleep@4" millisleep) void
   (milliseconds dword))
-
-#!+sb-thread
-(defun sb!unix:nanosleep (sec nsec)
-  (let ((*allow-with-interrupts* *interrupts-enabled*))
-    (without-interrupts
-      (let ((timer (sb!impl::os-create-wtimer)))
-        (sb!impl::os-set-wtimer timer sec nsec)
-        (unwind-protect
-             (do () ((with-local-interrupts
-                       (zerop (sb!impl::os-wait-for-wtimer timer)))))
-          (sb!impl::os-close-wtimer timer))))))
 
 #!+sb-unicode
 (progn
