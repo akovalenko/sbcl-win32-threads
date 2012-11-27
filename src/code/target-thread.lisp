@@ -1385,6 +1385,7 @@ See also: RETURN-FROM-THREAD, ABORT-THREAD."
                          (*restart-clusters* nil)
                          (*handler-clusters* (sb!kernel::initial-handler-clusters))
                          (*condition-restarts* nil)
+                         (*exit-in-process* nil)
                          (sb!impl::*deadline* nil)
                          (sb!impl::*deadline-seconds* nil)
                          (sb!impl::*step-out* nil)
@@ -1434,8 +1435,12 @@ See also: RETURN-FROM-THREAD, ABORT-THREAD."
 						 ;; makes debugging feasible, at least.
 						 (handler-case
 						     (cons t
-							   (multiple-value-list
-							    (apply real-function arguments)))
+                                   (multiple-value-list
+                                    (unwind-protect
+                                         (catch '%return-from-thread
+                                           (apply real-function arguments))
+                                      (when *exit-in-process*
+                                        (sb!impl::call-exit-hooks)))))
 						   #!+win32
 						   (sb!kernel::control-stack-exhausted ()
 						     (throw 'sb!impl::%toplevel-catcher nil))))
