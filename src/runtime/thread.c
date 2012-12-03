@@ -875,6 +875,7 @@ create_thread_struct(lispobj initial_function) {
 #if defined(LISP_FEATURE_WIN32) && defined(LISP_FEATURE_SB_THREAD)
     bind_variable(GC_SAFE,NIL,th);
     bind_variable(IN_SAFEPOINT,NIL,th);
+    bind_variable(RESTART_CLUSTERS,NIL,th);
     bind_variable(DISABLE_SAFEPOINTS,NIL,th);
 #endif
 
@@ -1068,6 +1069,14 @@ static inline int thread_may_interrupt()
   // 2) INTERRUPTS_ENABLED is not-nil
   // 3) !pseudo_atomic (now guaranteed by safepoint-related callers)
 
+  // borrowed from David Lichteblau's commit in main branch
+  if (SymbolValue(RESTART_CLUSTERS, self) == NIL)
+      /* This special case prevents TERMINATE-THREAD from hitting
+       * during INITIAL-THREAD-FUNCTION before it's ready.  Curiously,
+       * deferrables are already unblocked there.  Further
+       * investigation may be in order. */
+      return 0;
+  
   if (SymbolValue(INTERRUPTS_ENABLED, self) == NIL)
       return 0;
 

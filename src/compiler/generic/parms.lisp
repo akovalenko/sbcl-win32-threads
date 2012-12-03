@@ -81,6 +81,7 @@
     sb!unix::*allow-with-interrupts*
     sb!unix::*interrupts-enabled*
     sb!unix::*interrupt-pending*
+    #!+sb-thruption sb!impl::*restart-clusters*
     *in-without-gcing*
     *gc-inhibit*
     *gc-pending*
