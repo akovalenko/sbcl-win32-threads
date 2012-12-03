@@ -538,7 +538,7 @@
             (tail (buffer-tail obuf))
             (size ,size))
       ,(unless (eq (car buffering) :none)
-         `(when (<= (buffer-length obuf) (+ tail size))
+         `(when (< (buffer-length obuf) (+ tail size))
             (setf obuf (flush-output-buffer ,stream-var)
                   tail (buffer-tail obuf))))
       ,(unless (eq (car buffering) :none)
@@ -566,7 +566,7 @@
             (obuf (fd-stream-obuf ,stream-var))
             (tail (buffer-tail obuf)))
       ,(unless (eq (car buffering) :none)
-         `(when (<= (buffer-length obuf) (+ tail ,size))
+         `(when (< (buffer-length obuf) (+ tail ,size))
             (setf obuf (flush-output-buffer ,stream-var)
                   tail (buffer-tail obuf))))
       ;; FIXME: Why this here? Doesn't seem necessary.
