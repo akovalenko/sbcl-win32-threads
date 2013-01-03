@@ -1,5 +1,9 @@
 ;;;; -*- coding: utf-8; fill-column: 78 -*-
-changes relative to sbcl-1.1.2:
+changes relative to sbcl-1.1.3:
+  * bug fix: very long (or infinite) constant lists in DOLIST do not result
+    in very long compile times or heap exhaustion anymore. (lp#1095488)
+
+changes in sbcl-1.1.3 relative to sbcl-1.1.2:
   * enhancement: warnings about bad locale settings, LANG, LC_CTYPE, etc.
     (lp#727625)
   * bug fix: fasls are now once again directly executable (on platforms
@@ -7,9 +11,6 @@ changes relative to sbcl-1.1.2:
   * bug fix: make.sh --help no longer runs clean.sh. (lp#937001)
 
 changes in sbcl-1.1.2 relative to sbcl-1.1.1:
-  * notice: System requirements for SBCL on Microsoft Windows: Windows NT 5.1
-    or newer (Windows XP, Server 2003) is required.  Support for Windows 2000
-    (NT 5.0) is no longer being maintained.
   * notice: Starting with this version, SBCL on Windows no longer supports
     building with disabled thread support.
   * enhancement: frlocks have been added to SB-CONCURRENCY contrib module.
