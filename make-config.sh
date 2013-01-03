@@ -652,7 +652,7 @@ fi
 #
 # FIXME: integrate to grovel-features, mayhaps
 $GNUMAKE -C tools-for-build determine-endianness -I ../src/runtime
-tools-for-build/determine-endianness >> $ltf
+./tools-for-build/determine-endianness >> $ltf
 
 export sbcl_os sbcl_arch
 sh tools-for-build/grovel-features.sh >> $ltf
